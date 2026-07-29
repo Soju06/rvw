@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/Soju06/rvw/compare/v0.4.0...v0.4.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* **sample:** pass unified-diff fixtures through and fail closed on empty review diffs ([b6b7704](https://github.com/Soju06/rvw/commit/b6b7704f25d2e3f2a4dedceff60350baab780e82))
+
 ## [0.4.0](https://github.com/Soju06/rvw/compare/v0.3.0...v0.4.0) (2026-07-29)
 
 
