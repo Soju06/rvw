@@ -1,6 +1,6 @@
 [project]
 name = "rvw"
-version = "0.3.0"
+version = "0.4.0"
 description = "Layered, replicated, self-adjudicating code review orchestrator"
 readme = "README.md"
 license = "MIT"
