@@ -136,7 +136,7 @@ async def discover(
     out_root: Path,
     brief: str | None = None,
     brief_source: str | None = None,
-    replicas: int = 3,
+    replicas: int = 1,
     concurrency: int = 16,
     lane_filter: Sequence[str] | None = None,
     deadline_seconds: int = 600,

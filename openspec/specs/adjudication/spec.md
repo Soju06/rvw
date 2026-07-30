@@ -24,18 +24,23 @@ Every adjudication replica MUST execute read-only in the provisioned target chec
 - **WHEN** an adjudicator checks a collapse group
 - **THEN** it can inspect the target checkout while seeing all replica descriptions and the unified diff in its prompt
 
-### Requirement: Verdicts use majority voting
+### Requirement: Verdicts use strict-majority voting
 
-The stage MUST run three adjudication replicas by default and MUST select `CONFIRMED`, `REJECTED`, or `UNCERTAIN` only when that verdict has more than half of the valid replica votes, otherwise it MUST select `UNCERTAIN`.
+The stage MUST run one adjudication replica by default and MUST select `CONFIRMED`, `REJECTED`, or `UNCERTAIN` only when that verdict has more than half of the valid replica votes, otherwise it MUST select `UNCERTAIN`. It MUST preserve the requested count when callers explicitly request multiple replicas.
 
-#### Scenario: Three-way disagreement
+#### Scenario: One valid default vote confirms
 
-- **WHEN** valid replicas vote CONFIRMED, REJECTED, and UNCERTAIN
+- **WHEN** the default adjudication replica returns a valid CONFIRMED vote
+- **THEN** CONFIRMED wins because its one vote is more than half of the one valid vote
+
+#### Scenario: Three-way disagreement in explicit replication mode
+
+- **WHEN** three explicitly requested valid replicas vote CONFIRMED, REJECTED, and UNCERTAIN
 - **THEN** the merged verdict is UNCERTAIN
 
-#### Scenario: Two replicas confirm
+#### Scenario: Two explicitly requested replicas confirm
 
-- **WHEN** two of three valid votes are CONFIRMED
+- **WHEN** two of three explicitly requested valid votes are CONFIRMED
 - **THEN** the merged verdict is CONFIRMED
 
 ### Requirement: Missing candidate output is an uncertain vote

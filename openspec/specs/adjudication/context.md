@@ -9,7 +9,8 @@ Adjudication is a machine stage that checks merged claims against the target che
 - ADR-007 locates the separation between discovery and adjudication rather than between machine and human. Automatic quality is the goal; a human pause is optional operation policy.
 - A measured nine-candidate fixture contained six genuine and three fabricated claims. Adjudication rejected all 3/3 fabricated claims, leaked none, and wrongly rejected 0/6 genuine findings. Five genuine claims were confirmed and one genuine cache-key issue remained UNCERTAIN because needed context was outside the diff.
 - ADR-008 turns that uncertainty into a single wider pass. The real PR #1119 smoke adjudicated 13 collapse groups with three unanimous replicas in about 197 seconds after DISCOVER took about 410 seconds.
-- Missing items become UNCERTAIN votes so a model cannot create an implicit rejection by omission. Majority is strict (`> 50%`), making ties uncertain.
+- Owner decision (2026-07-30): one adjudication replica is the ordinary default, while multiple replicas remain opt-in heavy verification for high-stakes or large-scope reviews.
+- Missing items become UNCERTAIN votes so a model cannot create an implicit rejection by omission. Majority is strict (`> 50%`), making ties uncertain; at the one-replica default, one valid vote wins because `1 > 1 / 2`.
 
 ## Constraints
 
@@ -27,7 +28,7 @@ Adjudication is a machine stage that checks merged claims against the target che
 
 ## Concrete example
 
-For candidate `abc`, three valid replicas return CONFIRMED, REJECTED with no evidence, and omit the candidate. The second vote is coerced and the omission becomes another UNCERTAIN, producing votes:
+In an explicit three-replica pass for candidate `abc`, the valid replicas return CONFIRMED, REJECTED with no evidence, and omit the candidate. The second vote is coerced and the omission becomes another UNCERTAIN, producing votes:
 
 ```text
 CONFIRMED / UNCERTAIN / UNCERTAIN

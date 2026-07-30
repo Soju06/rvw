@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 import rvw.cli as cli_module
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage, RunCoverage
-from rvw.gate import GatePlan, PullRequestState, save_gate_plan
+from rvw.gate import GatePlan, PullRequestState, load_gate_plan, save_gate_plan
 from rvw.merge import merge
 from rvw.schema import Severity, Tier, Verdict
 from rvw.store import RunStore
@@ -43,9 +43,11 @@ def prepared_artifacts(
     out_root: Path,
     *,
     actionable: bool = False,
-    valid: int = 3,
+    replicas: int = 1,
+    valid: int | None = None,
     blocker: bool = False,
 ) -> cli_module._PipelineArtifacts:
+    valid = replicas if valid is None else valid
     run = RunStore(out_root).create(target())
     run.save_target(target())
     findings: list[EnrichedFinding] = []
@@ -69,7 +71,7 @@ def prepared_artifacts(
         coverage=[
             LaneCoverage(
                 lane_id="lane-a",
-                dispatched=3,
+                dispatched=replicas,
                 valid=valid,
                 findings=len(findings),
                 runs=[
@@ -80,7 +82,7 @@ def prepared_artifacts(
                         findings=len(findings) if replica == 1 else 0,
                         invalid_reason=None if replica <= valid else "scripted_invalid",
                     )
-                    for replica in range(1, 4)
+                    for replica in range(1, replicas + 1)
                 ],
             )
         ],
@@ -93,7 +95,7 @@ def prepared_artifacts(
         verdicts={group.key: Verdict.CONFIRMED for group in merged.groups},
         reasons={group.key: "confirmed" for group in merged.groups},
         evidence={group.key: "evidence" for group in merged.groups},
-        replica_votes={group.key: [Verdict.CONFIRMED] * 3 for group in merged.groups},
+        replica_votes={group.key: [Verdict.CONFIRMED] * replicas for group in merged.groups},
         unresolved=[],
         coerced_rejections=0,
     )
@@ -154,6 +156,7 @@ def test_gate_target_executes_review_once_and_writes_dry_run_artifacts(
 
     assert result.exit_code == 0, result.stdout
     assert len(calls) == 1
+    assert calls[0]["replicas"] == 1
     assert calls[0]["resolved_target"] == target()
     repo_dir = calls[0]["repo_dir"]
     assert isinstance(repo_dir, Path)
@@ -161,12 +164,30 @@ def test_gate_target_executes_review_once_and_writes_dry_run_artifacts(
     payload = json.loads(result.stdout)
     assert payload["verdict"] == "PASS"
     assert (artifacts.run.dir / "gate-plan.json").is_file()
+    assert load_gate_plan(artifacts.run.dir).replicas == 1
     assert (artifacts.run.dir / "gate-verdict.json").is_file()
     publish_payload = json.loads(
         (artifacts.run.dir / "publish-payload.json").read_text(encoding="utf-8")
     )
     assert publish_payload["event"] == "COMMENT"
     assert "rvw gate — PASS" in publish_payload["body"]
+
+
+def test_gate_preserves_explicit_replica_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out_root = tmp_path / "runs"
+    artifacts = prepared_artifacts(out_root, replicas=3)
+    calls = patch_target_dependencies(monkeypatch, artifacts)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["gate", "--target", "42", "--replicas", "3", "--out", str(out_root)],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert calls[0]["replicas"] == 3
+    assert load_gate_plan(artifacts.run.dir).replicas == 3
 
 
 @pytest.mark.parametrize(
@@ -242,7 +263,7 @@ def test_gate_resume_uses_artifacts_without_review(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out_root = tmp_path / "runs"
-    artifacts = prepared_artifacts(out_root, actionable=True)
+    artifacts = prepared_artifacts(out_root, actionable=True, replicas=3)
     save_gate_plan(
         artifacts.run.dir,
         GatePlan(schema_version=1, lane_ids=["lane-a"], replicas=3, chunk_count=1),
@@ -285,7 +306,7 @@ def test_gate_stale_resume_fails_before_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out_root = tmp_path / "runs"
-    artifacts = prepared_artifacts(out_root)
+    artifacts = prepared_artifacts(out_root, replicas=3)
     save_gate_plan(
         artifacts.run.dir,
         GatePlan(schema_version=1, lane_ids=["lane-a"], replicas=3, chunk_count=1),
@@ -313,7 +334,7 @@ def test_gate_invalid_coverage_cannot_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out_root = tmp_path / "runs"
-    artifacts = prepared_artifacts(out_root, valid=2)
+    artifacts = prepared_artifacts(out_root, valid=0)
     patch_target_dependencies(monkeypatch, artifacts)
 
     result = runner.invoke(

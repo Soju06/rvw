@@ -60,7 +60,7 @@ EXIT_USER_ERROR = 2
 EXIT_SYSTEM_ERROR = 3
 DEFAULT_REGISTRY_ROOT = Path("~/.hermes/review").expanduser()
 DEFAULT_AUTO_POLICY = Path("~/.hermes/review/policies/auto.yaml").expanduser()
-_PLAN_REPLICAS = 3
+_PLAN_REPLICAS = 1
 DEFAULT_RUN_ROOT = Path("/tmp/rvw")
 
 _EXAMPLES: dict[str, list[str]] = {
@@ -408,7 +408,7 @@ def review(
     registry_root: Annotated[
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
-    replicas: Annotated[int, Option("--replicas", min=1)] = 3,
+    replicas: Annotated[int, Option("--replicas", min=1)] = 1,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
     pause: Annotated[bool, Option("--pause")] = False,

@@ -6,6 +6,7 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 
 ## Key decisions and measured basis
 
+- Owner decision (2026-07-30): ordinary `review`, `gate`, and `auto` runs are single-pass scans. Replication is an explicit heavy-verification mode for high-stakes or large-scope reviews because lanes x replicas x concurrent rvw instances overloaded `codex-lb`; four concurrent runs were observed demanding up to 64 sessions.
 - ADR-009 keeps one stage implementation while providing `review` and `auto` command surfaces. Policy handles reproducible inclusion/severity decisions after model-based factual adjudication.
 - The implemented pause point is after MERGE. This supersedes ADR-009 D2's original wording that pause occurred after ADJUDICATE.
 - Approval is not expressible. Policy allows only `comment` or `none`; `--allow-approve` prints a placeholder warning and does not change publication event type.

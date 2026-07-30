@@ -24,14 +24,19 @@ A lane declaring `covered_by_others: inject` MUST receive every other active lan
 - **WHEN** the sweep runs beside security and schema lanes
 - **THEN** its prompt names both lanes and their rule IDs as already covered
 
-### Requirement: Discovery dispatches three replicas by default
+### Requirement: Discovery dispatch defaults to one replica
 
-The DISCOVER stage MUST plan three runs per active lane per diff chunk by default and MUST dispatch all lane-replica-chunk runs through one shared wave.
+The DISCOVER stage MUST plan one run per active lane per diff chunk by default and MUST dispatch all lane-replica-chunk runs through one shared wave. It MUST preserve the requested count when callers explicitly request multiple replicas.
 
 #### Scenario: Four lanes activate over two chunks
 
 - **WHEN** discovery uses the default replica count
-- **THEN** it submits 24 planned runs without waiting for one lane or chunk to finish before submitting another
+- **THEN** it submits eight planned runs without waiting for one lane or chunk to finish before submitting another
+
+#### Scenario: Three replicas are explicitly requested
+
+- **WHEN** discovery is called with three replicas for four active lanes over two chunks
+- **THEN** it submits 24 planned runs through the existing shared wave
 
 ### Requirement: Dispatch is bounded and heavy-first
 

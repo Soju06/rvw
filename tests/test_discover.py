@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -135,6 +136,10 @@ def test_resolve_lane_path_uses_owning_tier_for_all_shapes(tmp_path: Path) -> No
     assert resolve_lane_path(tmp_path, "slop-hygiene", Tier.BASE) == base
     assert resolve_lane_path(tmp_path, "frontend/skeleton-parity", Tier.SCOPE) == scope
     assert resolve_lane_path(tmp_path, "dynamic/goal-parity", Tier.DYNAMIC) == dynamic
+
+
+def test_discover_defaults_to_one_replica() -> None:
+    assert inspect.signature(discover).parameters["replicas"].default == 1
 
 
 def test_resolve_lane_path_error_lists_attempted_path(tmp_path: Path) -> None:

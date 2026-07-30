@@ -25,7 +25,7 @@ measured design decision (see [DECISIONS.md](DECISIONS.md)):
 
 | Problem | Mechanism | Measured |
 |---|---|---|
-| One pass misses findings | 3 replicas per lane, one wave | recall 88% → 99% (ADR-006) |
+| One pass misses findings | opt-in 3 replicas per lane, one wave | recall 88% → 99% (ADR-006) |
 | Scoped rules go blind outside their scope | mandatory `unscoped-sweep` lane | 3/3 deep defects only the sweep caught (ADR-005) |
 | LLMs fabricate findings | separate adjudication lane, votes grounded in real source | 3/3 fabricated rejected, 0/6 genuine lost (ADR-007) |
 

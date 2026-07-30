@@ -148,6 +148,28 @@ def invoke_review(
     return result, payload
 
 
+@pytest.mark.parametrize(
+    ("extra", "expected_replicas"),
+    [([], 1), (["--replicas", "3"], 3)],
+)
+def test_review_replica_default_and_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+    extra: list[str],
+    expected_replicas: int,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_review_pipeline", fake_review_pipeline)
+
+    result = runner.invoke(cli_module.app, ["review", "--target", "HEAD", *extra])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls[0]["replicas"] == expected_replicas
+
+
 def test_review_end_to_end_writes_all_stages_and_json_shape(
     tmp_path: Path, registry_root: Path, patched_pipeline: None
 ) -> None:
@@ -174,7 +196,7 @@ def test_review_end_to_end_writes_all_stages_and_json_shape(
         "REJECTED": 0,
         "UNCERTAIN": 0,
     }
-    assert payload["coverage_totals"] == {"dispatched": 3, "valid": 3, "findings": 3}
+    assert payload["coverage_totals"] == {"dispatched": 1, "valid": 1, "findings": 1}
     assert "## 확정 발견 (CONFIRMED)" in (run_dir / "report.md").read_text()
 
 

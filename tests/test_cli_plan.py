@@ -108,7 +108,7 @@ def test_plan_json_shape_tier_zero_predicates_and_lpt_order(
     }
     assert payload["brief_source"] is None
     assert payload["chunk_count"] == 1
-    assert payload["total_runs"] == 9
+    assert payload["total_runs"] == 3
     assert {lane["lane"] for lane in payload["lanes"]} >= {
         "slop-hygiene",
         "unscoped-sweep",
@@ -118,13 +118,7 @@ def test_plan_json_shape_tier_zero_predicates_and_lpt_order(
     assert layers["scope/frontend"]["predicate"] == {"paths": ["src/**"]}
     assert payload["dispatch_order"] == [
         "unscoped-sweep",
-        "unscoped-sweep",
-        "unscoped-sweep",
         "slop-hygiene",
-        "slop-hygiene",
-        "slop-hygiene",
-        "frontend/check",
-        "frontend/check",
         "frontend/check",
     ]
     assert payload["lanes"] == [
@@ -133,21 +127,21 @@ def test_plan_json_shape_tier_zero_predicates_and_lpt_order(
             "tier": "base",
             "cost": "normal",
             "rules_count": 6,
-            "replicas": 3,
+            "replicas": 1,
         },
         {
             "lane": "unscoped-sweep",
             "tier": "base",
             "cost": "heavy",
             "rules_count": 4,
-            "replicas": 3,
+            "replicas": 1,
         },
         {
             "lane": "frontend/check",
             "tier": "scope",
             "cost": "light",
             "rules_count": 1,
-            "replicas": 3,
+            "replicas": 1,
         },
     ]
 
@@ -169,7 +163,7 @@ def test_plan_reports_chunk_expanded_total_runs(
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
     assert payload["chunk_count"] == 2
-    assert payload["total_runs"] == 18
+    assert payload["total_runs"] == 6
 
 
 def test_head_falls_back_to_local_git_when_no_remote(
@@ -186,7 +180,7 @@ def test_head_falls_back_to_local_git_when_no_remote(
     resolved = cli_module._resolve_cli_target("HEAD")
 
     assert resolved.kind == "commit"
-    assert resolved.repo == "rvw"
+    assert resolved.repo == Path.cwd().name
     assert len(resolved.head_sha) == 40
     assert resolved.diff
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import runpy
 import shutil
 import subprocess
@@ -142,6 +143,10 @@ async def run_fake(
         concurrency=2,
     )
     return outcome, runtime
+
+
+def test_adjudicate_defaults_to_one_replica() -> None:
+    assert inspect.signature(adjudicate).parameters["replicas"].default == 1
 
 
 async def test_majority_confirmed_and_rejected(tmp_path: Path) -> None:

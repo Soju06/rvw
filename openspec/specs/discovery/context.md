@@ -7,7 +7,7 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 ## Key decisions and measured basis
 
 - ADR-005 makes `unscoped-sweep` the structural coverage net. On a six-defect fixture, the scoped slop lane found 0/3 deep defects in both enum and free-ID conditions, while the sweep found 3/3. Its warning cap contains the higher expected false-positive rate.
-- ADR-006 chooses three replicas. Eight repeated runs showed an individual run recovered about 88% of the union; three replicas raised expected union recall to about 99%. Four replicas added little beyond that.
+- ADR-006 measured the benefit of three replicas. Eight repeated runs showed an individual run recovered about 88% of the union; three replicas raised expected union recall to about 99%, while four added little. The 2026-07-30 owner decision keeps that as opt-in heavy verification and makes one replica the ordinary default to avoid executor overload across concurrent rvw runs.
 - Concurrency tests on a 22-core host found N=4, 8, and 16 completed in 49.1, 50.0, and 50.6 seconds. The implemented cap remains 16, with one wave and heavy-first LPT ordering.
 - A real one-chunk PR #1119 run dispatched 13 lanes x 3 replicas and completed DISCOVER in about 410 seconds with all 39 runs valid. ADJUDICATE then took about 197 seconds.
 - The same PR contained a 2.84 MB generated `contract-graph.json` inside a 2.87 MB diff. Excluding it left 26,195 characters of reviewable source and motivated visible, file-level diff budgeting.
@@ -33,7 +33,7 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 
 ## Concrete example
 
-Given active lanes `security-exposure`, `dynamic/edge-cases`, and `unscoped-sweep` with one chunk, discovery builds nine planned runs. With two chunks it builds 18. The sweep prompt lists both other lanes' closed rule IDs as already covered. If one security replica on one chunk times out, its two valid outputs are still enriched with hunk IDs and that lane-chunk is not retried. If all three dynamic replicas on one chunk are invalid, only that lane-chunk gets one replacement wave.
+Given active lanes `security-exposure`, `dynamic/edge-cases`, and `unscoped-sweep`, default discovery builds three planned runs with one chunk and six with two chunks. Explicit `--replicas 3` heavy verification builds nine and 18 respectively. The sweep prompt lists both other lanes' closed rule IDs as already covered. In the explicit three-replica mode, if one security replica on one chunk times out, its two valid outputs are still enriched with hunk IDs and that lane-chunk is not retried. If all three dynamic replicas on one chunk are invalid, only that lane-chunk gets one replacement wave.
 
 For a diff containing `runtime-snapshots/contract-graph.json` plus `src/client.ts`, the generated segment is excluded and the prompt begins with a line such as:
 
