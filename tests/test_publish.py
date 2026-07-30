@@ -16,7 +16,7 @@ from rvw.gate import (
     render_gate_verdict,
 )
 from rvw.merge import MergeResult, merge
-from rvw.publish import PublishError, publish_review
+from rvw.publish import PublishError, publish_body_review, publish_review
 from rvw.report import render_report
 from rvw.schema import Severity, Tier, Verdict
 from rvw.store import RunHandle, RunStore
@@ -236,6 +236,53 @@ def test_non_422_error_is_not_retried(tmp_path: Path, monkeypatch: pytest.Monkey
         )
 
     assert calls == 1
+
+
+def test_body_only_dry_run_writes_comment_payload_without_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden_run(command: list[str], payload: str) -> str:
+        raise AssertionError(f"dry-run called GitHub: {command} {payload}")
+
+    monkeypatch.setattr(publish_module, "_run", forbidden_run)
+
+    result = publish_body_review(
+        run_dir=tmp_path,
+        repo="owner/repo",
+        pr_number=42,
+        body="# stack report\n",
+        execute=False,
+    )
+
+    payload = json.loads((tmp_path / "publish-payload.json").read_text(encoding="utf-8"))
+    assert payload == {"body": "# stack report\n", "event": "COMMENT"}
+    assert result.review_url is None
+    assert result.inline_count == 0
+    assert result.body_fallback_count == 0
+
+
+def test_body_only_execute_makes_exactly_one_comment_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(command: list[str], payload: str) -> str:
+        calls.append((command, json.loads(payload)))
+        return json.dumps({"html_url": "https://github.com/owner/repo/pull/42#pullrequestreview-2"})
+
+    monkeypatch.setattr(publish_module, "_run", fake_run)
+
+    result = publish_body_review(
+        run_dir=tmp_path,
+        repo="owner/repo",
+        pr_number=42,
+        body="# stack report\n",
+        execute=True,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1] == {"body": "# stack report\n", "event": "COMMENT"}
+    assert result.review_url is not None
 
 
 def test_gate_verdict_uses_comment_only_bounded_fallback_and_keeps_dispositions(

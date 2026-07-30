@@ -59,6 +59,11 @@ rvw gate --target 1119
 
 # Publish the report as a GitHub review (dry-run by default)
 rvw publish --run <run-id> --execute
+
+# Explicit stacked PR chain: plan → review → inspect tip COMMENT payload
+rvw stack plan --prs 1119,1120,1121
+rvw stack review --prs 1119,1120,1121
+rvw stack publish --run <stack-run-id>
 ```
 
 ## Concepts
@@ -75,6 +80,23 @@ The registry lives outside the package (default `~/.hermes/review/`):
 `layers.yaml` + `lanes/**.md` (YAML frontmatter + prompt body) + `policies/`.
 Everything is referenced by name so documents, lanes, and runtimes can be
 swapped without touching code.
+
+## Stacked PR review
+
+`rvw stack` accepts an explicit ordered list of at least two PRs. Every member
+must be open and unmerged in one repository, and each child's base ref/SHA must
+equal its parent's head ref/SHA. `stack review` pins every anchor, runs the
+ordinary pipeline once per member, then rechecks all earlier actionable claims
+against each descendant checkout as `PRESENT`, `ABSENT`, or `UNCERTAIN`.
+
+The resulting lineage reports `STILL_PRESENT`, `FIXED_IN`, `REGRESSED_IN`, or
+`UNCERTAIN` without treating hunk-derived finding IDs from different PRs as the
+same identity. Stack artifacts live under `/tmp/rvw/<stack-run-id>/` by default:
+`stack-manifest.json`, `member-runs.json`, `lineage.json`, and
+`stack-report.md`. `stack publish` writes a body-only COMMENT payload for the
+tip PR and makes no network call unless `--execute` is supplied; execute mode
+revalidates the complete chain first. Automatic stack discovery, stack gating,
+disposition inheritance, and per-origin PR comments are not part of this mode.
 
 ## Specs
 

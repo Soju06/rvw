@@ -14,6 +14,13 @@ This capability makes the review inspectable before any network action and trans
 - That run excluded 2,846,073 generated characters (about 2.84 MB) and reviewed 26,195 source characters, making the exclusion accounting a material report fact rather than a hidden prompt optimization.
 - One rejected inline anchor causes GitHub to reject the entire review with 422. Bulk body fallback bounds publication at two API calls instead of probing N comments.
 - Gate verdicts are rendered from persisted typed artifacts rather than handwritten aggregate prose. Their finding table retains the public group key and disposition even when a CONFIRMED finding is also emitted as an inline comment.
+- Stack runs keep a separate strict manifest, incremental ordinary member-run
+  references, lineage observations, and deterministic Markdown report. Partial
+  member references survive operational failure, while only a complete run can
+  produce a publish payload.
+- Stack publication is body-only because origin claims span different diffs.
+  Dry-run reads artifacts without GitHub access; execute mode revalidates every
+  member and direct edge before its single tip COMMENT request.
 
 ## Constraints
 
@@ -22,6 +29,9 @@ This capability makes the review inspectable before any network action and trans
 - Only CONFIRMED, anchorable, line-bearing groups become inline comments.
 - Dry-run results use the same `commented` state model even though no review URL exists.
 - Publication uses `gh api` and expects the response JSON to contain `html_url`.
+- Stack artifacts share the configured run root with ordinary runs but use
+  `rvw-stack-*` IDs and reference ordinary run IDs instead of copying their
+  stage artifacts.
 
 ## Failure modes
 
@@ -30,6 +40,9 @@ This capability makes the review inspectable before any network action and trans
 - If the report heading structure is manually changed, body removal for inline findings may not find `## 확정 발견 (CONFIRMED)`.
 - A run can legitimately lack `outcome.json`; the report then renders findings as unadjudicated and publication creates no inline comments.
 - The current code has no ADR-012 pre-publication guard for open state, head match, merge state, or BEHIND/DIRTY status.
+- A failed stack member leaves an intentionally incomplete directory without
+  `stack-report.md`; `stack publish` rejects it rather than reconstructing or
+  repeating review work.
 
 ## Concrete example
 
@@ -51,3 +64,8 @@ If that call returns 422, rvw makes one final call with no `comments` array and 
 ## Historical deltas
 
 ADR-012 specified a pre-publication target guard (`state=open`, matching head, not merged, not BEHIND/DIRTY). No such revalidation exists in `publish.py` or the publish CLI, so it is intentionally absent from the normative spec and remains a documented failure mode. Historical text also described all anchorable findings generally; the implementation publishes only CONFIRMED groups inline.
+
+Stack publication closes the stale-anchor gap only for its composed command:
+all captured base/head refs and SHAs and every direct edge are checked before
+`--execute`. Standalone ordinary `publish` retains the historical behavior
+described above.

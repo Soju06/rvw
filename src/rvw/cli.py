@@ -7,9 +7,8 @@ import json
 import subprocess
 import sys
 import tempfile
-from collections import Counter
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any, Never, cast
 
@@ -20,7 +19,7 @@ from rich.table import Table
 from rvw import __version__
 from rvw.adjudicate import AdjudicationOutcome, adjudicate
 from rvw.diffbudget import EmptyReviewDiffError, apply_diff_budget
-from rvw.discover import DiscoverResult, discover, resolve_lane_path
+from rvw.discover import DiscoverResult, resolve_lane_path
 from rvw.dispatch import PlannedRun, lpt_sort_key
 from rvw.doctor import DoctorReport, diagnose
 from rvw.gate import (
@@ -43,14 +42,37 @@ from rvw.gate import (
     write_disposition_template,
 )
 from rvw.lane import Lane, load_lane
-from rvw.merge import MergeResult, merge
+from rvw.pipeline import (
+    PipelineArtifacts,
+    coverage_totals,
+    execute_pipeline,
+    load_pipeline_artifacts,
+    optional_outcome,
+    verdict_counts,
+)
 from rvw.policy import evaluate, load_policy
-from rvw.publish import PublishError, publish_review
+from rvw.publish import PublishError, publish_body_review, publish_review
 from rvw.registry import Registry, load_registry
 from rvw.report import render_report
 from rvw.runtimes.codex import CodexRuntime
 from rvw.sample import SampleReport, sample_lane
 from rvw.schema import Tier, Verdict, finding_schema, lane_output_schema
+from rvw.stack import (
+    FindingLineage,
+    MemberRunRef,
+    StackInvariantError,
+    StackManifest,
+    StackResolutionError,
+    append_observation,
+    origin_lineages,
+    parse_pr_numbers,
+    resolve_stack,
+    resolved_target_for_member,
+    verify_manifest,
+)
+from rvw.stack_adjudicate import adjudicate_presence
+from rvw.stack_report import render_stack_report
+from rvw.stack_store import StackRunNotFound, StackStageMissing, StackStore
 from rvw.store import RunHandle, RunNotFound, RunStore, StageMissing
 from rvw.target import ResolvedTarget, TargetResolutionError, resolve_target
 
@@ -74,6 +96,11 @@ _EXAMPLES: dict[str, list[str]] = {
         "rvw gate --target 123",
         "rvw gate --run <run-id> --dispositions dispositions.yaml",
     ],
+    "stack": [
+        "rvw stack plan --prs 101,102,103 --json",
+        "rvw stack review --prs 101,102,103",
+        "rvw stack publish --run <stack-run-id>",
+    ],
     "lanes": ["rvw lanes list", "rvw lanes show slop-hygiene"],
     "doctor": ["rvw doctor"],
 }
@@ -86,7 +113,9 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 lanes_app = typer.Typer(help="Inspect registered review lanes.", no_args_is_help=True)
+stack_app = typer.Typer(help="Review an explicit stacked pull-request chain.", no_args_is_help=True)
 app.add_typer(lanes_app, name="lanes")
+app.add_typer(stack_app, name="stack")
 
 _console = Console()
 _error_console = Console(stderr=True)
@@ -94,15 +123,7 @@ Option = cast(Callable[..., object], typer.Option)
 Argument = cast(Callable[..., object], typer.Argument)
 
 
-@dataclass(frozen=True)
-class _PipelineArtifacts:
-    run: RunHandle
-    target: ResolvedTarget
-    discovered: DiscoverResult
-    merged: MergeResult
-    outcome: AdjudicationOutcome | None
-    report_md: str
-    report_path: Path
+_PipelineArtifacts = PipelineArtifacts
 
 
 def _write_json(payload: Any) -> None:
@@ -434,27 +455,15 @@ def review(
 
 
 def _optional_outcome(run: RunHandle) -> AdjudicationOutcome | None:
-    try:
-        return run.load_outcome()
-    except StageMissing:
-        return None
+    return optional_outcome(run)
 
 
 def _coverage_totals(discovered: DiscoverResult) -> dict[str, int]:
-    return {
-        "dispatched": sum(item.dispatched for item in discovered.coverage),
-        "valid": sum(item.valid for item in discovered.coverage),
-        "findings": sum(item.findings for item in discovered.coverage),
-    }
+    return coverage_totals(discovered)
 
 
 def _verdict_counts(outcome: AdjudicationOutcome | None) -> dict[str, int]:
-    counts = Counter(outcome.verdicts.values()) if outcome is not None else Counter()
-    return {
-        "CONFIRMED": counts[Verdict.CONFIRMED],
-        "REJECTED": counts[Verdict.REJECTED],
-        "UNCERTAIN": counts[Verdict.UNCERTAIN],
-    }
+    return verdict_counts(outcome)
 
 
 async def _review_pipeline(
@@ -538,89 +547,26 @@ async def _execute_pipeline(
 
     registry, lanes_root = _load_registry_root(registry_root)
     target = resolved_target or _resolve_cli_target(target_spec)
-
-    run = RunStore(out_root).create(target)
-    run.save_target(target)
-    brief = dynamic_brief.read_text(encoding="utf-8") if dynamic_brief is not None else None
-    discovered = await discover(
+    active_lanes = _load_active_lanes(registry, lanes_root, target)
+    return await execute_pipeline(
         registry=registry,
         lanes_root=lanes_root,
         target=target,
         runtime=CodexRuntime(),
-        out_root=run.dir / "discover-runtime",
-        brief=brief,
-        brief_source="operator" if dynamic_brief is not None else None,
+        adjudicator=adjudicate,
+        active_lanes=active_lanes,
+        repo_dir=repo_dir,
         replicas=replicas,
-    )
-    run.save_discover(discovered)
-
-    active_lanes = _load_active_lanes(registry, lanes_root, target)
-    lane_tiers = {lane.id: lane.tier for lane in active_lanes}
-    merged = merge(discovered.findings, lane_tiers=lane_tiers)
-    run.save_merge(merged)
-
-    if pause:
-        _console.print(
-            f"paused after MERGE — resume: rvw report --run {run.run_id}",
-            markup=False,
-        )
-        return None
-
-    outcome: AdjudicationOutcome | None = None
-    if repo_dir is None:
-        _error_console.print(
-            "warning: --repo-dir omitted; skipping adjudication. "
-            "Checkout provisioning is the operator's job in Phase 4.",
-            markup=False,
-        )
-    else:
-        outcome = await adjudicate(
-            merged,
-            target=target,
-            runtime=CodexRuntime(),
-            repo_dir=repo_dir,
-            out_root=run.dir / "adjudicate-runtime",
-            replicas=replicas,
-        )
-        run.save_outcome(outcome)
-
-    report_md = render_report(
-        target=target,
-        merged=merged,
-        outcome=outcome,
-        coverage=discovered.coverage,
-        budget=discovered.budget,
-        synthesis=None,
-    )
-    run.save_report(report_md)
-    report_path = run.dir / "report.md"
-    return _PipelineArtifacts(
-        run=run,
-        target=target,
-        discovered=discovered,
-        merged=merged,
-        outcome=outcome,
-        report_md=report_md,
-        report_path=report_path,
+        out_root=out_root,
+        pause=pause,
+        dynamic_brief=dynamic_brief,
+        on_pause=lambda message: _console.print(message, markup=False),
+        on_warning=lambda message: _error_console.print(message, markup=False),
     )
 
 
 def _load_gate_artifacts(run_id: str, out_root: Path) -> _PipelineArtifacts:
-    run = RunStore(out_root).open(run_id)
-    target = run.load_target()
-    discovered = run.load_discover()
-    merged = run.load_merge()
-    outcome = run.load_outcome()
-    report_md = run.load_report()
-    return _PipelineArtifacts(
-        run=run,
-        target=target,
-        discovered=discovered,
-        merged=merged,
-        outcome=outcome,
-        report_md=report_md,
-        report_path=run.dir / "report.md",
-    )
+    return load_pipeline_artifacts(run_id, out_root, require_outcome=True)
 
 
 def _gate_failure_verdict(artifacts: _PipelineArtifacts, message: str) -> GateVerdict:
@@ -1038,6 +984,261 @@ def publish_command(
         _console.print(str(result.review_url), markup=False, soft_wrap=True)
     else:
         _console.print(str(run.dir / "publish-payload.json"), markup=False, soft_wrap=True)
+
+
+@stack_app.command("plan")
+def stack_plan(
+    prs: Annotated[str, Option("--prs", help="Ordered comma-separated pull-request numbers.")],
+    out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
+    json_output: Annotated[bool, Option("--json")] = False,
+) -> None:
+    """Resolve, validate, and persist an immutable explicit stack manifest."""
+
+    try:
+        numbers = parse_pr_numbers(prs)
+        members = resolve_stack(numbers, cwd=Path.cwd())
+        handle = StackStore(out_root).create(numbers)
+        manifest = StackManifest(
+            run_id=handle.run_id,
+            repo=members[0].repo,
+            members=members,
+        )
+        handle.save_manifest(manifest)
+    except StackResolutionError as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
+    except (StackInvariantError, ValueError) as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_USER_ERROR) from exc
+    except OSError as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
+
+    payload = {
+        "run_id": handle.run_id,
+        "manifest_path": str(handle.dir / "stack-manifest.json"),
+        "repo": manifest.repo,
+        "prs": [member.number for member in manifest.members],
+    }
+    if json_output:
+        _write_json(payload)
+    else:
+        _console.print(f"stack run id: {handle.run_id}", markup=False)
+        _console.print(
+            f"manifest: {handle.dir / 'stack-manifest.json'}",
+            markup=False,
+            soft_wrap=True,
+        )
+
+
+@stack_app.command("review")
+def stack_review(
+    prs: Annotated[str, Option("--prs", help="Ordered comma-separated pull-request numbers.")],
+    registry_root: Annotated[
+        Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
+    ] = DEFAULT_REGISTRY_ROOT,
+    replicas: Annotated[int, Option("--replicas", min=1)] = 1,
+    out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
+    json_output: Annotated[bool, Option("--json")] = False,
+) -> None:
+    """Review every member and recheck earlier claims at descendant heads."""
+
+    try:
+        asyncio.run(
+            _stack_review_pipeline(
+                prs=prs,
+                registry_root=registry_root,
+                replicas=replicas,
+                out_root=out_root,
+                json_output=json_output,
+            )
+        )
+    except EmptyReviewDiffError as exc:
+        _empty_review_failure(exc, json_output=json_output)
+    except StackResolutionError as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
+    except (StackInvariantError, ValueError) as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_USER_ERROR) from exc
+    except (OSError, subprocess.CalledProcessError, RuntimeError) as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
+
+
+async def _stack_review_pipeline(
+    *,
+    prs: str,
+    registry_root: Path,
+    replicas: int,
+    out_root: Path,
+    json_output: bool,
+) -> None:
+    numbers = parse_pr_numbers(prs)
+    members = resolve_stack(numbers, cwd=Path.cwd())
+    handle = StackStore(out_root).create(numbers)
+    manifest = StackManifest(
+        run_id=handle.run_id,
+        repo=members[0].repo,
+        members=members,
+    )
+    handle.save_manifest(manifest)
+    member_runs: list[MemberRunRef] = []
+    lineages: list[FindingLineage] = []
+    coerced_evidence = 0
+    handle.save_member_runs(member_runs)
+    handle.save_lineages(lineages)
+
+    for member in manifest.members:
+        with tempfile.TemporaryDirectory(prefix=f"rvw-stack-pr-{member.number}-") as temp_root:
+            checkout = provision_checkout(
+                repo=member.repo,
+                pr_number=member.number,
+                head_sha=member.head_sha,
+                destination=Path(temp_root) / "checkout",
+            )
+            target = resolved_target_for_member(member, cwd=checkout)
+            artifacts = await _execute_pipeline(
+                target_spec=str(member.number),
+                repo_dir=checkout,
+                registry_root=registry_root,
+                replicas=replicas,
+                out_root=out_root,
+                pause=False,
+                dynamic_brief=None,
+                resolved_target=target,
+            )
+            if artifacts is None or artifacts.outcome is None:
+                raise RuntimeError(
+                    f"stack member PR #{member.number} stopped before adjudicated report"
+                )
+            member_runs.append(
+                MemberRunRef(
+                    pr_number=member.number,
+                    run_id=artifacts.run.run_id,
+                    report_path=str(artifacts.report_path),
+                    verdict_counts=_verdict_counts(artifacts.outcome),
+                )
+            )
+            handle.save_member_runs(member_runs)
+
+            if lineages:
+                presence = await adjudicate_presence(
+                    lineages,
+                    pr_number=member.number,
+                    target=target,
+                    runtime=CodexRuntime(),
+                    repo_dir=checkout,
+                    out_root=handle.dir / "presence-runtime" / f"pr-{member.number}",
+                    replicas=replicas,
+                )
+                lineages = [
+                    append_observation(
+                        lineage,
+                        presence.observations[lineage.lineage_id],
+                    )
+                    for lineage in lineages
+                ]
+                coerced_evidence += presence.coerced_evidence
+
+            lineages.extend(
+                origin_lineages(
+                    pr_number=member.number,
+                    run_id=artifacts.run.run_id,
+                    merged=artifacts.merged,
+                    outcome=artifacts.outcome,
+                )
+            )
+            handle.save_lineages(
+                lineages,
+                coerced_evidence=coerced_evidence,
+            )
+
+    current = resolve_stack(numbers, cwd=Path.cwd(), repo=manifest.repo)
+    verify_manifest(manifest, current)
+    report_md = render_stack_report(manifest, member_runs, lineages)
+    handle.save_report(report_md)
+    handle.require_complete()
+
+    payload = {
+        "run_id": handle.run_id,
+        "report_path": str(handle.dir / "stack-report.md"),
+        "repo": manifest.repo,
+        "prs": numbers,
+        "member_runs": [member.run_id for member in member_runs],
+        "lineages": len(lineages),
+        "coerced_evidence": coerced_evidence,
+    }
+    if json_output:
+        _write_json(payload)
+    else:
+        _console.print(f"stack run id: {handle.run_id}", markup=False)
+        _console.print(
+            f"stack report: {handle.dir / 'stack-report.md'}",
+            markup=False,
+            soft_wrap=True,
+        )
+
+
+@stack_app.command("publish")
+def stack_publish(
+    run_id: Annotated[str, Option("--run")],
+    execute: Annotated[bool, Option("--execute")] = False,
+    out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
+    json_output: Annotated[bool, Option("--json")] = False,
+) -> None:
+    """Write or execute one body-only COMMENT review against the stack tip."""
+
+    try:
+        handle = StackStore(out_root).open(run_id)
+        handle.require_complete()
+        manifest = handle.load_manifest()
+        report_md = handle.load_report()
+        if execute:
+            numbers = [member.number for member in manifest.members]
+            current = resolve_stack(
+                numbers,
+                cwd=Path.cwd(),
+                repo=manifest.repo,
+            )
+            verify_manifest(manifest, current)
+        tip = manifest.members[-1]
+        result = publish_body_review(
+            run_dir=handle.dir,
+            repo=manifest.repo,
+            pr_number=tip.number,
+            body=report_md,
+            execute=execute,
+        )
+    except (StackRunNotFound, StackStageMissing) as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_NOT_FOUND) from exc
+    except StackResolutionError as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
+    except StackInvariantError as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_NOT_FOUND) from exc
+    except (OSError, subprocess.CalledProcessError, PublishError, ValueError) as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
+
+    payload = {
+        "run_id": handle.run_id,
+        "tip_pr": tip.number,
+        "publish_payload_path": str(handle.dir / "publish-payload.json"),
+        "review_url": result.review_url,
+    }
+    if json_output:
+        _write_json(payload)
+    elif execute:
+        _console.print(str(result.review_url), markup=False, soft_wrap=True)
+    else:
+        _console.print(
+            str(handle.dir / "publish-payload.json"),
+            markup=False,
+            soft_wrap=True,
+        )
 
 
 @lanes_app.command("list")

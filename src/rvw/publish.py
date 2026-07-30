@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -216,4 +217,51 @@ def publish_review(
     )
 
 
-__all__ = ["PublishError", "PublishResult", "publish_review"]
+def publish_body_review(
+    *,
+    run_dir: Path,
+    repo: str,
+    pr_number: int,
+    body: str,
+    execute: bool,
+) -> PublishResult:
+    """Persist and optionally send one body-only GitHub COMMENT review."""
+
+    payload = _payload(body=body, inline_groups=[], outcome=None)
+    payload_text = _json_text(payload)
+    (run_dir / "publish-payload.json").write_text(
+        f"{payload_text}\n",
+        encoding="utf-8",
+    )
+    if not execute:
+        return PublishResult(
+            review_url=None,
+            inline_count=0,
+            body_fallback_count=0,
+            state="commented",
+        )
+
+    command = [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"repos/{repo}/pulls/{pr_number}/reviews",
+        "--input",
+        "-",
+    ]
+    raw = _run(command, payload_text)
+    return PublishResult(
+        review_url=_review_url(raw),
+        inline_count=0,
+        body_fallback_count=0,
+        state="commented",
+    )
+
+
+__all__ = [
+    "PublishError",
+    "PublishResult",
+    "publish_body_review",
+    "publish_review",
+]
