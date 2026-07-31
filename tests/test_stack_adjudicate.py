@@ -20,6 +20,7 @@ from rvw.stack_adjudicate import (
     RuntimePresence,
     RuntimePresenceItem,
     adjudicate_presence,
+    build_presence_prompt,
     presence_schema,
     validate_presence_output,
 )
@@ -36,11 +37,15 @@ def observation(pr_number: int, presence: Presence) -> PresenceObservation:
     )
 
 
-def lineage() -> FindingLineage:
+def lineage(
+    origin_pr: int = 1,
+    *,
+    finding_id: str = "finding-1",
+) -> FindingLineage:
     return make_origin_lineage(
-        origin_pr=1,
+        origin_pr=origin_pr,
         origin_run_id="rvw-origin",
-        origin_finding_id="finding-1",
+        origin_finding_id=finding_id,
         rule_id="bug/correctness",
         file="src/a.py",
         line=8,
@@ -52,7 +57,7 @@ def lineage() -> FindingLineage:
     )
 
 
-def target() -> ResolvedTarget:
+def target(pr_number: int = 2) -> ResolvedTarget:
     return ResolvedTarget(
         kind="pr",
         repo="owner/repo",
@@ -60,7 +65,7 @@ def target() -> ResolvedTarget:
         head_sha="2" * 40,
         changed_paths=["src/a.py"],
         diff="@@ -1 +1 @@\n-old\n+new\n",
-        pr_number=2,
+        pr_number=pr_number,
     )
 
 
@@ -80,9 +85,9 @@ def runtime_item(
 
 
 def test_presence_schema_and_validation_close_lineage_ids() -> None:
-    schema = presence_schema(["lineage-a"])
+    schema = presence_schema(["L1"])
     item_schema = schema["properties"]["items"]["items"]
-    assert item_schema["properties"]["lineage_id"]["enum"] == ["lineage-a"]
+    assert item_schema["properties"]["lineage_id"]["enum"] == ["L1"]
     with pytest.raises(ValueError, match="outside"):
         validate_presence_output(
             {
@@ -95,8 +100,38 @@ def test_presence_schema_and_validation_close_lineage_ids() -> None:
                     }
                 ]
             },
-            lineage_ids=["lineage-a"],
+            lineage_ids=["L1"],
         )
+    with pytest.raises(ValueError, match="duplicate"):
+        validate_presence_output(
+            {
+                "items": [
+                    {
+                        "lineage_id": "L1",
+                        "presence": "PRESENT",
+                        "reason": "first",
+                        "evidence": "source",
+                    },
+                    {
+                        "lineage_id": "L1",
+                        "presence": "ABSENT",
+                        "reason": "conflicting duplicate",
+                        "evidence": "other source",
+                    },
+                ]
+            },
+            lineage_ids=["L1"],
+        )
+
+
+def test_presence_prompt_uses_batch_local_ids_only() -> None:
+    candidate = lineage()
+
+    prompt = build_presence_prompt([candidate], target=target(), expanded=False)
+
+    assert "## Lineage L1" in prompt
+    assert "lineage_id: L1" in prompt
+    assert candidate.lineage_id not in prompt
 
 
 class FakeRuntime:
@@ -162,6 +197,7 @@ async def run_presence(
     outcome = await adjudicate_presence(
         [lineage()],
         pr_number=2,
+        member_order=[1, 2],
         target=target(),
         runtime=fake,
         repo_dir=tmp_path,
@@ -199,13 +235,75 @@ def test_final_uncertain_never_claims_fixed_or_regressed() -> None:
     assert current.state_pr is None
 
 
+def test_lineage_observations_follow_manifest_order_not_numeric_pr_order() -> None:
+    current = lineage(origin_pr=20)
+    current = append_observation(current, observation(15, Presence.ABSENT))
+
+    assert [item.pr_number for item in current.observations] == [20, 15]
+    assert current.state is LineageState.FIXED_IN
+    assert current.state_pr == 15
+
+
+async def test_presence_accepts_non_monotonic_manifest_order(tmp_path: Path) -> None:
+    candidate = lineage(origin_pr=20)
+    fake = FakeRuntime([RuntimePresence(items=[runtime_item("L1", Presence.PRESENT)])])
+
+    outcome = await adjudicate_presence(
+        [candidate],
+        pr_number=15,
+        member_order=[20, 15],
+        target=target(pr_number=15),
+        runtime=fake,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "presence",
+    )
+
+    assert outcome.observations[candidate.lineage_id].pr_number == 15
+    assert outcome.observations[candidate.lineage_id].presence is Presence.PRESENT
+
+
+async def test_presence_maps_batch_local_ids_back_to_persisted_ids(
+    tmp_path: Path,
+) -> None:
+    first = lineage(finding_id="finding-1")
+    second = lineage(finding_id="finding-2")
+    fake = FakeRuntime(
+        [
+            RuntimePresence(
+                items=[
+                    runtime_item("L2", Presence.ABSENT),
+                    runtime_item("L1", Presence.PRESENT),
+                ]
+            )
+        ]
+    )
+
+    outcome = await adjudicate_presence(
+        [first, second],
+        pr_number=2,
+        member_order=[1, 2],
+        target=target(),
+        runtime=fake,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "presence",
+    )
+
+    assert outcome.observations[first.lineage_id].presence is Presence.PRESENT
+    assert outcome.observations[second.lineage_id].presence is Presence.ABSENT
+    prompt = str(fake.calls[0]["prompt"])
+    assert "lineage_id: L1" in prompt
+    assert "lineage_id: L2" in prompt
+    assert first.lineage_id not in prompt
+    assert second.lineage_id not in prompt
+
+
 async def test_missing_output_gets_one_expanded_pass(tmp_path: Path) -> None:
     key = lineage().lineage_id
     outcome, runtime = await run_presence(
         tmp_path,
         [
             RuntimePresence(items=[]),
-            RuntimePresence(items=[runtime_item(key, Presence.ABSENT)]),
+            RuntimePresence(items=[runtime_item("L1", Presence.ABSENT)]),
         ],
     )
 
@@ -219,8 +317,8 @@ async def test_blank_conclusive_evidence_is_coerced_and_remains_uncertain(
     tmp_path: Path,
 ) -> None:
     key = lineage().lineage_id
-    blank = RuntimePresence(items=[runtime_item(key, Presence.PRESENT, evidence="  ")])
-    uncertain = RuntimePresence(items=[runtime_item(key, Presence.UNCERTAIN, evidence="")])
+    blank = RuntimePresence(items=[runtime_item("L1", Presence.PRESENT, evidence="  ")])
+    uncertain = RuntimePresence(items=[runtime_item("L1", Presence.UNCERTAIN, evidence="")])
 
     outcome, _runtime = await run_presence(tmp_path, [blank, uncertain])
 
@@ -235,7 +333,7 @@ async def test_all_invalid_wave_retries_once_before_expansion(tmp_path: Path) ->
         tmp_path,
         [
             None,
-            RuntimePresence(items=[runtime_item(key, Presence.PRESENT)]),
+            RuntimePresence(items=[runtime_item("L1", Presence.PRESENT)]),
         ],
     )
 
@@ -247,14 +345,16 @@ async def test_all_invalid_wave_retries_once_before_expansion(tmp_path: Path) ->
     assert isinstance(retry_run_dir, Path)
     assert first_run_dir.parent.name == "initial"
     assert retry_run_dir.parent.name == "initial-retry"
+    assert "scripted-invalid" not in str(runtime.calls[0]["prompt"])
+    assert "scripted-invalid" in str(runtime.calls[1]["prompt"])
 
 
 async def test_presence_uses_strict_majority(tmp_path: Path) -> None:
     key = lineage().lineage_id
     responses = [
-        RuntimePresence(items=[runtime_item(key, Presence.PRESENT, evidence="bad path")]),
-        RuntimePresence(items=[runtime_item(key, Presence.PRESENT, evidence="bad path")]),
-        RuntimePresence(items=[runtime_item(key, Presence.ABSENT, evidence="safe path")]),
+        RuntimePresence(items=[runtime_item("L1", Presence.PRESENT, evidence="bad path")]),
+        RuntimePresence(items=[runtime_item("L1", Presence.PRESENT, evidence="bad path")]),
+        RuntimePresence(items=[runtime_item("L1", Presence.ABSENT, evidence="safe path")]),
     ]
 
     outcome, _runtime = await run_presence(tmp_path, responses, replicas=3)

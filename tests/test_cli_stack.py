@@ -70,8 +70,37 @@ def valid_members() -> list[StackMember]:
     return [first, second, third]
 
 
-def target_for(number: int) -> ResolvedTarget:
-    members = valid_members()
+def non_monotonic_members() -> list[StackMember]:
+    parent = valid_members()[0].model_copy(
+        update={
+            "number": 20,
+            "url": "https://github.com/owner/repo/pull/20",
+            "title": "PR 20",
+            "body": "Body 20",
+            "head_ref": "stack-parent",
+        }
+    )
+    child = parent.model_copy(
+        update={
+            "number": 15,
+            "url": "https://github.com/owner/repo/pull/15",
+            "title": "PR 15",
+            "body": "Body 15",
+            "base_ref": parent.head_ref,
+            "base_sha": parent.head_sha,
+            "head_ref": "stack-child",
+            "head_sha": "2" * 40,
+        }
+    )
+    return [parent, child]
+
+
+def target_for(
+    number: int,
+    *,
+    members: list[StackMember] | None = None,
+) -> ResolvedTarget:
+    members = members or valid_members()
     member = next(item for item in members if item.number == number)
     return ResolvedTarget(
         kind="pr",
@@ -86,8 +115,14 @@ def target_for(number: int) -> ResolvedTarget:
     )
 
 
-def pipeline_artifacts(out_root: Path, number: int) -> PipelineArtifacts:
-    target = target_for(number)
+def pipeline_artifacts(
+    out_root: Path,
+    number: int,
+    *,
+    members: list[StackMember] | None = None,
+    finding_pr: int = 1,
+) -> PipelineArtifacts:
+    target = target_for(number, members=members)
     run = RunStore(out_root).create(target)
     findings = (
         [
@@ -103,7 +138,7 @@ def pipeline_artifacts(out_root: Path, number: int) -> PipelineArtifacts:
                 replica=1,
             )
         ]
-        if number == 1
+        if number == finding_pr
         else []
     )
     discovered = DiscoverResult(lane_results={}, findings=findings, coverage=[], budget=None)
@@ -263,6 +298,128 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     assert saved[0].state_pr == 3
 
 
+def test_stack_review_accepts_non_monotonic_manifest_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    members = non_monotonic_members()
+
+    def fake_checkout(**kwargs: object) -> Path:
+        destination = kwargs["destination"]
+        assert isinstance(destination, Path)
+        destination.mkdir(parents=True)
+        return destination
+
+    async def fake_pipeline(**kwargs: object) -> PipelineArtifacts:
+        target = kwargs["resolved_target"]
+        assert isinstance(target, ResolvedTarget)
+        assert target.pr_number is not None
+        return pipeline_artifacts(
+            tmp_path,
+            target.pr_number,
+            members=members,
+            finding_pr=20,
+        )
+
+    async def fake_presence(
+        lineages: list[FindingLineage],
+        *,
+        pr_number: int,
+        member_order: list[int],
+        **kwargs: object,
+    ) -> PresenceOutcome:
+        del kwargs
+        assert member_order == [20, 15]
+        return PresenceOutcome(
+            observations={
+                lineage.lineage_id: PresenceObservation(
+                    pr_number=pr_number,
+                    presence=Presence.ABSENT,
+                    reason="fixed",
+                    evidence="current source",
+                    replica_votes=[Presence.ABSENT],
+                )
+                for lineage in lineages
+            },
+            unresolved=[],
+            coerced_evidence=0,
+        )
+
+    monkeypatch.setattr(cli_module, "resolve_stack", lambda *args, **kwargs: members)
+    monkeypatch.setattr(cli_module, "provision_checkout", fake_checkout)
+    monkeypatch.setattr(
+        cli_module,
+        "resolved_target_for_member",
+        lambda member, **kwargs: target_for(member.number, members=members),
+    )
+    monkeypatch.setattr(cli_module, "_execute_pipeline", fake_pipeline)
+    monkeypatch.setattr(cli_module, "adjudicate_presence", fake_presence)
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "stack",
+            "review",
+            "--prs",
+            "20,15",
+            "--registry",
+            str(tmp_path / "registry"),
+            "--out",
+            str(tmp_path / "stack-runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    saved = StackStore(tmp_path / "stack-runs").open(payload["run_id"]).load_lineages()
+    assert [item.pr_number for item in saved[0].observations] == [20, 15]
+    assert saved[0].state.value == "FIXED_IN"
+    assert saved[0].state_pr == 15
+
+
+def test_stack_review_announces_run_id_before_member_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    members = valid_members()[:2]
+
+    def fake_checkout(**kwargs: object) -> Path:
+        destination = kwargs["destination"]
+        assert isinstance(destination, Path)
+        destination.mkdir(parents=True)
+        return destination
+
+    async def failed_pipeline(**kwargs: object) -> PipelineArtifacts:
+        del kwargs
+        raise RuntimeError("scripted member failure")
+
+    monkeypatch.setattr(cli_module, "resolve_stack", lambda *args, **kwargs: members)
+    monkeypatch.setattr(cli_module, "provision_checkout", fake_checkout)
+    monkeypatch.setattr(
+        cli_module,
+        "resolved_target_for_member",
+        lambda member, **kwargs: target_for(member.number),
+    )
+    monkeypatch.setattr(cli_module, "_execute_pipeline", failed_pipeline)
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "stack",
+            "review",
+            "--prs",
+            "1,2",
+            "--registry",
+            str(tmp_path / "registry"),
+            "--out",
+            str(tmp_path / "stack-runs"),
+        ],
+    )
+
+    assert result.exit_code == 3
+    assert "stack run id: rvw-stack-" in result.stdout
+    assert "scripted member failure" in result.stderr
+
+
 def test_stack_publish_dry_run_has_no_network_or_revalidation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -284,7 +441,11 @@ def test_stack_publish_dry_run_has_no_network_or_revalidation(
 
     assert result.exit_code == 0, result.stdout
     payload = json.loads((run_dir / "publish-payload.json").read_text(encoding="utf-8"))
-    assert payload == {"body": "# completed stack report\n", "event": "COMMENT"}
+    assert payload == {
+        "body": "# completed stack report\n",
+        "commit_id": "3" * 40,
+        "event": "COMMENT",
+    }
 
 
 def test_stack_publish_execute_revalidates_before_single_comment(
@@ -305,6 +466,7 @@ def test_stack_publish_execute_revalidates_before_single_comment(
     def fake_publish(**kwargs: object) -> PublishResult:
         assert kwargs["execute"] is True
         assert kwargs["pr_number"] == 3
+        assert kwargs["commit_id"] == "3" * 40
         events.append("publish")
         return PublishResult(
             review_url="https://github.com/owner/repo/pull/3#pullrequestreview-1",

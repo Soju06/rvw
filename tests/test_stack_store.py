@@ -7,7 +7,13 @@ import pytest
 from pydantic import ValidationError
 
 from rvw.schema import Severity, Verdict
-from rvw.stack import MemberRunRef, StackManifest, StackMember, make_origin_lineage
+from rvw.stack import (
+    MemberRunRef,
+    StackInvariantError,
+    StackManifest,
+    StackMember,
+    make_origin_lineage,
+)
 from rvw.stack_store import StackRunNotFound, StackStageMissing, StackStore
 
 
@@ -98,6 +104,35 @@ def test_partial_member_runs_remain_loadable(tmp_path: Path) -> None:
 
     assert [item.pr_number for item in handle.load_member_runs()] == [1]
     with pytest.raises(StackStageMissing, match="complete"):
+        handle.require_complete()
+
+
+def test_complete_run_rejects_lineage_that_does_not_reach_manifest_tip(
+    tmp_path: Path,
+) -> None:
+    handle = StackStore(tmp_path).create([1, 2, 3])
+    handle.save_manifest(manifest(handle.run_id))
+    handle.save_member_runs([member_run(1), member_run(2), member_run(3)])
+    handle.save_lineages(
+        [
+            make_origin_lineage(
+                origin_pr=1,
+                origin_run_id="rvw-member-1",
+                origin_finding_id="finding-1",
+                rule_id="bug/correctness",
+                file="src/a.py",
+                line=4,
+                severity=Severity.WARNING,
+                bodies=["broken"],
+                origin_verdict=Verdict.CONFIRMED,
+                origin_reason="confirmed",
+                origin_evidence="broken()",
+            )
+        ]
+    )
+    handle.save_report("# incomplete lineage\n")
+
+    with pytest.raises(StackInvariantError, match="observation order changed"):
         handle.require_complete()
 
 

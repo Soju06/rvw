@@ -25,6 +25,7 @@ from rvw.schema import Verdict
 from rvw.store import RunHandle
 
 _HTTP_STATUS = re.compile(r"(?:HTTP\s+|status(?: code)?[=: ]+)(?P<status>[1-5][0-9]{2})", re.I)
+_COMMIT_ID = re.compile(r"^[0-9a-f]{40}$")
 _CONFIRMED_HEADING = "## 확정 발견 (CONFIRMED)"
 
 
@@ -222,12 +223,16 @@ def publish_body_review(
     run_dir: Path,
     repo: str,
     pr_number: int,
+    commit_id: str,
     body: str,
     execute: bool,
 ) -> PublishResult:
     """Persist and optionally send one body-only GitHub COMMENT review."""
 
+    if _COMMIT_ID.fullmatch(commit_id) is None:
+        raise ValueError("stack publication commit_id must be a 40-character lowercase SHA")
     payload = _payload(body=body, inline_groups=[], outcome=None)
+    payload["commit_id"] = commit_id
     payload_text = _json_text(payload)
     (run_dir / "publish-payload.json").write_text(
         f"{payload_text}\n",

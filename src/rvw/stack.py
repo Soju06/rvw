@@ -145,8 +145,8 @@ class FindingLineage(BaseModel):
         numbers = [item.pr_number for item in self.observations]
         if numbers[0] != self.origin_pr:
             raise ValueError("first lineage observation must be the origin PR")
-        if any(current <= previous for previous, current in pairwise(numbers)):
-            raise ValueError("lineage observations must use strictly increasing PR order")
+        if len(numbers) != len(set(numbers)):
+            raise ValueError("lineage observations must use unique PR numbers")
         expected_state, expected_pr = derive_lineage_state(self.observations)
         if self.state is not expected_state or self.state_pr != expected_pr:
             raise ValueError("lineage state does not match its observations")
@@ -337,20 +337,19 @@ def resolved_target_for_member(
 ) -> ResolvedTarget:
     """Build an ordinary target from the captured anchors and pinned checkout."""
 
+    revision = f"{member.base_sha}...{member.head_sha}"
     diff_args = [
         "git",
         "diff",
         "--binary",
         "--find-renames",
-        member.base_sha,
-        member.head_sha,
+        revision,
     ]
     names_args = [
         "git",
         "diff",
         "--name-only",
-        member.base_sha,
-        member.head_sha,
+        revision,
     ]
     diff = run(diff_args, cwd)
     names = run(names_args, cwd)
@@ -454,8 +453,9 @@ def append_observation(
 ) -> FindingLineage:
     """Return a lineage with one later observation and refreshed state."""
 
-    if observation.pr_number <= lineage.observations[-1].pr_number:
-        raise ValueError("lineage observations must advance to a later PR")
+    observed_prs = {item.pr_number for item in lineage.observations}
+    if observation.pr_number in observed_prs:
+        raise ValueError("lineage observations must not repeat a PR")
     observations = [*lineage.observations, observation]
     state, state_pr = derive_lineage_state(observations)
     return lineage.model_copy(
@@ -465,6 +465,30 @@ def append_observation(
             "state_pr": state_pr,
         }
     )
+
+
+def verify_lineages(
+    manifest: StackManifest,
+    lineages: Sequence[FindingLineage],
+) -> None:
+    """Fail unless completed lineage histories exactly follow manifest order."""
+
+    member_order = [member.number for member in manifest.members]
+    positions = {number: index for index, number in enumerate(member_order)}
+    for lineage in lineages:
+        origin_index = positions.get(lineage.origin_pr)
+        if origin_index is None:
+            raise StackInvariantError(
+                f"lineage {lineage.lineage_id} origin PR #{lineage.origin_pr} "
+                "is not in the stack manifest"
+            )
+        expected = member_order[origin_index:]
+        actual = [observation.pr_number for observation in lineage.observations]
+        if actual != expected:
+            raise StackInvariantError(
+                f"lineage {lineage.lineage_id} observation order changed: "
+                f"expected {expected}, found {actual}"
+            )
 
 
 def origin_lineages(
@@ -518,5 +542,6 @@ __all__ = [
     "resolve_stack",
     "resolved_target_for_member",
     "validate_stack",
+    "verify_lineages",
     "verify_manifest",
 ]

@@ -91,10 +91,20 @@ def validate_presence_output(
     """Validate the static model plus the batch-specific lineage enum."""
 
     output = RuntimePresence.model_validate(raw)
+    output_ids = [item.lineage_id for item in output.items]
+    if len(output_ids) != len(set(output_ids)):
+        raise ValueError("presence output contains duplicate lineage_id values")
     allowed = set(lineage_ids)
     if any(item.lineage_id not in allowed for item in output.items):
         raise ValueError("presence output lineage_id is outside the supplied batch")
     return output
+
+
+def _batch_lineage_ids(lineages: Sequence[FindingLineage]) -> dict[str, str]:
+    lineage_ids = [lineage.lineage_id for lineage in lineages]
+    if len(lineage_ids) != len(set(lineage_ids)):
+        raise ValueError("presence lineage IDs must be unique")
+    return {lineage_id: f"L{index}" for index, lineage_id in enumerate(lineage_ids, start=1)}
 
 
 def build_presence_prompt(
@@ -102,6 +112,7 @@ def build_presence_prompt(
     *,
     target: ResolvedTarget,
     expanded: bool,
+    retry_invalid_reasons: Sequence[str] = (),
 ) -> str:
     """Render immutable origin claims for verification at one descendant HEAD."""
 
@@ -134,13 +145,26 @@ def build_presence_prompt(
                 ),
             ]
         )
+    if retry_invalid_reasons:
+        parts.extend(
+            [
+                "# Retry feedback",
+                (
+                    "The previous wave produced no valid outputs. Correct the "
+                    "machine-readable failures below while returning the same batch."
+                ),
+                *[f"- {reason}" for reason in retry_invalid_reasons],
+            ]
+        )
     parts.append("# Origin lineages")
+    batch_ids = _batch_lineage_ids(lineages)
     for lineage in lineages:
+        batch_id = batch_ids[lineage.lineage_id]
         location = f"{lineage.file}:{lineage.line if lineage.line is not None else 'unknown'}"
         parts.extend(
             [
-                f"## Lineage {lineage.lineage_id}",
-                f"lineage_id: {lineage.lineage_id}",
+                f"## Lineage {batch_id}",
+                f"lineage_id: {batch_id}",
                 f"origin: PR #{lineage.origin_pr} / run `{lineage.origin_run_id}`",
                 f"origin_finding_id: {lineage.origin_finding_id}",
                 f"rule_id: {lineage.rule_id}",
@@ -164,13 +188,15 @@ def _vote_batch(
         if result.status is RunStatus.VALID and result.output is not None
     ]
     votes_by_id: dict[str, list[_Vote]] = {lineage.lineage_id: [] for lineage in lineages}
+    batch_ids = _batch_lineage_ids(lineages)
     coerced_evidence = 0
     for output in valid_outputs:
-        by_id: dict[str, RuntimePresenceItem] = {}
-        for item in output.items:
-            by_id.setdefault(item.lineage_id, item)
+        output_ids = [item.lineage_id for item in output.items]
+        if len(output_ids) != len(set(output_ids)):
+            raise ValueError("presence output contains duplicate lineage_id values")
+        by_id = {item.lineage_id: item for item in output.items}
         for lineage in lineages:
-            item = by_id.get(lineage.lineage_id)
+            item = by_id.get(batch_ids[lineage.lineage_id])
             if item is None:
                 votes_by_id[lineage.lineage_id].append(_Vote(Presence.UNCERTAIN, "", ""))
                 continue
@@ -212,6 +238,7 @@ async def adjudicate_presence(
     lineages: Sequence[FindingLineage],
     *,
     pr_number: int,
+    member_order: Sequence[int],
     target: ResolvedTarget,
     runtime: Runtime,
     repo_dir: Path,
@@ -230,13 +257,30 @@ async def adjudicate_presence(
         raise ValueError("concurrency must be at least 1")
     if target.kind != "pr" or target.pr_number != pr_number:
         raise ValueError("presence target must be the requested pull request")
+    ordered_prs = list(member_order)
+    if len(ordered_prs) != len(set(ordered_prs)):
+        raise ValueError("presence member order must contain unique PR numbers")
+    try:
+        current_index = ordered_prs.index(pr_number)
+    except ValueError as exc:
+        raise ValueError("presence target must belong to the supplied member order") from exc
     candidates = list(lineages)
     if not candidates:
         return PresenceOutcome({}, [], 0)
     if len({lineage.lineage_id for lineage in candidates}) != len(candidates):
         raise ValueError("presence lineage IDs must be unique")
-    if any(lineage.observations[-1].pr_number >= pr_number for lineage in candidates):
-        raise ValueError("presence adjudication requires lineages from earlier PRs")
+    for lineage in candidates:
+        try:
+            origin_index = ordered_prs.index(lineage.origin_pr)
+        except ValueError as exc:
+            raise ValueError("presence lineage origin must belong to the member order") from exc
+        expected = ordered_prs[origin_index:current_index]
+        actual = [observation.pr_number for observation in lineage.observations]
+        if origin_index >= current_index or actual != expected:
+            raise ValueError(
+                "presence lineage observations must follow manifest order before "
+                f"PR #{pr_number}: expected {expected}, found {actual}"
+            )
 
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -246,9 +290,15 @@ async def adjudicate_presence(
         expanded: bool,
         label: str,
         deadline: int,
+        retry_invalid_reasons: Sequence[str] = (),
     ) -> list[RunResult[Any]]:
-        prompt = build_presence_prompt(selected, target=target, expanded=expanded)
-        lineage_ids = [lineage.lineage_id for lineage in selected]
+        prompt = build_presence_prompt(
+            selected,
+            target=target,
+            expanded=expanded,
+            retry_invalid_reasons=retry_invalid_reasons,
+        )
+        lineage_ids = list(_batch_lineage_ids(selected).values())
         schema = presence_schema(lineage_ids)
 
         async def execute_one(replica: int) -> RunResult[Any]:
@@ -286,11 +336,16 @@ async def adjudicate_presence(
             deadline=deadline,
         )
         if all(result.status is RunStatus.INVALID for result in results):
+            retry_invalid_reasons = [
+                f"replica {result.replica}: {result.invalid_reason or 'unknown_invalid'}"
+                for result in results
+            ]
             return await execute_wave(
                 selected,
                 expanded=expanded,
                 label=f"{label}-retry",
                 deadline=deadline,
+                retry_invalid_reasons=retry_invalid_reasons,
             )
         return results
 

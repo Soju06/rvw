@@ -68,6 +68,7 @@ from rvw.stack import (
     parse_pr_numbers,
     resolve_stack,
     resolved_target_for_member,
+    verify_lineages,
     verify_manifest,
 )
 from rvw.stack_adjudicate import adjudicate_presence
@@ -1077,6 +1078,8 @@ async def _stack_review_pipeline(
     numbers = parse_pr_numbers(prs)
     members = resolve_stack(numbers, cwd=Path.cwd())
     handle = StackStore(out_root).create(numbers)
+    run_id_console = _error_console if json_output else _console
+    run_id_console.print(f"stack run id: {handle.run_id}", markup=False)
     manifest = StackManifest(
         run_id=handle.run_id,
         repo=members[0].repo,
@@ -1126,6 +1129,7 @@ async def _stack_review_pipeline(
                 presence = await adjudicate_presence(
                     lineages,
                     pr_number=member.number,
+                    member_order=numbers,
                     target=target,
                     runtime=CodexRuntime(),
                     repo_dir=checkout,
@@ -1156,6 +1160,7 @@ async def _stack_review_pipeline(
 
     current = resolve_stack(numbers, cwd=Path.cwd(), repo=manifest.repo)
     verify_manifest(manifest, current)
+    verify_lineages(manifest, lineages)
     report_md = render_stack_report(manifest, member_runs, lineages)
     handle.save_report(report_md)
     handle.require_complete()
@@ -1172,7 +1177,6 @@ async def _stack_review_pipeline(
     if json_output:
         _write_json(payload)
     else:
-        _console.print(f"stack run id: {handle.run_id}", markup=False)
         _console.print(
             f"stack report: {handle.dir / 'stack-report.md'}",
             markup=False,
@@ -1207,6 +1211,7 @@ def stack_publish(
             run_dir=handle.dir,
             repo=manifest.repo,
             pr_number=tip.number,
+            commit_id=tip.head_sha,
             body=report_md,
             execute=execute,
         )

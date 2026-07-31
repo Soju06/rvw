@@ -169,7 +169,7 @@ def test_verify_manifest_rejects_moved_or_closed_member(changed: dict[str, objec
         verify_manifest(manifest, current)
 
 
-def test_resolved_target_for_member_uses_captured_anchors(
+def test_resolved_target_for_member_uses_captured_merge_base_revision(
     tmp_path: Path,
 ) -> None:
     captured = valid_members()[1]
@@ -190,4 +190,8 @@ def test_resolved_target_for_member_uses_captured_anchors(
     assert target.head_sha == captured.head_sha
     assert target.changed_paths == ["src/a.py", "src/b.py"]
     assert target.diff.startswith("diff --git")
-    assert all(captured.base_sha in call and captured.head_sha in call for call in calls)
+    revision = f"{captured.base_sha}...{captured.head_sha}"
+    assert calls == [
+        ("git", "diff", "--binary", "--find-renames", revision),
+        ("git", "diff", "--name-only", revision),
+    ]

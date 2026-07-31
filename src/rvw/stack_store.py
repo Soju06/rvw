@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from rvw.stack import FindingLineage, MemberRunRef, StackManifest
+from rvw.stack import FindingLineage, MemberRunRef, StackManifest, verify_lineages
 
 
 class StackRunNotFound(FileNotFoundError):
@@ -144,7 +144,7 @@ class StackRunHandle:
         try:
             manifest = self.load_manifest()
             member_runs = self.load_member_runs()
-            self.load_lineages()
+            lineages = self.load_lineages()
             self.load_report()
         except StackStageMissing as exc:
             raise StackStageMissing("complete", self.dir) from exc
@@ -152,6 +152,7 @@ class StackRunHandle:
         actual = [member.pr_number for member in member_runs]
         if actual != expected:
             raise StackStageMissing("complete", self.dir)
+        verify_lineages(manifest, lineages)
 
 
 class StackStore:

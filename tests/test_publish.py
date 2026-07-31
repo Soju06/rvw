@@ -250,12 +250,17 @@ def test_body_only_dry_run_writes_comment_payload_without_network(
         run_dir=tmp_path,
         repo="owner/repo",
         pr_number=42,
+        commit_id="c" * 40,
         body="# stack report\n",
         execute=False,
     )
 
     payload = json.loads((tmp_path / "publish-payload.json").read_text(encoding="utf-8"))
-    assert payload == {"body": "# stack report\n", "event": "COMMENT"}
+    assert payload == {
+        "body": "# stack report\n",
+        "commit_id": "c" * 40,
+        "event": "COMMENT",
+    }
     assert result.review_url is None
     assert result.inline_count == 0
     assert result.body_fallback_count == 0
@@ -276,12 +281,17 @@ def test_body_only_execute_makes_exactly_one_comment_call(
         run_dir=tmp_path,
         repo="owner/repo",
         pr_number=42,
+        commit_id="c" * 40,
         body="# stack report\n",
         execute=True,
     )
 
     assert len(calls) == 1
-    assert calls[0][1] == {"body": "# stack report\n", "event": "COMMENT"}
+    assert calls[0][1] == {
+        "body": "# stack report\n",
+        "commit_id": "c" * 40,
+        "event": "COMMENT",
+    }
     assert result.review_url is not None
 
 

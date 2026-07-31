@@ -20,7 +20,9 @@ This capability makes the review inspectable before any network action and trans
   produce a publish payload.
 - Stack publication is body-only because origin claims span different diffs.
   Dry-run reads artifacts without GitHub access; execute mode revalidates every
-  member and direct edge before its single tip COMMENT request.
+  member and direct edge before its single tip COMMENT request. Both dry-run and
+  execute payloads pin `commit_id` to the captured tip SHA so a push after
+  revalidation cannot move the review onto an uncaptured head.
 
 ## Constraints
 
@@ -42,7 +44,8 @@ This capability makes the review inspectable before any network action and trans
 - The current code has no ADR-012 pre-publication guard for open state, head match, merge state, or BEHIND/DIRTY status.
 - A failed stack member leaves an intentionally incomplete directory without
   `stack-report.md`; `stack publish` rejects it rather than reconstructing or
-  repeating review work.
+  repeating review work. The review command prints the stack run ID immediately
+  after directory creation so those partial artifacts remain discoverable.
 
 ## Concrete example
 
@@ -67,5 +70,5 @@ ADR-012 specified a pre-publication target guard (`state=open`, matching head, n
 
 Stack publication closes the stale-anchor gap only for its composed command:
 all captured base/head refs and SHAs and every direct edge are checked before
-`--execute`. Standalone ordinary `publish` retains the historical behavior
-described above.
+`--execute`, and the review payload names the captured tip commit. Standalone
+ordinary `publish` retains the historical behavior described above.
