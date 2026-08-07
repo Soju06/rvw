@@ -23,7 +23,7 @@ from rvw import __version__
 from rvw.adjudicate import AdjudicationOutcome, adjudicate
 from rvw.diffbudget import EmptyReviewDiffError, apply_diff_budget
 from rvw.discover import DiscoverResult, resolve_lane_path
-from rvw.dispatch import PlannedRun, lpt_sort_key
+from rvw.dispatch import DEFAULT_CONCURRENCY, PlannedRun, lpt_sort_key
 from rvw.doctor import DoctorReport, diagnose
 from rvw.gate import (
     ACTIONABLE_DISPOSITIONS_PAUSE,
@@ -450,6 +450,7 @@ def review(
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
     replicas: Annotated[int, Option("--replicas", min=1)] = 1,
+    concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
     pause: Annotated[bool, Option("--pause")] = False,
@@ -463,6 +464,7 @@ def review(
                 repo_dir=repo_dir,
                 registry_root=registry_root,
                 replicas=replicas,
+                concurrency=concurrency,
                 out_root=out_root,
                 json_output=json_output,
                 pause=pause,
@@ -492,6 +494,7 @@ async def _review_pipeline(
     repo_dir: Path | None,
     registry_root: Path,
     replicas: int,
+    concurrency: int,
     out_root: Path,
     json_output: bool,
     pause: bool,
@@ -509,6 +512,7 @@ async def _review_pipeline(
         repo_dir=repo_dir,
         registry_root=registry_root,
         replicas=replicas,
+        concurrency=concurrency,
         out_root=out_root,
         pause=pause,
         dynamic_brief=dynamic_brief,
@@ -558,6 +562,7 @@ async def _execute_pipeline(
     repo_dir: Path | None,
     registry_root: Path,
     replicas: int,
+    concurrency: int,
     out_root: Path,
     pause: bool,
     dynamic_brief: Path | None,
@@ -577,6 +582,7 @@ async def _execute_pipeline(
         active_lanes=active_lanes,
         repo_dir=repo_dir,
         replicas=replicas,
+        concurrency=concurrency,
         out_root=out_root,
         pause=pause,
         dynamic_brief=dynamic_brief,
@@ -746,6 +752,7 @@ def gate(
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
     replicas: Annotated[int, Option("--replicas", min=1)] = _PLAN_REPLICAS,
+    concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     execute: Annotated[bool, Option("--execute")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
@@ -769,6 +776,7 @@ def gate(
             inherit_run_id=inherit_run_id,
             registry_root=registry_root,
             replicas=replicas,
+            concurrency=concurrency,
             out_root=out_root,
             execute=execute,
             json_output=json_output,
@@ -784,6 +792,7 @@ async def _gate_pipeline(
     inherit_run_id: str | None,
     registry_root: Path,
     replicas: int,
+    concurrency: int,
     out_root: Path,
     execute: bool,
     json_output: bool,
@@ -825,6 +834,7 @@ async def _gate_pipeline(
                     repo_dir=checkout,
                     registry_root=registry_root,
                     replicas=replicas,
+                    concurrency=concurrency,
                     out_root=out_root,
                     pause=False,
                     dynamic_brief=None,
@@ -1253,6 +1263,7 @@ def auto(
         Option("--repo-dir", help="Provisioned checkout used for adjudication."),
     ] = None,
     policy_path: Annotated[Path, Option("--policy")] = DEFAULT_AUTO_POLICY,
+    concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     publish: Annotated[bool | None, Option("--publish/--no-publish")] = None,
     allow_approve: Annotated[bool, Option("--allow-approve")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
@@ -1268,6 +1279,7 @@ def auto(
                 target_spec=target,
                 repo_dir=repo_dir,
                 policy_path=policy_path,
+                concurrency=concurrency,
                 publish=publish,
                 json_output=json_output,
             )
@@ -1281,6 +1293,7 @@ async def _auto_pipeline(
     target_spec: str,
     repo_dir: Path | None,
     policy_path: Path,
+    concurrency: int,
     publish: bool | None,
     json_output: bool,
 ) -> None:
@@ -1290,6 +1303,7 @@ async def _auto_pipeline(
         repo_dir=repo_dir,
         registry_root=DEFAULT_REGISTRY_ROOT,
         replicas=_PLAN_REPLICAS,
+        concurrency=concurrency,
         out_root=DEFAULT_RUN_ROOT,
         pause=False,
         dynamic_brief=None,
@@ -1488,6 +1502,7 @@ def stack_review(
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
     replicas: Annotated[int, Option("--replicas", min=1)] = 1,
+    concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
 ) -> None:
@@ -1499,6 +1514,7 @@ def stack_review(
                 prs=prs,
                 registry_root=registry_root,
                 replicas=replicas,
+                concurrency=concurrency,
                 out_root=out_root,
                 json_output=json_output,
             )
@@ -1521,6 +1537,7 @@ async def _stack_review_pipeline(
     prs: str,
     registry_root: Path,
     replicas: int,
+    concurrency: int,
     out_root: Path,
     json_output: bool,
 ) -> None:
@@ -1555,6 +1572,7 @@ async def _stack_review_pipeline(
                 repo_dir=checkout,
                 registry_root=registry_root,
                 replicas=replicas,
+                concurrency=concurrency,
                 out_root=out_root,
                 pause=False,
                 dynamic_brief=None,
@@ -1584,6 +1602,7 @@ async def _stack_review_pipeline(
                     repo_dir=checkout,
                     out_root=handle.dir / "presence-runtime" / f"pr-{member.number}",
                     replicas=replicas,
+                    concurrency=concurrency,
                 )
                 lineages = [
                     append_observation(
@@ -1871,6 +1890,7 @@ def sample(
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
     replicas: Annotated[int, Option("--replicas", min=1)] = 3,
+    concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     out_root: Annotated[Path, Option("--out")] = Path("/tmp/rvw-sample"),
     json_output: Annotated[bool, Option("--json")] = False,
 ) -> None:
@@ -1900,6 +1920,7 @@ def sample(
                 runtime=CodexRuntime(),
                 out_root=out_root,
                 replicas=replicas,
+                concurrency=concurrency,
             )
         )
     except EmptyReviewDiffError as exc:

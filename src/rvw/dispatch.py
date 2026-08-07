@@ -11,6 +11,7 @@ from rvw.lane import Lane
 from rvw.runtimes import RunResult, RunStatus, Runtime
 
 _COST_ORDER = {"heavy": 0, "normal": 1, "light": 2}
+DEFAULT_CONCURRENCY = 8
 
 
 def lpt_sort_key(lane_cost: str) -> int:
@@ -41,7 +42,7 @@ async def dispatch(
     runtime: Runtime,
     *,
     out_root: Path,
-    concurrency: int = 16,
+    concurrency: int = DEFAULT_CONCURRENCY,
     deadline_seconds: int = 600,
     on_progress: Callable[[RunResult], None] | None = None,
 ) -> list[RunResult]:
@@ -106,4 +107,4 @@ async def dispatch(
     )
 
 
-__all__: list[str] = ["PlannedRun", "dispatch", "lpt_sort_key"]
+__all__: list[str] = ["DEFAULT_CONCURRENCY", "PlannedRun", "dispatch", "lpt_sort_key"]

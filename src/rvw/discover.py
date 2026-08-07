@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rvw.diffbudget import DiffBudgetReport, apply_diff_budget, require_reviewable_diff
-from rvw.dispatch import PlannedRun, dispatch
+from rvw.dispatch import DEFAULT_CONCURRENCY, PlannedRun, dispatch
 from rvw.hunks import hunk_for_line, is_anchorable, parse_hunks
 from rvw.lane import load_lane
 from rvw.prompts import build_chunk_context, build_lane_prompt
@@ -137,7 +137,7 @@ async def discover(
     brief: str | None = None,
     brief_source: str | None = None,
     replicas: int = 1,
-    concurrency: int = 16,
+    concurrency: int = DEFAULT_CONCURRENCY,
     lane_filter: Sequence[str] | None = None,
     deadline_seconds: int = 600,
 ) -> DiscoverResult:

@@ -254,11 +254,22 @@ def test_gate_preserves_explicit_replica_override(
 
     result = runner.invoke(
         cli_module.app,
-        ["gate", "--target", "42", "--replicas", "3", "--out", str(out_root)],
+        [
+            "gate",
+            "--target",
+            "42",
+            "--replicas",
+            "3",
+            "--concurrency",
+            "4",
+            "--out",
+            str(out_root),
+        ],
     )
 
     assert result.exit_code == 0, result.stdout
     assert calls[0]["replicas"] == 3
+    assert calls[0]["concurrency"] == 4
     assert load_gate_plan(artifacts.run.dir).replicas == 3
 
 

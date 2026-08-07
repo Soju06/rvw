@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from rvw.diffbudget import apply_diff_budget, require_reviewable_diff
+from rvw.dispatch import DEFAULT_CONCURRENCY
 from rvw.lane import Lane
 from rvw.prompts import build_chunk_context, build_lane_prompt
 from rvw.runtimes import RunResult, RunStatus, Runtime
@@ -120,6 +121,7 @@ async def sample_lane(
     out_root: Path,
     replicas: int = 3,
     deadline_seconds: int = 600,
+    concurrency: int = DEFAULT_CONCURRENCY,
 ) -> SampleReport:
     """Run enum and free-schema variants and separate rule gaps from site variance."""
 
@@ -127,6 +129,8 @@ async def sample_lane(
         raise ValueError("replicas must be at least 1")
     if deadline_seconds < 1:
         raise ValueError("deadline_seconds must be at least 1")
+    if concurrency < 1:
+        raise ValueError("concurrency must be at least 1")
 
     chunks, budget = apply_diff_budget(fixture_diff)
     require_reviewable_diff(budget, source="fixture")
@@ -146,7 +150,7 @@ async def sample_lane(
         )
         for chunk in chunks
     }
-    semaphore = asyncio.Semaphore(16)
+    semaphore = asyncio.Semaphore(concurrency)
 
     def validate_enum(raw: object) -> RuntimeLaneOutput:
         return validate_output(lane, raw)

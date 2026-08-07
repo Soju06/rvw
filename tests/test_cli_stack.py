@@ -219,6 +219,8 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     resolve_calls = 0
     pipeline_calls: list[int] = []
     presence_calls: list[tuple[int, list[str]]] = []
+    pipeline_concurrency: list[int] = []
+    presence_concurrency: list[int] = []
 
     def fake_resolve(numbers: list[int], **kwargs: object) -> list[StackMember]:
         nonlocal resolve_calls
@@ -237,12 +239,17 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
         assert isinstance(target, ResolvedTarget)
         assert target.pr_number is not None
         pipeline_calls.append(target.pr_number)
+        concurrency = kwargs["concurrency"]
+        assert isinstance(concurrency, int)
+        pipeline_concurrency.append(concurrency)
         return pipeline_artifacts(tmp_path, target.pr_number)
 
     async def fake_presence(
         lineages: list[FindingLineage], *, pr_number: int, **kwargs: object
     ) -> PresenceOutcome:
-        del kwargs
+        concurrency = kwargs["concurrency"]
+        assert isinstance(concurrency, int)
+        presence_concurrency.append(concurrency)
         lineage_ids = [item.lineage_id for item in lineages]
         presence_calls.append((pr_number, lineage_ids))
         presence = Presence.ABSENT if pr_number == 3 else Presence.PRESENT
@@ -280,6 +287,8 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
             "1,2,3",
             "--registry",
             str(tmp_path / "registry"),
+            "--concurrency",
+            "4",
             "--out",
             str(tmp_path / "stack-runs"),
             "--json",
@@ -289,7 +298,9 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     assert result.exit_code == 0, result.stdout
     assert resolve_calls == 2
     assert pipeline_calls == [1, 2, 3]
+    assert pipeline_concurrency == [4, 4, 4]
     assert [number for number, _lineages in presence_calls] == [2, 3]
+    assert presence_concurrency == [4, 4]
     payload = json.loads(result.stdout)
     handle = StackStore(tmp_path / "stack-runs").open(payload["run_id"])
     saved = handle.load_lineages()

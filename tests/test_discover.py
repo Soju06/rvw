@@ -157,6 +157,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
     reg = registry(("slop-hygiene", Tier.BASE), ("dynamic/goal-parity", Tier.DYNAMIC))
     runtime = FakeRuntime()
     dispatch_calls = 0
+    dispatch_concurrency: list[int] = []
     original_dispatch = discover_module.dispatch
 
     async def counting_dispatch(
@@ -164,12 +165,13 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
         dispatch_runtime: Runtime,
         *,
         out_root: Path,
-        concurrency: int = 16,
+        concurrency: int = 8,
         deadline_seconds: int = 600,
         on_progress: Callable[[RunResult], None] | None = None,
     ) -> list[RunResult]:
         nonlocal dispatch_calls
         dispatch_calls += 1
+        dispatch_concurrency.append(concurrency)
         return await original_dispatch(
             runs,
             dispatch_runtime,
@@ -188,10 +190,12 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
         runtime=runtime,
         out_root=tmp_path / "out",
         replicas=2,
+        concurrency=3,
         lane_filter=["slop-hygiene"],
     )
 
     assert dispatch_calls == 1
+    assert dispatch_concurrency == [3]
     assert set(result.lane_results) == {"slop-hygiene"}
     assert runtime.calls == [("slop-hygiene", 1), ("slop-hygiene", 2)]
 

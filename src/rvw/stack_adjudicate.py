@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
+from rvw.dispatch import DEFAULT_CONCURRENCY
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.stack import FindingLineage, Presence, PresenceObservation
 from rvw.target import ResolvedTarget
@@ -245,7 +246,7 @@ async def adjudicate_presence(
     out_root: Path,
     replicas: int = 1,
     deadline_seconds: int = 600,
-    concurrency: int = 16,
+    concurrency: int = DEFAULT_CONCURRENCY,
 ) -> PresenceOutcome:
     """Recheck all earlier lineages once at a descendant PR head."""
 

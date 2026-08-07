@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from rvw.dispatch import DEFAULT_CONCURRENCY
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.schema import RuntimeAdjudication, RuntimeAdjudicationItem, Verdict
@@ -180,7 +181,7 @@ async def adjudicate(
     out_root: Path,
     replicas: int = 1,
     deadline_seconds: int = 600,
-    concurrency: int = 16,
+    concurrency: int = DEFAULT_CONCURRENCY,
 ) -> AdjudicationOutcome:
     """Adjudicate all collapse groups, widening context once for uncertainty."""
 

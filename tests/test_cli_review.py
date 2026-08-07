@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 from typer.testing import CliRunner, Result
 
 import rvw.cli as cli_module
+import rvw.pipeline as pipeline_module
 import rvw.publish as publish_module
 from rvw.adjudicate import AdjudicationOutcome
+from rvw.discover import DiscoverResult
 from rvw.lane import Lane
 from rvw.merge import MergeResult
-from rvw.runtimes import RunResult, RunStatus
+from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Verdict
 from rvw.store import RunStore
 from rvw.target import ResolvedTarget
@@ -149,13 +152,14 @@ def invoke_review(
 
 
 @pytest.mark.parametrize(
-    ("extra", "expected_replicas"),
-    [([], 1), (["--replicas", "3"], 3)],
+    ("extra", "expected_replicas", "expected_concurrency"),
+    [([], 1, 8), (["--replicas", "3", "--concurrency", "4"], 3, 4)],
 )
-def test_review_replica_default_and_explicit_override(
+def test_review_runtime_defaults_and_explicit_overrides(
     monkeypatch: pytest.MonkeyPatch,
     extra: list[str],
     expected_replicas: int,
+    expected_concurrency: int,
 ) -> None:
     calls: list[dict[str, object]] = []
 
@@ -168,6 +172,76 @@ def test_review_replica_default_and_explicit_override(
 
     assert result.exit_code == 0, result.stdout
     assert calls[0]["replicas"] == expected_replicas
+    assert calls[0]["concurrency"] == expected_concurrency
+
+
+def test_review_rejects_zero_concurrency_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_review_pipeline", fake_review_pipeline)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["review", "--target", "HEAD", "--concurrency", "0"],
+    )
+
+    assert result.exit_code == 2
+    assert calls == []
+
+
+async def test_shared_pipeline_propagates_concurrency_to_discovery_and_adjudication(
+    tmp_path: Path,
+    registry_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    concurrency_calls: list[tuple[str, int]] = []
+
+    async def fake_discover(**kwargs: object) -> DiscoverResult:
+        concurrency = kwargs["concurrency"]
+        assert isinstance(concurrency, int)
+        concurrency_calls.append(("discover", concurrency))
+        return DiscoverResult(lane_results={}, findings=[], coverage=[])
+
+    async def fake_adjudicate(merged: MergeResult, **kwargs: object) -> AdjudicationOutcome:
+        del merged
+        concurrency = kwargs["concurrency"]
+        assert isinstance(concurrency, int)
+        concurrency_calls.append(("adjudicate", concurrency))
+        return AdjudicationOutcome(
+            verdicts={},
+            reasons={},
+            evidence={},
+            replica_votes={},
+            unresolved=[],
+            coerced_rejections=0,
+        )
+
+    registry, lanes_root = cli_module._load_registry_root(registry_root)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    monkeypatch.setattr(pipeline_module, "discover", fake_discover)
+
+    await pipeline_module.execute_pipeline(
+        registry=registry,
+        lanes_root=lanes_root,
+        target=pr_target(),
+        active_lanes=[],
+        runtime=cast(Runtime, FakeRuntime()),
+        adjudicator=fake_adjudicate,
+        repo_dir=checkout,
+        replicas=1,
+        concurrency=3,
+        out_root=tmp_path / "runs",
+        pause=False,
+        dynamic_brief=None,
+    )
+
+    assert concurrency_calls == [("discover", 3), ("adjudicate", 3)]
 
 
 def test_review_end_to_end_writes_all_stages_and_json_shape(

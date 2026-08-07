@@ -150,6 +150,34 @@ def test_auto_policy_none_skips_publish(tmp_path: Path, monkeypatch: pytest.Monk
     assert result.exit_code == 0, result.stdout
 
 
+def test_auto_explicit_concurrency_reaches_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = fixture_artifacts(tmp_path, adjudicated=False)
+    calls: list[dict[str, object]] = []
+
+    async def fake_execute_pipeline(**kwargs: object) -> cli_module._PipelineArtifacts:
+        calls.append(kwargs)
+        return artifacts
+
+    monkeypatch.setattr(cli_module, "_execute_pipeline", fake_execute_pipeline)
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "auto",
+            "--target",
+            "42",
+            "--policy",
+            str(policy_file(tmp_path, "none")),
+            "--concurrency",
+            "4",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert calls[0]["concurrency"] == 4
+
+
 def test_allow_approve_is_placeholder_and_payload_remains_comment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -291,8 +319,11 @@ def test_sample_exit_codes_and_pass_hint(
     verdict: str,
     exit_code: int,
 ) -> None:
+    calls: list[dict[str, object]] = []
+
     async def fake_sample(*args: object, **kwargs: object) -> SampleReport:
-        del args, kwargs
+        del args
+        calls.append(kwargs)
         return SampleReport(
             lane_id="test-lane",
             enum_findings=[("test/rule", 1)],
@@ -328,9 +359,12 @@ def test_sample_exit_codes_and_pass_hint(
             str(tmp_path / "fixture.py"),
             "--registry",
             str(sample_registry),
+            "--concurrency",
+            "4",
         ],
     )
     assert result.exit_code == exit_code, result.stdout
+    assert calls[0]["concurrency"] == 4
     assert ("may drop 'validation: pending'" in result.stdout) is (verdict == "PASS")
     if verdict == "PASS":
         assert "site variance" in result.stdout

@@ -74,6 +74,7 @@ async def execute_pipeline(
     adjudicator: Adjudicator,
     repo_dir: Path | None,
     replicas: int,
+    concurrency: int,
     out_root: Path,
     pause: bool,
     dynamic_brief: Path | None,
@@ -94,6 +95,7 @@ async def execute_pipeline(
         brief=brief,
         brief_source="operator" if dynamic_brief is not None else None,
         replicas=replicas,
+        concurrency=concurrency,
     )
     run.save_discover(discovered)
 
@@ -121,6 +123,7 @@ async def execute_pipeline(
             repo_dir=repo_dir,
             out_root=run.dir / "adjudicate-runtime",
             replicas=replicas,
+            concurrency=concurrency,
         )
         run.save_outcome(outcome)
 
