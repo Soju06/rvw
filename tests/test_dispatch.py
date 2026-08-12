@@ -5,10 +5,13 @@ import inspect
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import pytest
+
 import rvw.dispatch as dispatch_module
 from rvw.adjudicate import adjudicate
 from rvw.discover import discover
 from rvw.dispatch import PlannedRun, dispatch
+from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.sample import sample_lane
@@ -151,6 +154,121 @@ async def test_max_in_flight_never_exceeds_concurrency(tmp_path: Path) -> None:
     await dispatch(runs, runtime, out_root=tmp_path, concurrency=2)
 
     assert runtime.max_in_flight == 2
+
+
+async def test_host_cap_bounds_in_flight_below_process_concurrency(tmp_path: Path) -> None:
+    lane = make_lane("host-bounded")
+    entered_two = asyncio.Event()
+    release = asyncio.Event()
+
+    class EventRuntime(FakeRuntime):
+        async def execute(
+            self,
+            *,
+            lane: Lane,
+            prompt: str,
+            run_dir: Path,
+            deadline_seconds: int,
+        ) -> RunResult:
+            del prompt, deadline_seconds
+            replica = int(run_dir.name.removeprefix("r"))
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            if self.in_flight == 2:
+                entered_two.set()
+            await release.wait()
+            self.in_flight -= 1
+            return RunResult(
+                lane_id=lane.id,
+                replica=replica,
+                status=RunStatus.VALID,
+                output=RuntimeLaneOutput(verdict="PASS"),
+                invalid_reason=None,
+                wall_seconds=0,
+                artifact_dir=run_dir,
+            )
+
+    runtime = EventRuntime()
+    runs = [planned(lane, replica) for replica in range(1, 7)]
+    task = asyncio.create_task(
+        dispatch(
+            runs,
+            runtime,
+            out_root=tmp_path / "runs",
+            concurrency=6,
+            host_gate=HostSlotGate(2, base_dir=tmp_path / "slots"),
+        )
+    )
+
+    await asyncio.wait_for(entered_two.wait(), timeout=1)
+    assert runtime.max_in_flight == 2
+    release.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert runtime.max_in_flight == 2
+
+
+async def test_dispatch_releases_host_slot_after_runtime_exception(tmp_path: Path) -> None:
+    lane = make_lane("runtime-error")
+    slot_root = tmp_path / "slots"
+
+    class ErrorRuntime(FakeRuntime):
+        async def execute(
+            self,
+            *,
+            lane: Lane,
+            prompt: str,
+            run_dir: Path,
+            deadline_seconds: int,
+        ) -> RunResult:
+            del lane, prompt, run_dir, deadline_seconds
+            raise RuntimeError("runtime failed")
+
+    with pytest.raises(RuntimeError, match="runtime failed"):
+        await dispatch(
+            [planned(lane)],
+            ErrorRuntime(),
+            out_root=tmp_path / "runs",
+            host_gate=HostSlotGate(1, base_dir=slot_root),
+        )
+
+    async with asyncio.timeout(1), HostSlotGate(1, base_dir=slot_root).slot():
+        pass
+
+
+async def test_dispatch_releases_host_slot_after_runtime_cancellation(tmp_path: Path) -> None:
+    lane = make_lane("runtime-cancel")
+    slot_root = tmp_path / "slots"
+    entered = asyncio.Event()
+
+    class BlockingRuntime(FakeRuntime):
+        async def execute(
+            self,
+            *,
+            lane: Lane,
+            prompt: str,
+            run_dir: Path,
+            deadline_seconds: int,
+        ) -> RunResult:
+            del lane, prompt, run_dir, deadline_seconds
+            entered.set()
+            await asyncio.Future()
+            raise AssertionError("unreachable")
+
+    task = asyncio.create_task(
+        dispatch(
+            [planned(lane)],
+            BlockingRuntime(),
+            out_root=tmp_path / "runs",
+            host_gate=HostSlotGate(1, base_dir=slot_root),
+        )
+    )
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    async with asyncio.timeout(1), HostSlotGate(1, base_dir=slot_root).slot():
+        pass
 
 
 async def test_one_invalid_replica_does_not_trigger_redispatch(tmp_path: Path) -> None:

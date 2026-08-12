@@ -22,6 +22,28 @@ from rvw.target import ResolvedTarget
 runner = CliRunner()
 
 
+def test_review_rejects_invalid_host_concurrency_before_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def fail_if_called(**_kwargs: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(cli_module, "_review_pipeline", fail_if_called)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["review", "--target", "HEAD"],
+        env={"RVW_HOST_CONCURRENCY": "abc"},
+    )
+
+    assert result.exit_code == cli_module.EXIT_USER_ERROR
+    assert "RVW_HOST_CONCURRENCY" in result.stderr
+    assert called is False
+
+
 def pr_target() -> ResolvedTarget:
     return ResolvedTarget(
         kind="pr",

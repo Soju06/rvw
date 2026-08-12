@@ -9,6 +9,7 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 - ADR-005 makes `unscoped-sweep` the structural coverage net. On a six-defect fixture, the scoped slop lane found 0/3 deep defects in both enum and free-ID conditions, while the sweep found 3/3. Its warning cap contains the higher expected false-positive rate.
 - ADR-006 measured the benefit of three replicas. Eight repeated runs showed an individual run recovered about 88% of the union; three replicas raised expected union recall to about 99%, while four added little. The 2026-07-30 owner decision keeps discovery replication as opt-in heavy verification and makes one discovery replica the ordinary default to avoid executor overload across concurrent rvw runs; the 2026-08-12 split decouples that count from adjudication.
 - Concurrency tests on a 22-core host found N=4, 8, and 16 completed in 49.1, 50.0, and 50.6 seconds. After concurrent rvw processes saturated the shared account pool on 2026-08-06, the default cap was reduced to 8 while retaining an explicit positive override, one wave, and heavy-first LPT ordering.
+- 2026-08-12: Process-local semaphores multiply across concurrent rvw processes. Six processes at the per-process default of 8 implied 48 theoretical runtime streams, following the 2026-08-06 account-pool saturation incident that produced selection retries and 503 degraded-mode lane failures. A host-global default cap of 12 now bounds aggregate runtime streams; the effective bound is the smaller of the process and host caps, and `RVW_HOST_CONCURRENCY=0` disables only the host gate.
 - 2026-08-12: Replacement-wave directory reuse reproduced destruction of initial INVALID evidence, motivating distinct `retry/` artifact directories.
 - 2026-08-12: PR #16 self-review finding `c1476eb7` confirmed that retry discarded the initial `invalid_reason`, motivating persisted ordered attempt coverage.
 - A real one-chunk PR #1119 run dispatched 13 lanes x 3 replicas and completed DISCOVER in about 410 seconds with all 39 runs valid. ADJUDICATE then took about 197 seconds.
@@ -21,7 +22,7 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 - The covered-rules section is prompt guidance. The strict schema prevents foreign IDs but cannot prove the model avoided semantically duplicate findings.
 - The default per-file and per-chunk limits are characters, not tokens or bytes.
 - Cross-chunk prompts list all kept paths and mark the current subset, but do not duplicate other chunks' source text.
-- Concurrency above 16 has not been measured; operators who override the default 8 are responsible for matching shared gateway capacity.
+- Per-process concurrency above 16 has not been measured; operators who override the defaults are responsible for matching shared gateway capacity.
 - PR fallback uses title and body; linked issues from ADR-010 are not resolved by the current target model.
 
 ## Failure modes

@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from rvw.hostslots import HostSlotGate, host_slot
 from rvw.lane import Lane
 from rvw.runtimes import RunResult, RunStatus, Runtime
 
@@ -53,6 +54,7 @@ async def dispatch_outcome(
     concurrency: int = DEFAULT_CONCURRENCY,
     deadline_seconds: int = 600,
     on_progress: Callable[[RunResult], None] | None = None,
+    host_gate: HostSlotGate | None = None,
 ) -> DispatchOutcome:
     """Dispatch runs and retain initial results shadowed by the retry wave."""
 
@@ -73,15 +75,16 @@ async def dispatch_outcome(
                 lane_dir /= "retry"
             run_dir = lane_dir / f"r{run.replica}"
             run_dir.mkdir(parents=True, exist_ok=True)
-            result = replace(
-                await runtime.execute(
-                    lane=run.lane,
-                    prompt=run.prompt,
-                    run_dir=run_dir,
-                    deadline_seconds=deadline_seconds,
-                ),
-                chunk=run.chunk,
-            )
+            async with host_slot(host_gate):
+                result = replace(
+                    await runtime.execute(
+                        lane=run.lane,
+                        prompt=run.prompt,
+                        run_dir=run_dir,
+                        deadline_seconds=deadline_seconds,
+                    ),
+                    chunk=run.chunk,
+                )
             if on_progress is not None:
                 on_progress(result)
             return result
@@ -129,6 +132,7 @@ async def dispatch(
     concurrency: int = DEFAULT_CONCURRENCY,
     deadline_seconds: int = 600,
     on_progress: Callable[[RunResult], None] | None = None,
+    host_gate: HostSlotGate | None = None,
 ) -> list[RunResult]:
     """Dispatch all planned runs and return only each identity's final result."""
 
@@ -139,6 +143,7 @@ async def dispatch(
         concurrency=concurrency,
         deadline_seconds=deadline_seconds,
         on_progress=on_progress,
+        host_gate=host_gate,
     )
     return outcome.results
 

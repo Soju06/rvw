@@ -10,6 +10,7 @@ import rvw.discover as discover_module
 from rvw.diffbudget import EmptyReviewDiffError
 from rvw.discover import RunCoverage, discover, resolve_lane_path
 from rvw.dispatch import DispatchOutcome, PlannedRun
+from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import merge
 from rvw.registry import Registry
@@ -185,6 +186,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
         concurrency: int = 8,
         deadline_seconds: int = 600,
         on_progress: Callable[[RunResult], None] | None = None,
+        host_gate: HostSlotGate | None = None,
     ) -> DispatchOutcome:
         nonlocal dispatch_calls
         dispatch_calls += 1
@@ -196,6 +198,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
             concurrency=concurrency,
             deadline_seconds=deadline_seconds,
             on_progress=on_progress,
+            host_gate=host_gate,
         )
 
     monkeypatch.setattr(discover_module, "dispatch_outcome", counting_dispatch)

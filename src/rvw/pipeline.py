@@ -9,6 +9,7 @@ from pathlib import Path
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import DiscoverResult, discover
+from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import MergeResult, merge
 from rvw.registry import Registry
@@ -79,6 +80,7 @@ async def execute_pipeline(
     out_root: Path,
     pause: bool,
     dynamic_brief: Path | None,
+    host_gate: HostSlotGate | None = None,
     on_pause: MessageSink | None = None,
     on_warning: MessageSink | None = None,
 ) -> PipelineArtifacts | None:
@@ -101,6 +103,7 @@ async def execute_pipeline(
         brief_source="operator" if dynamic_brief is not None else None,
         replicas=discover_replicas,
         concurrency=concurrency,
+        host_gate=host_gate,
     )
     run.save_discover(discovered)
 
@@ -129,6 +132,7 @@ async def execute_pipeline(
             out_root=run.dir / "adjudicate-runtime",
             replicas=adjudicate_replicas,
             concurrency=concurrency,
+            host_gate=host_gate,
         )
         run.save_outcome(outcome)
 

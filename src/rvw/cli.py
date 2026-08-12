@@ -53,6 +53,7 @@ from rvw.gate import (
     verify_pull_request,
     write_disposition_template,
 )
+from rvw.hostslots import HostSlotGate, host_slot_gate_from_env
 from rvw.hunks import hunk_sha256_by_id
 from rvw.lane import Lane, load_lane
 from rvw.pipeline import (
@@ -157,6 +158,14 @@ class _InheritanceSourceError(ValueError):
 def _write_json(payload: Any) -> None:
     json.dump(payload, sys.stdout)
     sys.stdout.write("\n")
+
+
+def _command_host_gate() -> HostSlotGate | None:
+    try:
+        return host_slot_gate_from_env()
+    except ValueError as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_USER_ERROR) from exc
 
 
 def _empty_review_failure(exc: EmptyReviewDiffError, *, json_output: bool) -> Never:
@@ -477,6 +486,7 @@ def review(
     publish: Annotated[bool, Option("--publish")] = False,
     dynamic_brief: Annotated[Path | None, Option("--dynamic-brief")] = None,
 ) -> None:
+    host_gate = _command_host_gate()
     try:
         asyncio.run(
             _review_pipeline(
@@ -491,6 +501,7 @@ def review(
                 pause=pause,
                 publish=publish,
                 dynamic_brief=dynamic_brief,
+                host_gate=host_gate,
             )
         )
     except EmptyReviewDiffError as exc:
@@ -522,6 +533,7 @@ async def _review_pipeline(
     pause: bool,
     publish: bool,
     dynamic_brief: Path | None,
+    host_gate: HostSlotGate | None = None,
 ) -> None:
     resolved_target: ResolvedTarget | None = None
     if publish:
@@ -540,6 +552,7 @@ async def _review_pipeline(
         pause=pause,
         dynamic_brief=dynamic_brief,
         resolved_target=resolved_target,
+        host_gate=host_gate,
     )
     if artifacts is None:
         return
@@ -591,6 +604,7 @@ async def _execute_pipeline(
     pause: bool,
     dynamic_brief: Path | None,
     resolved_target: ResolvedTarget | None = None,
+    host_gate: HostSlotGate | None = None,
 ) -> _PipelineArtifacts | None:
     """Execute and persist common review stages without publishing or rendering CLI output."""
 
@@ -613,6 +627,7 @@ async def _execute_pipeline(
         dynamic_brief=dynamic_brief,
         on_pause=lambda message: _console.print(message, markup=False),
         on_warning=lambda message: _error_console.print(message, markup=False),
+        host_gate=host_gate,
     )
 
 
@@ -899,6 +914,7 @@ def gate(
             markup=False,
         )
         raise typer.Exit(EXIT_USER_ERROR)
+    host_gate = _command_host_gate()
     asyncio.run(
         _gate_pipeline(
             target_spec=target,
@@ -913,6 +929,7 @@ def gate(
             out_root=out_root,
             execute=execute,
             json_output=json_output,
+            host_gate=host_gate,
         )
     )
 
@@ -931,6 +948,7 @@ async def _gate_pipeline(
     out_root: Path,
     execute: bool,
     json_output: bool,
+    host_gate: HostSlotGate | None = None,
 ) -> None:
     artifacts: _PipelineArtifacts
     plan: GatePlan
@@ -980,6 +998,7 @@ async def _gate_pipeline(
                     pause=False,
                     dynamic_brief=None,
                     resolved_target=resolved,
+                    host_gate=host_gate,
                 )
             if executed is None:
                 raise RuntimeError("gate review stopped before report generation")
@@ -1456,6 +1475,7 @@ def auto(
             "approve publishing is not implemented (ADR-009 Phase-5 opt-in placeholder)",
             markup=False,
         )
+    host_gate = _command_host_gate()
     try:
         asyncio.run(
             _auto_pipeline(
@@ -1467,6 +1487,7 @@ def auto(
                 json_output=json_output,
                 discover_replicas=replicas,
                 adjudicate_replicas=adjudicate_replicas,
+                host_gate=host_gate,
             )
         )
     except EmptyReviewDiffError as exc:
@@ -1483,6 +1504,7 @@ async def _auto_pipeline(
     json_output: bool,
     discover_replicas: int,
     adjudicate_replicas: int,
+    host_gate: HostSlotGate | None = None,
 ) -> None:
     policy = load_policy(policy_path)
     artifacts = await _execute_pipeline(
@@ -1495,6 +1517,7 @@ async def _auto_pipeline(
         out_root=DEFAULT_RUN_ROOT,
         pause=False,
         dynamic_brief=None,
+        host_gate=host_gate,
     )
     if artifacts is None:
         raise RuntimeError("auto pipeline stopped before report generation")
@@ -1708,6 +1731,7 @@ def stack_review(
 ) -> None:
     """Review every member and recheck earlier claims at descendant heads."""
 
+    host_gate = _command_host_gate()
     try:
         asyncio.run(
             _stack_review_pipeline(
@@ -1718,6 +1742,7 @@ def stack_review(
                 concurrency=concurrency,
                 out_root=out_root,
                 json_output=json_output,
+                host_gate=host_gate,
             )
         )
     except EmptyReviewDiffError as exc:
@@ -1742,6 +1767,7 @@ async def _stack_review_pipeline(
     concurrency: int,
     out_root: Path,
     json_output: bool,
+    host_gate: HostSlotGate | None = None,
 ) -> None:
     numbers = parse_pr_numbers(prs)
     members = resolve_stack(numbers, cwd=Path.cwd())
@@ -1780,6 +1806,7 @@ async def _stack_review_pipeline(
                 pause=False,
                 dynamic_brief=None,
                 resolved_target=target,
+                host_gate=host_gate,
             )
             if artifacts is None or artifacts.outcome is None:
                 raise RuntimeError(
@@ -1806,6 +1833,7 @@ async def _stack_review_pipeline(
                     out_root=handle.dir / "presence-runtime" / f"pr-{member.number}",
                     replicas=adjudicate_replicas,
                     concurrency=concurrency,
+                    host_gate=host_gate,
                 )
                 lineages = [
                     append_observation(
@@ -2097,6 +2125,7 @@ def sample(
     out_root: Annotated[Path, Option("--out")] = Path("/tmp/rvw-sample"),
     json_output: Annotated[bool, Option("--json")] = False,
 ) -> None:
+    host_gate = _command_host_gate()
     registry, lanes_root = _load_registry_root(registry_root)
     owner = next(
         (
@@ -2124,6 +2153,7 @@ def sample(
                 out_root=out_root,
                 replicas=replicas,
                 concurrency=concurrency,
+                host_gate=host_gate,
             )
         )
     except EmptyReviewDiffError as exc:

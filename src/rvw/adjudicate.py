@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from rvw.dispatch import DEFAULT_CONCURRENCY
+from rvw.hostslots import HostSlotGate, host_slot
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.schema import RuntimeAdjudication, RuntimeAdjudicationItem, Verdict
@@ -182,6 +183,7 @@ async def adjudicate(
     replicas: int = 3,
     deadline_seconds: int = 600,
     concurrency: int = DEFAULT_CONCURRENCY,
+    host_gate: HostSlotGate | None = None,
 ) -> AdjudicationOutcome:
     """Adjudicate all collapse groups, widening context once for uncertainty."""
 
@@ -205,14 +207,15 @@ async def adjudicate(
         async def execute_one(replica: int) -> RunResult[Any]:
             async with semaphore:
                 run_dir = out_root / label / f"r{replica}"
-                return await runtime.execute_raw(
-                    schema=schema,
-                    prompt=prompt,
-                    run_dir=run_dir,
-                    deadline_seconds=deadline,
-                    workdir=repo_dir,
-                    validate=RuntimeAdjudication.model_validate,
-                )
+                async with host_slot(host_gate):
+                    return await runtime.execute_raw(
+                        schema=schema,
+                        prompt=prompt,
+                        run_dir=run_dir,
+                        deadline_seconds=deadline,
+                        workdir=repo_dir,
+                        validate=RuntimeAdjudication.model_validate,
+                    )
 
         return list(
             await asyncio.gather(

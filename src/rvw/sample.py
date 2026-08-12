@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 
 from rvw.diffbudget import apply_diff_budget, require_reviewable_diff
 from rvw.dispatch import DEFAULT_CONCURRENCY
+from rvw.hostslots import HostSlotGate, host_slot
 from rvw.lane import Lane
 from rvw.prompts import build_chunk_context, build_lane_prompt
 from rvw.runtimes import RunResult, RunStatus, Runtime
@@ -122,6 +123,7 @@ async def sample_lane(
     replicas: int = 3,
     deadline_seconds: int = 600,
     concurrency: int = DEFAULT_CONCURRENCY,
+    host_gate: HostSlotGate | None = None,
 ) -> SampleReport:
     """Run enum and free-schema variants and separate rule gaps from site variance."""
 
@@ -168,16 +170,17 @@ async def sample_lane(
             variant_dir = out_root / variant
             if len(chunks) > 1:
                 variant_dir /= f"c{chunk}"
-            return replace(
-                await runtime.execute_raw(
-                    schema=schema,
-                    prompt=prompts[chunk],
-                    run_dir=variant_dir / f"r{replica}",
-                    deadline_seconds=deadline_seconds,
-                    validate=validator,
-                ),
-                chunk=chunk,
-            )
+            async with host_slot(host_gate):
+                return replace(
+                    await runtime.execute_raw(
+                        schema=schema,
+                        prompt=prompts[chunk],
+                        run_dir=variant_dir / f"r{replica}",
+                        deadline_seconds=deadline_seconds,
+                        validate=validator,
+                    ),
+                    chunk=chunk,
+                )
 
     tasks = [
         asyncio.create_task(execute_one(variant, replica, chunk.index))

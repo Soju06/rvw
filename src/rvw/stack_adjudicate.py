@@ -12,6 +12,7 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict
 
 from rvw.dispatch import DEFAULT_CONCURRENCY
+from rvw.hostslots import HostSlotGate, host_slot
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.stack import FindingLineage, Presence, PresenceObservation
 from rvw.target import ResolvedTarget
@@ -247,6 +248,7 @@ async def adjudicate_presence(
     replicas: int = 3,
     deadline_seconds: int = 600,
     concurrency: int = DEFAULT_CONCURRENCY,
+    host_gate: HostSlotGate | None = None,
 ) -> PresenceOutcome:
     """Recheck all earlier lineages once at a descendant PR head."""
 
@@ -305,17 +307,18 @@ async def adjudicate_presence(
         async def execute_one(replica: int) -> RunResult[Any]:
             async with semaphore:
                 run_dir = out_root / label / f"r{replica}"
-                return await runtime.execute_raw(
-                    schema=schema,
-                    prompt=prompt,
-                    run_dir=run_dir,
-                    deadline_seconds=deadline,
-                    workdir=repo_dir,
-                    validate=lambda raw: validate_presence_output(
-                        raw,
-                        lineage_ids=lineage_ids,
-                    ),
-                )
+                async with host_slot(host_gate):
+                    return await runtime.execute_raw(
+                        schema=schema,
+                        prompt=prompt,
+                        run_dir=run_dir,
+                        deadline_seconds=deadline,
+                        workdir=repo_dir,
+                        validate=lambda raw: validate_presence_output(
+                            raw,
+                            lineage_ids=lineage_ids,
+                        ),
+                    )
 
         return list(
             await asyncio.gather(
