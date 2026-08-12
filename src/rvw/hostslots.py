@@ -35,7 +35,8 @@ def _default_base_dir(environ: Mapping[str, str]) -> tuple[Path, Path | None]:
     xdg_runtime_dir = environ.get("XDG_RUNTIME_DIR")
     if xdg_runtime_dir:
         runtime_dir = Path(xdg_runtime_dir)
-        return runtime_dir / "rvw-slots", runtime_dir
+        if runtime_dir.is_absolute():
+            return runtime_dir / "rvw-slots", runtime_dir
     return Path("/tmp/rvw-slots"), None
 
 

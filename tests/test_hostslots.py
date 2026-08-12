@@ -84,6 +84,19 @@ def test_zero_host_concurrency_returns_disabled_gate(tmp_path: Path) -> None:
     assert not slot_root.exists()
 
 
+def test_relative_xdg_runtime_dir_falls_back_to_absolute_slot_root() -> None:
+    gate = host_slot_gate_from_env({"XDG_RUNTIME_DIR": "run"})
+    assert gate is not None
+    assert gate.base_dir == Path("/tmp/rvw-slots")
+    assert gate.base_dir.is_absolute()
+
+
+def test_absolute_xdg_runtime_dir_selects_runtime_slot_root(tmp_path: Path) -> None:
+    gate = host_slot_gate_from_env({"XDG_RUNTIME_DIR": str(tmp_path)})
+    assert gate is not None
+    assert gate.base_dir == tmp_path / "rvw-slots"
+
+
 async def test_two_gate_instances_contend_for_the_same_slot_root(tmp_path: Path) -> None:
     first = HostSlotGate(1, base_dir=tmp_path)
     second = HostSlotGate(1, base_dir=tmp_path)

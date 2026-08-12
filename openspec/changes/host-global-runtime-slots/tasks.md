@@ -14,8 +14,8 @@
 ## 2. Implementation
 
 - [x] 2.1 Add the flock slot-gate module (lazy 0700 creation, cap-sharded
-  directory, random-start non-blocking scan, blocking fallback, thread
-  offload, close-on-release).
+  directory, random-start non-blocking scan, cancellable jittered polling,
+  close-on-release).
 - [x] 2.2 Read and validate `RVW_HOST_CONCURRENCY` once per command start and
   thread the gate through dispatch, adjudication, sampling, and stack
   presence adjudication around each runtime execution.

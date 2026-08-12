@@ -4,7 +4,7 @@
 
 Runtime-executing commands MUST bound total in-flight runtime executions across all rvw processes on one host with a file-lock slot gate shared through a host-local slot directory, defaulting to 12 slots. The cap MUST be configurable via `RVW_HOST_CONCURRENCY`, where `0` disables the gate and a non-integer or negative value MUST be rejected before runtime execution. Slots MUST be released when the owning execution completes, fails, or its process terminates, and a slot root that is a symlink or foreign-owned MUST fail closed. On cancellation or another exceptional unwind, the entire spawned runtime process group MUST be terminated, with escalation to `SIGKILL` after a bounded grace period, and the wrapper MUST be reaped before its host slot can be released. A `SIGKILL` escalation MUST be recorded in the run log. On Linux, each spawned runtime wrapper MUST request a parent-death `SIGTERM`, applied exec-side by the command wrapper, so a runtime child does not outlive the rvw process whose slot the kernel released. Linux execution MUST fail closed with a clear runtime error when the required `setpriv` executable is unavailable. This child-lifetime coupling is not guaranteed on non-Linux platforms.
 
-The gate MUST require atomic `O_NOFOLLOW` support and fail at construction when it is unavailable. The ambient parent selected from `XDG_RUNTIME_DIR` MUST be validated without changing its permissions or rejecting group and other permission bits. Each rvw-owned slot directory (`rvw-slots` and `c{cap}`), including a pre-existing directory, MUST be set to mode 0700 and re-verified through its opened descriptor before use. Slot files MUST be opened relative to the validated slot-directory descriptor while that descriptor remains open for acquisition, and descriptor-based validation MUST fail closed if ownership or directory type is unsafe, or if an rvw-owned directory's normalized mode is unsafe.
+The gate MUST require atomic `O_NOFOLLOW` support and fail at construction when it is unavailable. The ambient parent selected from `XDG_RUNTIME_DIR` MUST be validated without changing its permissions or rejecting group and other permission bits, and a relative `XDG_RUNTIME_DIR` value MUST be ignored in favor of the absolute fallback slot root. Each rvw-owned slot directory (`rvw-slots` and `c{cap}`), including a pre-existing directory, MUST be set to mode 0700 and re-verified through its opened descriptor before use. Slot files MUST be opened relative to the validated slot-directory descriptor while that descriptor remains open for acquisition, and descriptor-based validation MUST fail closed if ownership or directory type is unsafe, or if an rvw-owned directory's normalized mode is unsafe.
 
 #### Scenario: Two processes share the host cap
 
@@ -43,6 +43,11 @@ The gate MUST require atomic `O_NOFOLLOW` support and fail at construction when 
 
 - **WHEN** an owner-matched `XDG_RUNTIME_DIR` has group or other permissions
 - **THEN** the gate validates it without changing those permissions and remains usable
+
+#### Scenario: Relative runtime directory is ignored
+
+- **WHEN** `XDG_RUNTIME_DIR` is set to a relative path
+- **THEN** the gate uses the absolute fallback slot root so all processes on the host share one pool
 
 #### Scenario: Existing rvw-owned slot directory has permissive permissions
 
