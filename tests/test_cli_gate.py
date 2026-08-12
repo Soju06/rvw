@@ -340,15 +340,18 @@ def test_gate_auto_inherit_skips_unreadable_candidate(
 def test_gate_auto_inherit_reports_scan_failure_distinctly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Exercises the REAL iterdir failure path: no stubbing of discovery."""
+
     out_root = tmp_path / "runs"
     current = prepared_artifacts(out_root, actionable=True)
+    original_iterdir = Path.iterdir
 
-    def broken_scan(
-        *, current_target: object, out_root: object, exclude_run_id: object
-    ) -> cli_module._InheritanceScan:
-        return cli_module._InheritanceScan(run_id=None, scan_error="OSError: boom")
+    def failing_iterdir(self: Path) -> object:
+        if self == out_root:
+            raise PermissionError(13, "Permission denied")
+        return original_iterdir(self)
 
-    monkeypatch.setattr(cli_module, "_discover_inherited_run_id", broken_scan)
+    monkeypatch.setattr(Path, "iterdir", failing_iterdir)
     patch_target_dependencies(monkeypatch, current)
 
     result = runner.invoke(
@@ -356,8 +359,68 @@ def test_gate_auto_inherit_reports_scan_failure_distinctly(
         ["gate", "--target", "42", "--out", str(out_root)],
     )
 
-    assert "auto-inherit: run-root scan failed (OSError: boom)" in result.stdout
+    assert "auto-inherit: run-root scan failed (PermissionError" in result.stdout
     assert "no qualifying prior run found" not in result.stdout
+
+
+def test_gate_auto_inherit_excludes_current_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The current run itself carries a completed verdict with findings; if
+    exclusion regressed, discovery would select it. The only correct outcome
+    is the no-qualifying-prior-run path."""
+
+    out_root = tmp_path / "runs"
+    current = prepared_artifacts(out_root, actionable=True)
+    group = current.merged.groups[0]
+    save_gate_verdict(
+        current.run.dir,
+        GateVerdict(
+            run_id=current.run.run_id,
+            repo="owner/repo",
+            pr_number=42,
+            anchor=GateAnchor(base_sha="c" * 40, head_sha="d" * 40),
+            counts={"CONFIRMED": 1, "REJECTED": 0, "UNCERTAIN": 0},
+            coverage=[],
+            findings=[
+                GateFinding(
+                    finding_id=group.key,
+                    rule_id=group.rule_id,
+                    file=group.file,
+                    line=group.line,
+                    severity=group.severity,
+                    verdict=Verdict.CONFIRMED,
+                    disposition=DispositionDecision.ACCEPTED,
+                    reason="accepted in the same run",
+                    hunk_sha256=HUNK_SHA256,
+                    body_sha256=BODY_SHA256,
+                )
+            ],
+            verdict="PASS",
+            kind="completed",
+        ),
+    )
+    patch_target_dependencies(monkeypatch, current)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["gate", "--target", "42", "--out", str(out_root)],
+    )
+
+    assert "auto-inherit: no qualifying prior run found" in result.stdout
+    assert f"auto-inherit: selected {current.run.run_id}" not in result.stdout
+
+
+def test_parse_pr_run_id_rejects_trailing_newline() -> None:
+    """`$` matches before a trailing newline; fullmatch semantics must not."""
+
+    from rvw.store import parse_pr_run_id
+
+    canonical = "rvw-20260812-100000-pr-42"
+    assert parse_pr_run_id(canonical) is not None
+    assert parse_pr_run_id(canonical + "\n") is None
+    assert parse_pr_run_id("rvw-20260812-100000-123456-pr-42") is not None
+    assert parse_pr_run_id("rvw-20260812-100000-123456-pr-42\n") is None
 
 
 def test_gate_no_inherit_suppresses_auto_discovery(

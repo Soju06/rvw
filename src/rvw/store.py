@@ -47,7 +47,7 @@ def parse_pr_run_id(run_id: str) -> tuple[datetime, int] | None:
     cannot reach discovery output or provenance sinks.
     """
 
-    match = _PR_RUN_ID.match(run_id)
+    match = _PR_RUN_ID.fullmatch(run_id)
     if match is None:
         return None
     try:
