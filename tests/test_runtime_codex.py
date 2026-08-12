@@ -69,7 +69,7 @@ asyncio.run(main())
 def _linux_process_is_running(pid: int) -> bool:
     try:
         stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
     return stat_text.rsplit(") ", maxsplit=1)[1][0] != "Z"
 
