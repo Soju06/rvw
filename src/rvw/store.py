@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 _RUN_DIRECTORY_COLLISION_RETRIES = 3
+_RUN_TIMESTAMP_REGENERATION_SPINS = 1000
 
 
 class RunNotFound(FileNotFoundError):
@@ -255,18 +256,24 @@ class RunStore:
         else:
             kind = "wt"
             short = "dirty"
-        for attempt in range(_RUN_DIRECTORY_COLLISION_RETRIES + 1):
-            timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+        for _attempt in range(_RUN_DIRECTORY_COLLISION_RETRIES):
             run_id = f"rvw-{timestamp}-{kind}-{short}"
             run_dir = self.root / run_id
             try:
                 run_dir.mkdir(parents=True, exist_ok=False)
             except FileExistsError:
-                if attempt == _RUN_DIRECTORY_COLLISION_RETRIES:
-                    raise
-            else:
-                return RunHandle(run_id=run_id, dir=run_dir)
-        raise AssertionError("run directory creation exhausted without raising")
+                previous_timestamp = timestamp
+                for _ in range(_RUN_TIMESTAMP_REGENERATION_SPINS):
+                    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+                    if timestamp != previous_timestamp:
+                        break
+                continue
+            return RunHandle(run_id=run_id, dir=run_dir)
+        run_id = f"rvw-{timestamp}-{kind}-{short}"
+        run_dir = self.root / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        return RunHandle(run_id=run_id, dir=run_dir)
 
     def open(self, run_id: str) -> RunHandle:
         if not _SAFE_RUN_ID.fullmatch(run_id) or run_id in {".", ".."}:
