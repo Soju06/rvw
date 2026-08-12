@@ -4,18 +4,21 @@ import inspect
 import runpy
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import cast
 
 import pytest
 
+import rvw.adjudicate as adjudicate_module
 from rvw.adjudicate import (
     AdjudicationOutcome,
     adjudicate,
     adjudication_schema,
     build_adjudication_prompt,
 )
+from rvw.hostslots import HostSlotGate
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.runtimes import RunResult, RunStatus
 from rvw.runtimes.codex import CodexRuntime
@@ -158,6 +161,36 @@ async def test_explicit_single_replica_uses_single_vote(tmp_path: Path) -> None:
     assert outcome.verdicts[group.key] is Verdict.REJECTED
     assert outcome.replica_votes[group.key] == [Verdict.REJECTED]
     assert len(runtime.calls) == 1
+
+
+async def test_adjudicate_propagates_injected_host_gate_to_every_runtime_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    group = make_group("gated")
+    response = RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)])
+    runtime = FakeRuntime([[response, response]])
+    gate = HostSlotGate(1, base_dir=tmp_path / "host-slots")
+    seen: list[HostSlotGate | None] = []
+
+    @asynccontextmanager
+    async def recording_host_slot(received: HostSlotGate | None) -> AsyncIterator[None]:
+        seen.append(received)
+        yield
+
+    monkeypatch.setattr(adjudicate_module, "host_slot", recording_host_slot)
+
+    await adjudicate(
+        make_merged(group),
+        target=make_target(),
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "out",
+        replicas=2,
+        host_gate=gate,
+    )
+
+    assert len(runtime.calls) == 2
+    assert seen == [gate, gate]
 
 
 async def test_majority_confirmed_and_rejected(tmp_path: Path) -> None:

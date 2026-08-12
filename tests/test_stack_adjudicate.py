@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 
+import rvw.stack_adjudicate as stack_adjudicate_module
+from rvw.hostslots import HostSlotGate
 from rvw.runtimes import RunResult, RunStatus
 from rvw.schema import Severity, Verdict
 from rvw.stack import (
@@ -211,6 +214,37 @@ async def run_presence(
         deadline_seconds=deadline_seconds,
     )
     return outcome, fake
+
+
+async def test_adjudicate_presence_propagates_injected_host_gate_to_every_runtime_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    response = RuntimePresence(items=[runtime_item("L1", Presence.PRESENT)])
+    runtime = FakeRuntime([response, response])
+    gate = HostSlotGate(1, base_dir=tmp_path / "host-slots")
+    seen: list[HostSlotGate | None] = []
+
+    @asynccontextmanager
+    async def recording_host_slot(received: HostSlotGate | None) -> AsyncIterator[None]:
+        seen.append(received)
+        yield
+
+    monkeypatch.setattr(stack_adjudicate_module, "host_slot", recording_host_slot)
+
+    await adjudicate_presence(
+        [lineage()],
+        pr_number=2,
+        member_order=[1, 2],
+        target=target(),
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "presence",
+        replicas=2,
+        host_gate=gate,
+    )
+
+    assert len(runtime.calls) == 2
+    assert seen == [gate, gate]
 
 
 def test_present_present_absent_is_fixed_in_third_pr() -> None:

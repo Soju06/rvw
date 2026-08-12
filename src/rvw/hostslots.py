@@ -39,7 +39,7 @@ def _default_base_dir(environ: Mapping[str, str]) -> tuple[Path, Path | None]:
     return Path("/tmp/rvw-slots"), None
 
 
-def _checked_directory(path: Path, *, create: bool, nofollow: int) -> int:
+def _checked_directory(path: Path, *, create: bool, mutate: bool, nofollow: int) -> int:
     try:
         info = path.lstat()
     except FileNotFoundError:
@@ -72,15 +72,16 @@ def _checked_directory(path: Path, *, create: bool, nofollow: int) -> int:
         opened = os.fstat(descriptor)
         if opened.st_uid != os.getuid() or not stat.S_ISDIR(opened.st_mode):
             raise RuntimeError(f"host slot directory changed during validation: {path}")
-        try:
-            os.fchmod(descriptor, 0o700)
-        except OSError as exc:
-            raise RuntimeError(f"could not enforce mode 0700 on {path}: {exc}") from exc
+        if mutate:
+            try:
+                os.fchmod(descriptor, 0o700)
+            except OSError as exc:
+                raise RuntimeError(f"could not enforce mode 0700 on {path}: {exc}") from exc
         verified = os.fstat(descriptor)
         if (
             verified.st_uid != os.getuid()
             or not stat.S_ISDIR(verified.st_mode)
-            or stat.S_IMODE(verified.st_mode) != 0o700
+            or (mutate and stat.S_IMODE(verified.st_mode) != 0o700)
         ):
             raise RuntimeError(f"host slot directory failed descriptor verification: {path}")
     except BaseException:
@@ -119,16 +120,19 @@ class HostSlotGate:
                 parent_descriptor = _checked_directory(
                     self._checked_parent,
                     create=False,
+                    mutate=False,
                     nofollow=self._nofollow,
                 )
             base_descriptor = _checked_directory(
                 self.base_dir,
                 create=True,
+                mutate=True,
                 nofollow=self._nofollow,
             )
             return _checked_directory(
                 self.slot_dir,
                 create=True,
+                mutate=True,
                 nofollow=self._nofollow,
             )
         finally:
@@ -158,7 +162,7 @@ class HostSlotGate:
             raise
         return descriptor
 
-    def _acquire_blocking(self) -> int:
+    def _try_acquire(self) -> int | None:
         directory_descriptor = self._prepare()
         try:
             start = random.randrange(self.cap)
@@ -176,29 +180,20 @@ class HostSlotGate:
                     raise
                 else:
                     return descriptor
-
-            descriptor = self._open_slot(directory_descriptor, start)
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
-            except BaseException:
-                os.close(descriptor)
-                raise
-            return descriptor
+            return None
         finally:
             os.close(directory_descriptor)
 
     async def _acquire(self) -> int:
-        worker = asyncio.create_task(asyncio.to_thread(self._acquire_blocking))
-        try:
-            return await asyncio.shield(worker)
-        except asyncio.CancelledError:
-
-            def close_when_acquired(completed: asyncio.Task[int]) -> None:
-                if not completed.cancelled() and completed.exception() is None:
-                    os.close(completed.result())
-
-            worker.add_done_callback(close_when_acquired)
-            raise
+        delay = 0.05
+        while True:
+            descriptor = self._try_acquire()
+            if descriptor is not None:
+                return descriptor
+            lower = min(delay * 0.9, 0.25)
+            upper = min(delay * 1.1, 0.25)
+            await asyncio.sleep(random.uniform(lower, upper))
+            delay = min(delay * 1.5, 0.25)
 
     @asynccontextmanager
     async def slot(self) -> AsyncIterator[None]:

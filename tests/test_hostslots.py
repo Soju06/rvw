@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import rvw.hostslots as hostslots_module
 from rvw.hostslots import HostSlotGate, host_slot_gate_from_env, parse_host_concurrency
 
 _HOLDER_SCRIPT = """
@@ -135,6 +136,33 @@ async def test_slot_releases_on_success_exception_and_cancellation(tmp_path: Pat
         pass
 
 
+async def test_contended_cancellation_uses_no_blocking_executor_thread(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    holder = HostSlotGate(1, base_dir=tmp_path)
+    waiter = HostSlotGate(1, base_dir=tmp_path)
+    to_thread_calls = 0
+
+    async def recording_to_thread(*args: object, **kwargs: object) -> object:
+        nonlocal to_thread_calls
+        del args, kwargs
+        to_thread_calls += 1
+        await asyncio.sleep(0)
+        raise AssertionError("host-slot acquisition must not use asyncio.to_thread")
+
+    async with holder.slot():
+        monkeypatch.setattr(hostslots_module.asyncio, "to_thread", recording_to_thread)
+        task = asyncio.create_task(waiter._acquire())
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.1)
+        assert to_thread_calls == 0
+
+    async with asyncio.timeout(1), HostSlotGate(1, base_dir=tmp_path).slot():
+        pass
+
+
 async def test_symlinked_slot_root_fails_closed(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()
@@ -189,6 +217,20 @@ async def test_preexisting_slot_directories_are_enforced_to_mode_0700(tmp_path: 
     async with HostSlotGate(1, base_dir=slot_root).slot():
         assert slot_root.stat().st_mode & 0o777 == 0o700
         assert slot_dir.stat().st_mode & 0o777 == 0o700
+
+
+async def test_xdg_runtime_parent_permissions_are_not_changed(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(mode=0o755)
+    runtime_dir.chmod(0o755)
+
+    gate = HostSlotGate(1, environ={"XDG_RUNTIME_DIR": str(runtime_dir)})
+    async with gate.slot():
+        assert runtime_dir.stat().st_mode & 0o777 == 0o755
+        assert (runtime_dir / "rvw-slots").stat().st_mode & 0o777 == 0o700
+        assert (runtime_dir / "rvw-slots" / "c1").stat().st_mode & 0o777 == 0o700
+
+    assert runtime_dir.stat().st_mode & 0o777 == 0o755
 
 
 async def test_slot_file_is_opened_relative_to_validated_directory(

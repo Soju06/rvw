@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
 
+import rvw.sample as sample_module
 from rvw.diffbudget import EmptyReviewDiffError
+from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.runtimes import RunResult, RunStatus
 from rvw.sample import SampleSiteVariance, free_variant_schema, sample_lane, validate_output_free
@@ -132,6 +135,33 @@ def test_free_variant_schema_relaxes_only_rule_id_enum() -> None:
     assert rule_schema == {"type": "string"}
     assert_strict_required(schema)
     validate_output_free(output(("invented/rule", "a.py", 1)).model_dump())
+
+
+async def test_sample_lane_propagates_injected_host_gate_to_every_runtime_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime = FakeRuntime([output()], [output()])
+    gate = HostSlotGate(1, base_dir=tmp_path / "host-slots")
+    seen: list[HostSlotGate | None] = []
+
+    @asynccontextmanager
+    async def recording_host_slot(received: HostSlotGate | None) -> AsyncIterator[None]:
+        seen.append(received)
+        yield
+
+    monkeypatch.setattr(sample_module, "host_slot", recording_host_slot)
+
+    await sample_lane(
+        lane_fixture(),
+        fixture_diff=fixture_diff(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        replicas=1,
+        host_gate=gate,
+    )
+
+    assert len(runtime.calls) == 2
+    assert seen == [gate, gate]
 
 
 @pytest.mark.parametrize("replicas", [1, 3])

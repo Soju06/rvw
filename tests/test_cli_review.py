@@ -12,6 +12,7 @@ import rvw.pipeline as pipeline_module
 import rvw.publish as publish_module
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import DiscoverResult
+from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import MergeResult
 from rvw.runtimes import RunResult, RunStatus, Runtime
@@ -204,6 +205,28 @@ def test_review_split_replica_defaults_and_explicit_overrides(
     assert calls[0]["concurrency"] == expected_concurrency
 
 
+def test_review_cli_passes_command_host_gate_to_execute_pipeline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, registry_root: Path
+) -> None:
+    gate = HostSlotGate(1, base_dir=tmp_path / "host-slots")
+    calls: list[dict[str, object]] = []
+
+    async def fake_execute_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_command_host_gate", lambda: gate)
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _spec: pr_target())
+    monkeypatch.setattr(cli_module, "execute_pipeline", fake_execute_pipeline)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["review", "--target", "HEAD", "--registry", str(registry_root)],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert calls[0]["host_gate"] is gate
+
+
 def test_review_rejects_zero_concurrency_before_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -232,8 +255,10 @@ async def test_shared_pipeline_propagates_split_replicas_and_concurrency(
     execute_pipeline cannot forward one count to both stages."""
 
     stage_calls: list[tuple[str, int, int]] = []
+    gate = HostSlotGate(1, base_dir=tmp_path / "host-slots")
 
     async def fake_discover(**kwargs: object) -> DiscoverResult:
+        assert kwargs["host_gate"] is gate
         replicas = kwargs["replicas"]
         concurrency = kwargs["concurrency"]
         assert isinstance(replicas, int)
@@ -243,6 +268,7 @@ async def test_shared_pipeline_propagates_split_replicas_and_concurrency(
 
     async def fake_adjudicate(merged: MergeResult, **kwargs: object) -> AdjudicationOutcome:
         del merged
+        assert kwargs["host_gate"] is gate
         replicas = kwargs["replicas"]
         concurrency = kwargs["concurrency"]
         assert isinstance(replicas, int)
@@ -276,6 +302,7 @@ async def test_shared_pipeline_propagates_split_replicas_and_concurrency(
         out_root=tmp_path / "runs",
         pause=False,
         dynamic_brief=None,
+        host_gate=gate,
     )
 
     assert stage_calls == [("discover", 2, 3), ("adjudicate", 5, 3)]

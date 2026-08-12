@@ -43,3 +43,21 @@
   host-slot directory/file handling.
 - [x] 4.6 Run every required bare verification gate and inspect the final diff
   for scope drift, including `uv.lock` and the external runtime registry.
+
+## 5. Adversarial Review Remediation Round 2
+
+- [x] 5.1 Replace thread-unsafe Linux `preexec_fn` parent-death setup with the
+  exec-side `setpriv --pdeathsig SIGTERM` wrapper, fail closed when unavailable,
+  and adapt the parent-SIGKILL regression.
+- [x] 5.2 Add a failing cancellation regression and ensure a spawned runtime
+  child is terminated and reaped before exceptional unwind releases its slot.
+- [x] 5.3 Add permission regressions and split ambient parent validation from
+  0700 normalization of rvw-owned slot directories.
+- [x] 5.4 Add contended-cancellation regressions and replace blocking flock
+  worker threads with cancellable nonblocking polling and capped jittered
+  backoff.
+- [x] 5.5 Add host-gate propagation regressions for adjudication, sampling,
+  stack presence adjudication, and CLI-to-pipeline wiring.
+- [x] 5.6 Synchronize main specifications and context, run all required bare
+  verification gates plus change validation, and inspect the final diff for
+  scope drift, including `uv.lock` and the external runtime registry.

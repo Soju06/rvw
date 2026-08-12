@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -264,6 +265,61 @@ async def test_execute_raw_uses_custom_schema_validator_and_workdir(
     assert result.output.answer == "yes"
     assert json.loads((run_dir / "schema.json").read_text(encoding="utf-8")) == schema
     assert calls[0][1] == workdir
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux setpriv requirement")
+async def test_spawn_fails_closed_when_setpriv_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(codex_module, "_SETPRIV", None)
+
+    with pytest.raises(RuntimeError, match=r"setpriv.*required"):
+        await codex_module._spawn(["true"], "", tmp_path / "spawn.log")
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux process inspection")
+async def test_spawn_cancellation_terminates_and_reaps_runtime_child(tmp_path: Path) -> None:
+    child_pid_path = tmp_path / "cancel-child.pid"
+    task = asyncio.create_task(
+        codex_module._spawn(
+            [
+                "timeout",
+                "--foreground",
+                "--signal=TERM",
+                "60s",
+                sys.executable,
+                "-c",
+                _SLEEP_CHILD_SCRIPT,
+                str(child_pid_path),
+            ],
+            "",
+            tmp_path / "cancel-child.log",
+        )
+    )
+    child_pids: tuple[int, int] | None = None
+    try:
+        async with asyncio.timeout(3):
+            while not child_pid_path.exists():
+                await asyncio.sleep(0.01)
+        wrapper_pid, runtime_pid = child_pid_path.read_text(encoding="utf-8").split()
+        child_pids = (int(wrapper_pid), int(runtime_pid))
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        async with asyncio.timeout(3):
+            while any(_linux_process_is_running(pid) for pid in child_pids):
+                await asyncio.sleep(0.01)
+        assert not any(_linux_process_is_running(pid) for pid in child_pids)
+    finally:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        for child_pid in child_pids or ():
+            if _linux_process_is_running(child_pid):
+                os.kill(child_pid, signal.SIGKILL)
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux parent-death signal")

@@ -12,8 +12,8 @@ instead of burning retry sleeps.
 - Goal: bound total in-flight runtime executions across all rvw processes on
   one host, cooperatively, with zero new dependencies.
 - Goal: crash-safe release — a killed process must free its slots.
-- Non-goal: cross-host coordination, gateway-side queueing, fairness/aging
-  between processes (kernel flock wakeup order is acceptable).
+- Non-goal: cross-host coordination, gateway-side queueing, or fairness/aging
+  between processes.
 - Non-goal: bounding non-runtime work (git, gh, parsing).
 - Follow-up: thresholded host-slot wait/contention events are deferred; this
   change does not add wait observability.
@@ -26,26 +26,36 @@ The gate is a directory of `_RVW_HOST_SLOT_COUNT` lock files (`slot-00` ..)
 under `$XDG_RUNTIME_DIR/rvw-slots/` when set, else `/tmp/rvw-slots/`,
 sharded by cap value (`.../c{cap}/`) so mixed-cap processes never deadlock on
 mismatched slot counts. Acquisition tries each slot file with
-`flock(LOCK_EX | LOCK_NB)` in random start order; if none is free it blocks
-on one with plain `LOCK_EX`. `flock` locks are released by the kernel when
+`flock(LOCK_EX | LOCK_NB)` in random start order. If none is free, the async
+caller sleeps with modest jitter and capped backoff before rescanning every
+slot. `flock` locks are released by the kernel when
 the descriptor closes, including on SIGKILL, so no stale-slot cleanup or pid
 bookkeeping is needed. Directory and files are created lazily with 0700 and
 `O_NOFOLLOW`; `/tmp/rvw-slots` pre-existing as a symlink or wrong-owner
 directory fails closed with a clear error.
 
-Existing owner-matched slot directories are normalized to 0700 and verified
-through their opened descriptors. A validated slot-directory descriptor stays
-open throughout acquisition, and candidate files are opened relative to it so
-the path is not re-resolved after validation. `O_NOFOLLOW` is mandatory rather
-than optional: platforms without it fail gate construction.
+The ambient `$XDG_RUNTIME_DIR` is validated by descriptor without changing its
+mode or rejecting group and other permission bits because rvw does not own its
+permission contract. Existing owner-matched rvw-owned directories
+(`rvw-slots` and `c{cap}`) are normalized to 0700 and verified through their
+opened descriptors. A validated slot-directory descriptor stays open
+throughout each nonblocking scan, and candidate files are opened relative to
+it so the path is not re-resolved after validation. `O_NOFOLLOW` is mandatory
+rather than optional: platforms without it fail gate construction.
 
-On Linux, runtime wrapper processes request `PR_SET_PDEATHSIG(SIGTERM)` before
-exec and compare their observed parent with the PID captured before fork. If
-the parent changed during the fork/prctl window, the wrapper terminates itself.
-GNU timeout then forwards an ordinary parent-death `SIGTERM` to codex and
-exits. This closes the gap in which SIGKILL releases rvw's flock while its
-runtime child continues using a gateway stream. The coupling is Linux-only;
-other platforms retain normal subprocess lifetime semantics.
+On Linux, the spawned command is prefixed with
+`setpriv --pdeathsig SIGTERM`, applying `PR_SET_PDEATHSIG(SIGTERM)` exec-side
+without Python `preexec_fn` work in the multithreaded process. GNU timeout then
+receives the parent-death `SIGTERM`, forwards it to codex, and exits. Linux
+execution fails closed with a clear error if `setpriv` is unavailable. This
+closes the ordinary gap in which SIGKILL releases rvw's flock while its runtime
+child continues using a gateway stream. Unlike the former pre-exec parent-PID
+recheck, an rvw death in the tiny window before `setpriv` runs can leave the
+child orphaned; that race is accepted to eliminate thread-unsafe post-fork
+Python execution. The former generic subprocess-error concern for swallowed
+`preexec_fn` errno is also eliminated because there is no `preexec_fn` path.
+The coupling is Linux-only; other platforms retain normal subprocess lifetime
+semantics.
 
 ### Acquisition wraps the runtime execution, inside the local semaphore
 
@@ -53,9 +63,17 @@ Each `execute_one` acquires the process-local semaphore first, then the
 host slot immediately around `runtime.execute*` (the expensive stream), and
 releases both on completion or exception (`finally`). Ordering local-first
 keeps a process's queued work from hoarding host slots while waiting on its
-own semaphore. Blocking flock calls run in `asyncio.to_thread`, keeping the
-event loop free; on cancellation the thread's descriptor is closed, which
-releases the lock.
+own semaphore. Contention uses short nonblocking scans on the event loop
+followed by async sleeps with 0.05-second initial delay, modest jitter, and
+backoff capped at 0.25 seconds. Cancellation therefore occurs with no
+descriptor held and no blocking executor thread stranded. Polling does not
+provide kernel FIFO fairness, which is acceptable for caps of at most dozens
+and sub-second scans.
+
+Once a runtime subprocess starts, cancellation or any other exceptional unwind
+terminates and reaps it before the host-slot context can exit. Cleanup waits up
+to five seconds after `terminate()`, then escalates to `kill()` and waits again.
+This preserves the host cap even while the rvw parent remains alive.
 
 ### One env knob, min-of-gates semantics
 
@@ -78,10 +96,9 @@ per host.
   configured with different caps therefore do not share one host bound, which
   prevents cross-cap deadlock but means changing `RVW_HOST_CONCURRENCY`
   mid-fleet temporarily creates disjoint pools until configurations converge.
-- After a non-blocking scan finds every slot busy, a waiter blocks on one
-  uniformly random slot instead of rescanning. This favors kernel FIFO wakeup
-  on one inode over busy rescanning; the limitation is bounded by the cap
-  because waiters distribute their choices across all slot files.
+- Polling sacrifices kernel FIFO fairness and can add up to the capped polling
+  interval before a freed slot is noticed. At the intended cap sizes, bounded
+  cancellation and rescanning every slot outweigh that trade-off.
 - A process holding a slot through a hung stream delays others; the runtime
   deadline (`timeout --kill-after`) already bounds this.
 - Tests must not depend on wall-clock timing; regressions use small caps and
