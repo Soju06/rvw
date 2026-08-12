@@ -27,6 +27,38 @@ _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 _RUN_DIRECTORY_COLLISION_RETRIES = 3
 _RUN_TIMESTAMP_REGENERATION_SPINS = 1000
 
+# Canonical run-ID grammar. `create()` below is the generator; parsing helpers
+# stay next to it so discovery-side consumers cannot drift from the generated
+# shape (they previously re-declared the regex and strptime format).
+# Generated timestamps carry microseconds (concurrent-run safety, #16); the
+# parser also accepts the pre-#16 second-resolution shape so runs recorded
+# before an upgrade remain discoverable for inheritance.
+_RUN_ID_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S-%f"
+_PR_RUN_ID = re.compile(
+    r"^rvw-(?P<timestamp>\d{8}-\d{6})(?:-(?P<micro>\d{6}))?-pr-(?P<pr_number>\d+)$"
+)
+
+
+def parse_pr_run_id(run_id: str) -> tuple[datetime, int] | None:
+    """Parse a canonical PR run ID into (timestamp, pr_number), or None.
+
+    Full-match only: arbitrary suffixes after the canonical shape do not
+    qualify, so hostile directory names planted in a writable artifact root
+    cannot reach discovery output or provenance sinks.
+    """
+
+    match = _PR_RUN_ID.match(run_id)
+    if match is None:
+        return None
+    try:
+        timestamp = datetime.strptime(match.group("timestamp"), "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+    micro = match.group("micro")
+    if micro is not None:
+        timestamp = timestamp.replace(microsecond=int(micro))
+    return timestamp, int(match.group("pr_number"))
+
 
 class RunNotFound(FileNotFoundError):
     """The requested run directory does not exist."""
@@ -256,7 +288,7 @@ class RunStore:
         else:
             kind = "wt"
             short = "dirty"
-        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+        timestamp = datetime.now(UTC).strftime(_RUN_ID_TIMESTAMP_FORMAT)
         for _attempt in range(_RUN_DIRECTORY_COLLISION_RETRIES):
             run_id = f"rvw-{timestamp}-{kind}-{short}"
             run_dir = self.root / run_id
@@ -265,7 +297,7 @@ class RunStore:
             except FileExistsError:
                 previous_timestamp = timestamp
                 for _ in range(_RUN_TIMESTAMP_REGENERATION_SPINS):
-                    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+                    timestamp = datetime.now(UTC).strftime(_RUN_ID_TIMESTAMP_FORMAT)
                     if timestamp != previous_timestamp:
                         break
                 continue

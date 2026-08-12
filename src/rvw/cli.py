@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, Never, cast
@@ -88,7 +87,14 @@ from rvw.stack import (
 from rvw.stack_adjudicate import adjudicate_presence
 from rvw.stack_report import render_stack_report
 from rvw.stack_store import StackRunNotFound, StackStageMissing, StackStore
-from rvw.store import InvalidRunId, RunHandle, RunNotFound, RunStore, StageMissing
+from rvw.store import (
+    InvalidRunId,
+    RunHandle,
+    RunNotFound,
+    RunStore,
+    StageMissing,
+    parse_pr_run_id,
+)
 from rvw.target import ResolvedTarget, TargetResolutionError, resolve_target
 
 EXIT_OK = 0
@@ -100,7 +106,6 @@ DEFAULT_AUTO_POLICY = Path("~/.hermes/review/policies/auto.yaml").expanduser()
 _PLAN_REPLICAS = 1
 _PLAN_ADJUDICATE_REPLICAS = 3
 DEFAULT_RUN_ROOT = Path("/tmp/rvw")
-_RUN_ID_TIMESTAMP = re.compile(r"^rvw-(\d{8}-\d{6})-")
 
 _EXAMPLES: dict[str, list[str]] = {
     "review": [
@@ -717,30 +722,39 @@ def _load_inherited_dispositions(
     return verdict
 
 
+@dataclass(frozen=True)
+class _InheritanceScan:
+    """Outcome of auto-inherit discovery over one artifact root."""
+
+    run_id: str | None
+    scan_error: str | None = None
+    skipped: tuple[str, ...] = ()
+
+
 def _discover_inherited_run_id(
     *,
     current_target: ResolvedTarget,
     out_root: Path,
     exclude_run_id: str,
-) -> str | None:
+) -> _InheritanceScan:
     candidates: list[tuple[datetime, str]] = []
     try:
         entries = list(out_root.iterdir())
-    except OSError:
-        return None
+    except OSError as exc:
+        return _InheritanceScan(run_id=None, scan_error=f"{type(exc).__name__}: {exc}")
     for entry in entries:
         run_id = entry.name
         if run_id == exclude_run_id:
             continue
-        match = _RUN_ID_TIMESTAMP.match(run_id)
-        if match is None:
+        parsed = parse_pr_run_id(run_id)
+        if parsed is None:
             continue
-        try:
-            timestamp = datetime.strptime(match.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
-        except ValueError:
+        timestamp, pr_number = parsed
+        if pr_number != current_target.pr_number:
             continue
         candidates.append((timestamp, run_id))
 
+    skipped: list[str] = []
     for _timestamp, run_id in sorted(candidates, reverse=True):
         try:
             verdict = _load_inherited_dispositions(
@@ -748,11 +762,16 @@ def _discover_inherited_run_id(
                 current_target=current_target,
                 out_root=out_root,
             )
-        except _InheritanceSourceError:
+        except _InheritanceSourceError as exc:
+            skipped.append(f"{run_id}: {exc.reason}")
+            continue
+        except OSError as exc:
+            skipped.append(f"{run_id}: {type(exc).__name__}")
             continue
         if verdict.findings:
-            return run_id
-    return None
+            return _InheritanceScan(run_id=run_id, skipped=tuple(skipped))
+        skipped.append(f"{run_id}: no_recorded_dispositions")
+    return _InheritanceScan(run_id=None, skipped=tuple(skipped))
 
 
 def _gate_failure_verdict(
@@ -922,21 +941,30 @@ async def _gate_pipeline(
                 raise RuntimeError("gate review stopped before report generation")
             artifacts = executed
             if inherit_run_id is None and not no_inherit:
-                inherit_run_id = _discover_inherited_run_id(
+                scan = _discover_inherited_run_id(
                     current_target=resolved,
                     out_root=out_root,
                     exclude_run_id=artifacts.run.run_id,
                 )
+                inherit_run_id = scan.run_id
                 message_console = _error_console if json_output else _console
-                if inherit_run_id is None:
+                if scan.scan_error is not None:
+                    message_console.print(
+                        "auto-inherit: run-root scan failed "
+                        f"({scan.scan_error}); proceeding without inheritance",
+                        markup=False,
+                    )
+                elif inherit_run_id is None:
+                    detail = f" (skipped: {', '.join(scan.skipped)})" if scan.skipped else ""
                     message_console.print(
                         "auto-inherit: no qualifying prior run found; "
-                        "proceeding without inheritance",
+                        f"proceeding without inheritance{detail}",
                         markup=False,
                     )
                 else:
+                    detail = f" (skipped: {', '.join(scan.skipped)})" if scan.skipped else ""
                     message_console.print(
-                        f"auto-inherit: selected {inherit_run_id}",
+                        f"auto-inherit: selected {inherit_run_id}{detail}",
                         markup=False,
                     )
             save_gate_plan(artifacts.run.dir, plan)

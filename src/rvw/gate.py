@@ -58,8 +58,24 @@ class GatePlan(BaseModel):
     schema_version: Literal[1] = 1
     lane_ids: list[str] = Field(min_length=1)
     replicas: int = Field(ge=1)
-    adjudicate_replicas: int = Field(default=3, ge=1)
+    adjudicate_replicas: int = Field(ge=1)
     chunk_count: int = Field(ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_adjudicate_replicas(cls, value: object) -> object:
+        """Plans persisted before the replica split ran one combined count.
+
+        For such plans the historical adjudication count IS the stored
+        ``replicas`` value; backfilling the new-default 3 would fabricate
+        provenance for runs that adjudicated with 1.
+        """
+
+        if isinstance(value, Mapping) and "adjudicate_replicas" not in value:
+            inferred = dict(value)
+            inferred["adjudicate_replicas"] = inferred.get("replicas")
+            return inferred
+        return value
 
     @field_validator("lane_ids")
     @classmethod
