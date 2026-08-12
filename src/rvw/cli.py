@@ -620,11 +620,24 @@ def _load_gate_artifacts(run_id: str, out_root: Path) -> _PipelineArtifacts:
     return load_pipeline_artifacts(run_id, out_root, require_outcome=True)
 
 
+def _pinned_run_owned_by_scan_user(run: RunHandle) -> bool:
+    """Authorize ownership on the SAME pinned descriptor used for reads.
+
+    A pre-open ``stat()`` by name is TOCTOU-racy under a world-writable
+    artifact root: the entry can be swapped between check and open. fstat on
+    the no-follow directory descriptor that all subsequent artifact reads go
+    through closes that window.
+    """
+
+    return os.fstat(run._pinned_dir_fd()).st_uid == os.geteuid()
+
+
 def _load_inherited_dispositions(
     run_id: str,
     *,
     current_target: ResolvedTarget,
     out_root: Path,
+    require_owned: bool = False,
 ) -> GateVerdict:
     try:
         run = RunStore(out_root).open(run_id)
@@ -632,6 +645,16 @@ def _load_inherited_dispositions(
         raise _InheritanceSourceError("inherit_run_invalid", str(exc)) from exc
     except RunNotFound as exc:
         raise _InheritanceSourceError("inherit_run_missing", str(exc)) from exc
+
+    if require_owned and not _pinned_run_owned_by_scan_user(run):
+        # Auto-discovery treats artifacts as trusted evidence without the
+        # operator naming a run id; a foreign-owned directory could carry
+        # planted dispositions. Explicit --inherit remains the operator's
+        # deliberate trust decision and is exempt.
+        raise _InheritanceSourceError(
+            "inherit_source_foreign_owner",
+            f"run {run_id} is not owned by the scanning user",
+        )
 
     try:
         source_target = run.load_target()
@@ -731,22 +754,6 @@ class _InheritanceScan:
     skipped: tuple[str, ...] = ()
 
 
-def _entry_owned_by_scan_user(entry: Path) -> bool:
-    """True when the candidate run directory is owned by the scanning user.
-
-    Auto-discovery treats artifacts under out_root as trusted evidence
-    without the operator naming a run id, and the default root lives under
-    /tmp. A foreign-owned directory could carry planted dispositions, so it
-    is never eligible for automatic selection (explicit --inherit remains
-    the operator's deliberate trust decision).
-    """
-
-    try:
-        return entry.stat(follow_symlinks=False).st_uid == os.geteuid()
-    except OSError:
-        return False
-
-
 def _discover_inherited_run_id(
     *,
     current_target: ResolvedTarget,
@@ -789,9 +796,6 @@ def _discover_inherited_run_id(
             # this run's "prior" source (selection-order inversion).
             skipped.append(f"{run_id}: newer_than_current")
             continue
-        if not _entry_owned_by_scan_user(entry):
-            skipped.append(f"{run_id}: foreign_owner")
-            continue
         candidates.append((timestamp, run_id))
 
     for _timestamp, run_id in sorted(candidates, reverse=True):
@@ -800,6 +804,7 @@ def _discover_inherited_run_id(
                 run_id,
                 current_target=current_target,
                 out_root=out_root,
+                require_owned=True,
             )
         except _InheritanceSourceError as exc:
             skipped.append(f"{run_id}: {exc.reason}")

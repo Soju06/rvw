@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Literal
@@ -319,10 +320,21 @@ def test_gate_auto_inherit_skips_unreadable_candidate(
     inherited_source(out_root, current, run_id="rvw-20250810-110000-pr-42")
     original = cli_module._load_inherited_dispositions
 
-    def flaky(run_id: str, *, current_target: ResolvedTarget, out_root: Path) -> GateVerdict:
+    def flaky(
+        run_id: str,
+        *,
+        current_target: ResolvedTarget,
+        out_root: Path,
+        require_owned: bool = False,
+    ) -> GateVerdict:
         if run_id == "rvw-20250810-110000-pr-42":
             raise PermissionError(13, "Permission denied")
-        return original(run_id, current_target=current_target, out_root=out_root)
+        return original(
+            run_id,
+            current_target=current_target,
+            out_root=out_root,
+            require_owned=require_owned,
+        )
 
     monkeypatch.setattr(cli_module, "_load_inherited_dispositions", flaky)
     patch_target_dependencies(monkeypatch, current)
@@ -453,6 +465,28 @@ def test_parse_pr_run_id_rejects_trailing_newline() -> None:
     assert parse_pr_run_id(canonical + "\n") is None
     assert parse_pr_run_id("rvw-20250810-100000-123456-pr-42") is not None
     assert parse_pr_run_id("rvw-20250810-100000-123456-pr-42\n") is None
+
+
+def test_gate_auto_inherit_rejects_foreign_owned_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auto-discovery must reject candidates not owned by the scanning user
+    (planted-artifact defense) via fstat on the pinned descriptor."""
+
+    out_root = tmp_path / "runs"
+    current = prepared_artifacts(out_root, actionable=True)
+    source = inherited_source(out_root, current, run_id="rvw-20250810-100000-pr-42")
+    real_euid = os.geteuid()
+    monkeypatch.setattr(cli_module.os, "geteuid", lambda: real_euid + 1)
+    patch_target_dependencies(monkeypatch, current)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["gate", "--target", "42", "--out", str(out_root)],
+    )
+
+    assert "auto-inherit: no qualifying prior run found" in result.stdout
+    assert f"{source.run_id}: inherit_source_foreign_owner" in result.stdout
 
 
 def test_run_id_generator_and_parser_cannot_drift(tmp_path: Path) -> None:
