@@ -455,6 +455,23 @@ def test_parse_pr_run_id_rejects_trailing_newline() -> None:
     assert parse_pr_run_id("rvw-20250810-100000-123456-pr-42\n") is None
 
 
+def test_run_id_generator_and_parser_cannot_drift(tmp_path: Path) -> None:
+    """Drift tripwire: every PR run id the generator produces MUST parse.
+
+    If _RUN_ID_TIMESTAMP_FORMAT or the id layout changes without updating
+    _PR_RUN_ID/parse_pr_run_id, auto-inherit would silently stop discovering
+    new runs; discovery also refuses to scan when the current id fails to
+    parse, and this test pins the invariant at the source.
+    """
+
+    from rvw.store import parse_pr_run_id
+
+    run = RunStore(tmp_path).create(target())
+    parsed = parse_pr_run_id(run.run_id)
+    assert parsed is not None
+    assert parsed[1] == 42
+
+
 def test_gate_no_inherit_suppresses_auto_discovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

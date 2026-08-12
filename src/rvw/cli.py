@@ -731,6 +731,22 @@ class _InheritanceScan:
     skipped: tuple[str, ...] = ()
 
 
+def _entry_owned_by_scan_user(entry: Path) -> bool:
+    """True when the candidate run directory is owned by the scanning user.
+
+    Auto-discovery treats artifacts under out_root as trusted evidence
+    without the operator naming a run id, and the default root lives under
+    /tmp. A foreign-owned directory could carry planted dispositions, so it
+    is never eligible for automatic selection (explicit --inherit remains
+    the operator's deliberate trust decision).
+    """
+
+    try:
+        return entry.stat(follow_symlinks=False).st_uid == os.geteuid()
+    except OSError:
+        return False
+
+
 def _discover_inherited_run_id(
     *,
     current_target: ResolvedTarget,
@@ -745,14 +761,19 @@ def _discover_inherited_run_id(
         # scan rather than silently disabling the newer-run ordering guard.
         return _InheritanceScan(
             run_id=None,
-            scan_error=f"current run id not canonical: {exclude_run_id}",
+            scan_error=_redact_subprocess_diagnostic(
+                f"current run id not canonical: {exclude_run_id}"
+            ),
         )
     current_timestamp = current_parsed[0]
     skipped: list[str] = []
     try:
         entries = list(out_root.iterdir())
     except OSError as exc:
-        return _InheritanceScan(run_id=None, scan_error=f"{type(exc).__name__}: {exc}")
+        return _InheritanceScan(
+            run_id=None,
+            scan_error=_redact_subprocess_diagnostic(f"{type(exc).__name__}: {exc}"),
+        )
     for entry in entries:
         run_id = entry.name
         if run_id == exclude_run_id:
@@ -767,6 +788,9 @@ def _discover_inherited_run_id(
             # A concurrent gate allocated after this run must never become
             # this run's "prior" source (selection-order inversion).
             skipped.append(f"{run_id}: newer_than_current")
+            continue
+        if not _entry_owned_by_scan_user(entry):
+            skipped.append(f"{run_id}: foreign_owner")
             continue
         candidates.append((timestamp, run_id))
 
@@ -1082,7 +1106,9 @@ async def _gate_pipeline(
             # validation and this second read; fail with a controlled exit
             # instead of letting a raw filesystem error escape the CLI.
             _error_console.print(
-                f"inherit_source_unreadable: {inherit_run_id}: {type(exc).__name__}: {exc}",
+                _redact_subprocess_diagnostic(
+                    f"inherit_source_unreadable: {inherit_run_id}: {type(exc).__name__}: {exc}"
+                ),
                 markup=False,
             )
             raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
