@@ -37,7 +37,15 @@ class PlannedRun:
             raise ValueError("chunk must be within chunk_count")
 
 
-async def dispatch(
+@dataclass(frozen=True, slots=True)
+class DispatchOutcome:
+    """Final run results and shadowed initial results for retried identities."""
+
+    results: list[RunResult]
+    initial_by_key: dict[tuple[str, int, int], RunResult]
+
+
+async def dispatch_outcome(
     runs: Sequence[PlannedRun],
     runtime: Runtime,
     *,
@@ -45,8 +53,8 @@ async def dispatch(
     concurrency: int = DEFAULT_CONCURRENCY,
     deadline_seconds: int = 600,
     on_progress: Callable[[RunResult], None] | None = None,
-) -> list[RunResult]:
-    """Dispatch all planned runs in one wave, retrying all-invalid lane-chunks once."""
+) -> DispatchOutcome:
+    """Dispatch runs and retain initial results shadowed by the retry wave."""
 
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
@@ -102,9 +110,44 @@ async def dispatch(
         (result.lane_id, result.replica, result.chunk): result
         for result in [*main_results, *retry_results]
     }
-    return sorted(
+    final_results = sorted(
         final_by_key.values(), key=lambda result: (result.lane_id, result.chunk, result.replica)
     )
+    initial_by_key = {
+        (result.lane_id, result.replica, result.chunk): result
+        for result in main_results
+        if (result.lane_id, result.chunk) in retry_lane_chunks
+    }
+    return DispatchOutcome(results=final_results, initial_by_key=initial_by_key)
 
 
-__all__: list[str] = ["DEFAULT_CONCURRENCY", "PlannedRun", "dispatch", "lpt_sort_key"]
+async def dispatch(
+    runs: Sequence[PlannedRun],
+    runtime: Runtime,
+    *,
+    out_root: Path,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    deadline_seconds: int = 600,
+    on_progress: Callable[[RunResult], None] | None = None,
+) -> list[RunResult]:
+    """Dispatch all planned runs and return only each identity's final result."""
+
+    outcome = await dispatch_outcome(
+        runs,
+        runtime,
+        out_root=out_root,
+        concurrency=concurrency,
+        deadline_seconds=deadline_seconds,
+        on_progress=on_progress,
+    )
+    return outcome.results
+
+
+__all__: list[str] = [
+    "DEFAULT_CONCURRENCY",
+    "DispatchOutcome",
+    "PlannedRun",
+    "dispatch",
+    "dispatch_outcome",
+    "lpt_sort_key",
+]

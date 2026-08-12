@@ -8,8 +8,8 @@ import pytest
 
 import rvw.discover as discover_module
 from rvw.diffbudget import EmptyReviewDiffError
-from rvw.discover import discover, resolve_lane_path
-from rvw.dispatch import PlannedRun
+from rvw.discover import RunCoverage, discover, resolve_lane_path
+from rvw.dispatch import DispatchOutcome, PlannedRun
 from rvw.lane import Lane
 from rvw.merge import merge
 from rvw.registry import Registry
@@ -72,9 +72,13 @@ class FakeRuntime(Runtime):
         *,
         findings: dict[str, list[RuntimeFinding]] | None = None,
         invalid_lanes: set[str] | None = None,
+        statuses: dict[str, Sequence[RunStatus]] | None = None,
+        invalid_reasons: dict[str, Sequence[str]] | None = None,
     ) -> None:
         self.findings = findings or {}
         self.invalid_lanes = invalid_lanes or set()
+        self.statuses = statuses or {}
+        self.invalid_reasons = invalid_reasons or {}
         self.prompts: list[tuple[str, str]] = []
         self.calls: list[tuple[str, int]] = []
         self.run_dirs: list[Path] = []
@@ -92,13 +96,26 @@ class FakeRuntime(Runtime):
         self.prompts.append((lane.id, prompt))
         self.calls.append((lane.id, replica))
         self.run_dirs.append(run_dir)
-        if lane.id in self.invalid_lanes:
+        call_index = sum(call_lane == lane.id for call_lane, _replica in self.calls) - 1
+        scripted = self.statuses.get(lane.id, ())
+        status = (
+            scripted[call_index]
+            if call_index < len(scripted)
+            else RunStatus.INVALID
+            if lane.id in self.invalid_lanes
+            else RunStatus.VALID
+        )
+        if status is RunStatus.INVALID:
+            reasons = self.invalid_reasons.get(lane.id, ())
+            invalid_reason = (
+                reasons[call_index] if call_index < len(reasons) else "scripted invalid"
+            )
             return RunResult(
                 lane_id=lane.id,
                 replica=replica,
                 status=RunStatus.INVALID,
                 output=None,
-                invalid_reason="scripted invalid",
+                invalid_reason=invalid_reason,
                 wall_seconds=0,
                 artifact_dir=run_dir,
             )
@@ -158,7 +175,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
     runtime = FakeRuntime()
     dispatch_calls = 0
     dispatch_concurrency: list[int] = []
-    original_dispatch = discover_module.dispatch
+    original_dispatch = discover_module.dispatch_outcome
 
     async def counting_dispatch(
         runs: Sequence[PlannedRun],
@@ -168,7 +185,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
         concurrency: int = 8,
         deadline_seconds: int = 600,
         on_progress: Callable[[RunResult], None] | None = None,
-    ) -> list[RunResult]:
+    ) -> DispatchOutcome:
         nonlocal dispatch_calls
         dispatch_calls += 1
         dispatch_concurrency.append(concurrency)
@@ -181,7 +198,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
             on_progress=on_progress,
         )
 
-    monkeypatch.setattr(discover_module, "dispatch", counting_dispatch)
+    monkeypatch.setattr(discover_module, "dispatch_outcome", counting_dispatch)
 
     result = await discover(
         registry=reg,
@@ -304,6 +321,7 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
                 "valid": True,
                 "findings": 0,
                 "invalid_reason": None,
+                "attempts": [{"attempt": 1, "valid": True, "invalid_reason": None}],
             }
             for replica in (1, 2)
         ],
@@ -320,11 +338,109 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
                 "valid": False,
                 "findings": 0,
                 "invalid_reason": "scripted invalid",
+                "attempts": [
+                    {
+                        "attempt": attempt,
+                        "valid": False,
+                        "invalid_reason": "scripted invalid",
+                    }
+                    for attempt in (1, 2)
+                ],
             }
             for replica in (1, 2)
         ],
     }
     assert len(runtime.calls) == 6  # two good + two initial bad + two retry bad
+
+
+async def test_retried_coverage_preserves_ordered_attempt_status_and_reason(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "recovers", Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={"recovers": [RunStatus.INVALID, RunStatus.VALID]},
+        invalid_reasons={"recovers": ["exit_nonzero:124"]},
+    )
+
+    result = await discover(
+        registry=registry(("recovers", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+    )
+
+    run = result.coverage[0].runs[0]
+    assert run.valid is True
+    assert run.invalid_reason is None
+    assert [attempt.model_dump() for attempt in run.attempts] == [
+        {"attempt": 1, "valid": False, "invalid_reason": "exit_nonzero:124"},
+        {"attempt": 2, "valid": True, "invalid_reason": None},
+    ]
+
+
+async def test_non_retried_coverage_has_one_attempt_mirroring_row(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "steady", Tier.BASE)
+
+    result = await discover(
+        registry=registry(("steady", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=FakeRuntime(),
+        out_root=tmp_path / "out",
+    )
+
+    run = result.coverage[0].runs[0]
+    assert [attempt.model_dump() for attempt in run.attempts] == [
+        {
+            "attempt": 1,
+            "valid": run.valid,
+            "invalid_reason": run.invalid_reason,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "attempts",
+    [
+        [
+            {"attempt": 2, "valid": False, "invalid_reason": "exit_nonzero:124"},
+            {"attempt": 3, "valid": True, "invalid_reason": None},
+        ],
+        [{"attempt": 1, "valid": False, "invalid_reason": "exit_nonzero:124"}],
+    ],
+)
+def test_run_coverage_rejects_non_sequential_or_finally_mismatched_attempts(
+    attempts: list[dict[str, object]],
+) -> None:
+    with pytest.raises(ValueError):
+        RunCoverage(
+            replica=1,
+            chunk=1,
+            valid=True,
+            findings=0,
+            invalid_reason=None,
+            attempts=attempts,
+        )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"attempt": 0, "valid": True, "invalid_reason": None},
+        {"attempt": 1, "valid": True, "invalid_reason": "unexpected"},
+        {"attempt": 1, "valid": False, "invalid_reason": None},
+        {"attempt": 1, "valid": False, "invalid_reason": "   "},
+        {"attempt": 1, "valid": True, "invalid_reason": None, "extra": "forbidden"},
+    ],
+)
+def test_run_attempt_is_strict_and_enforces_validity_reason_invariant(
+    raw: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        discover_module.RunAttempt.model_validate(raw)
 
 
 async def test_diff_budget_filters_prompt_but_keeps_full_changed_paths(tmp_path: Path) -> None:

@@ -70,6 +70,13 @@ def test_round_trips_every_stage(tmp_path: Path) -> None:
                     valid=replica < 3,
                     findings=4 if replica == 1 else 0,
                     invalid_reason=None if replica < 3 else "scripted_invalid",
+                    attempts=[
+                        {
+                            "attempt": 1,
+                            "valid": replica < 3,
+                            "invalid_reason": None if replica < 3 else "scripted_invalid",
+                        }
+                    ],
                 )
                 for replica in range(1, 4)
             ],
@@ -107,6 +114,41 @@ def test_round_trips_every_stage(tmp_path: Path) -> None:
     assert reopened.load_merge() == merged
     assert reopened.load_outcome() == outcome
     assert reopened.load_report() == report
+
+
+def test_load_discover_without_attempts_uses_empty_legacy_history(tmp_path: Path) -> None:
+    run_dir = tmp_path / "legacy-run"
+    run_dir.mkdir()
+    (run_dir / "discover.json").write_text(
+        json.dumps(
+            {
+                "findings": [],
+                "coverage": [
+                    {
+                        "lane_id": "legacy",
+                        "dispatched": 1,
+                        "valid": 0,
+                        "findings": 0,
+                        "runs": [
+                            {
+                                "replica": 1,
+                                "chunk": 1,
+                                "valid": False,
+                                "findings": 0,
+                                "invalid_reason": "exit_nonzero:124",
+                            }
+                        ],
+                    }
+                ],
+                "budget": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = RunHandle(run_id="legacy-run", dir=run_dir).load_discover()
+
+    assert discovered.coverage[0].runs[0].attempts == []
 
 
 def test_create_retries_same_target_same_timestamp_collision(

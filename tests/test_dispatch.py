@@ -5,6 +5,7 @@ import inspect
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import rvw.dispatch as dispatch_module
 from rvw.adjudicate import adjudicate
 from rvw.discover import discover
 from rvw.dispatch import PlannedRun, dispatch
@@ -189,6 +190,31 @@ async def test_all_invalid_lane_is_redispatched_once(tmp_path: Path) -> None:
 
     assert runtime.calls_for(lane.id) == 4
     assert all(result.status is RunStatus.VALID for result in results)
+
+
+async def test_dispatch_outcome_exposes_initial_results_only_for_retried_keys(
+    tmp_path: Path,
+) -> None:
+    recovers = make_lane("recovers")
+    steady = make_lane("steady")
+    runtime = FakeRuntime(
+        statuses={
+            recovers.id: [RunStatus.INVALID, RunStatus.VALID],
+            steady.id: [RunStatus.VALID],
+        }
+    )
+    outcome = await dispatch_module.dispatch_outcome(
+        [planned(recovers), planned(steady)],
+        runtime,
+        out_root=tmp_path,
+    )
+
+    assert [result.status for result in outcome.results] == [
+        RunStatus.VALID,
+        RunStatus.VALID,
+    ]
+    assert set(outcome.initial_by_key) == {(recovers.id, 1, 1)}
+    assert outcome.initial_by_key[(recovers.id, 1, 1)].status is RunStatus.INVALID
 
 
 async def test_all_invalid_retry_preserves_initial_wave_artifacts(tmp_path: Path) -> None:

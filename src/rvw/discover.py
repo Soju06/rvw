@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rvw.diffbudget import DiffBudgetReport, apply_diff_budget, require_reviewable_diff
-from rvw.dispatch import DEFAULT_CONCURRENCY, PlannedRun, dispatch
+from rvw.dispatch import DEFAULT_CONCURRENCY, PlannedRun, dispatch_outcome
 from rvw.hunks import hunk_for_line, is_anchorable, parse_hunks
 from rvw.lane import load_lane
 from rvw.prompts import build_chunk_context, build_lane_prompt
@@ -28,6 +28,24 @@ class EnrichedFinding(Finding):
     replica: int = Field(ge=1)
 
 
+class RunAttempt(BaseModel):
+    """Validity of one execution attempt for a planned run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt: int = Field(ge=1)
+    valid: bool
+    invalid_reason: str | None
+
+    @model_validator(mode="after")
+    def _validity_must_match_reason(self) -> RunAttempt:
+        if self.valid and self.invalid_reason is not None:
+            raise ValueError("valid run attempts cannot have an invalid_reason")
+        if not self.valid and (self.invalid_reason is None or not self.invalid_reason.strip()):
+            raise ValueError("invalid run attempts require an invalid_reason")
+        return self
+
+
 class RunCoverage(BaseModel):
     """Validity and yield for one planned replica-chunk execution."""
 
@@ -38,6 +56,7 @@ class RunCoverage(BaseModel):
     valid: bool
     findings: int = Field(ge=0)
     invalid_reason: str | None
+    attempts: list[RunAttempt] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validity_must_match_reason(self) -> RunCoverage:
@@ -47,6 +66,16 @@ class RunCoverage(BaseModel):
             raise ValueError("invalid coverage runs require an invalid_reason")
         if not self.valid and self.findings:
             raise ValueError("invalid coverage runs cannot have findings")
+        if self.attempts:
+            attempt_numbers = [attempt.attempt for attempt in self.attempts]
+            if attempt_numbers != list(range(1, len(self.attempts) + 1)):
+                raise ValueError("coverage run attempts must be numbered 1..N in order")
+            final_attempt = self.attempts[-1]
+            if (
+                final_attempt.valid != self.valid
+                or final_attempt.invalid_reason != self.invalid_reason
+            ):
+                raise ValueError("final coverage attempt must match the coverage run status")
         return self
 
 
@@ -127,6 +156,22 @@ def _effective_brief(
     return None, None
 
 
+def _coverage_attempts(
+    result: RunResult,
+    initial_by_key: Mapping[tuple[str, int, int], RunResult],
+) -> list[RunAttempt]:
+    initial = initial_by_key.get((result.lane_id, result.replica, result.chunk))
+    attempt_results = [result] if initial is None else [initial, result]
+    return [
+        RunAttempt(
+            attempt=attempt,
+            valid=attempt_result.status is RunStatus.VALID,
+            invalid_reason=attempt_result.invalid_reason,
+        )
+        for attempt, attempt_result in enumerate(attempt_results, start=1)
+    ]
+
+
 async def discover(
     *,
     registry: Registry,
@@ -176,13 +221,14 @@ async def discover(
         for chunk in chunks
         for replica in range(1, replicas + 1)
     ]
-    raw_results = await dispatch(
+    dispatched = await dispatch_outcome(
         planned_runs,
         runtime,
         out_root=out_root,
         concurrency=concurrency,
         deadline_seconds=deadline_seconds,
     )
+    raw_results = dispatched.results
 
     lane_results: dict[str, list[RunResult]] = {lane.id: [] for lane in lanes}
     for result in raw_results:
@@ -222,6 +268,7 @@ async def discover(
                 valid=result.status is RunStatus.VALID,
                 findings=finding_counts.get((result.lane_id, result.replica, result.chunk), 0),
                 invalid_reason=result.invalid_reason,
+                attempts=_coverage_attempts(result, dispatched.initial_by_key),
             )
             for result in results
         ]
@@ -247,6 +294,7 @@ __all__: list[str] = [
     "DiscoverResult",
     "EnrichedFinding",
     "LaneCoverage",
+    "RunAttempt",
     "RunCoverage",
     "discover",
     "resolve_lane_path",
