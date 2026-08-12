@@ -213,12 +213,29 @@ def test_stack_plan_writes_manifest_and_json(
     assert [item.number for item in manifest.members] == [1, 2, 3]
 
 
+def test_stack_review_forwards_split_replica_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_stack_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_stack_review_pipeline", fake_stack_review_pipeline)
+
+    result = runner.invoke(cli_module.app, ["stack", "review", "--prs", "1,2"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls[0]["discover_replicas"] == 1
+    assert calls[0]["adjudicate_replicas"] == 3
+
+
 def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     resolve_calls = 0
-    pipeline_calls: list[int] = []
-    presence_calls: list[tuple[int, list[str]]] = []
+    pipeline_calls: list[tuple[int, int, int]] = []
+    presence_calls: list[tuple[int, list[str], int]] = []
     pipeline_concurrency: list[int] = []
     presence_concurrency: list[int] = []
 
@@ -238,7 +255,11 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
         target = kwargs["resolved_target"]
         assert isinstance(target, ResolvedTarget)
         assert target.pr_number is not None
-        pipeline_calls.append(target.pr_number)
+        discover_replicas = kwargs["discover_replicas"]
+        adjudicate_replicas = kwargs["adjudicate_replicas"]
+        assert isinstance(discover_replicas, int)
+        assert isinstance(adjudicate_replicas, int)
+        pipeline_calls.append((target.pr_number, discover_replicas, adjudicate_replicas))
         concurrency = kwargs["concurrency"]
         assert isinstance(concurrency, int)
         pipeline_concurrency.append(concurrency)
@@ -247,11 +268,13 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     async def fake_presence(
         lineages: list[FindingLineage], *, pr_number: int, **kwargs: object
     ) -> PresenceOutcome:
+        replicas = kwargs["replicas"]
+        assert isinstance(replicas, int)
         concurrency = kwargs["concurrency"]
         assert isinstance(concurrency, int)
         presence_concurrency.append(concurrency)
         lineage_ids = [item.lineage_id for item in lineages]
-        presence_calls.append((pr_number, lineage_ids))
+        presence_calls.append((pr_number, lineage_ids, replicas))
         presence = Presence.ABSENT if pr_number == 3 else Presence.PRESENT
         return PresenceOutcome(
             observations={
@@ -287,6 +310,10 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
             "1,2,3",
             "--registry",
             str(tmp_path / "registry"),
+            "--replicas",
+            "2",
+            "--adjudicate-replicas",
+            "1",
             "--concurrency",
             "4",
             "--out",
@@ -297,9 +324,13 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
 
     assert result.exit_code == 0, result.stdout
     assert resolve_calls == 2
-    assert pipeline_calls == [1, 2, 3]
+    assert pipeline_calls == [(1, 2, 1), (2, 2, 1), (3, 2, 1)]
     assert pipeline_concurrency == [4, 4, 4]
-    assert [number for number, _lineages in presence_calls] == [2, 3]
+    assert [(number, replicas) for number, _lineages, replicas in presence_calls] == [
+        (2, 1),
+        (3, 1),
+    ]
+    assert all(lineages for _number, lineages, _replicas in presence_calls)
     assert presence_concurrency == [4, 4]
     payload = json.loads(result.stdout)
     handle = StackStore(tmp_path / "stack-runs").open(payload["run_id"])

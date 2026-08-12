@@ -107,6 +107,8 @@ def test_plan_json_shape_tier_zero_predicates_and_lpt_order(
         "pr_number": None,
     }
     assert payload["brief_source"] is None
+    assert payload["replicas"] == 1
+    assert payload["adjudicate_replicas"] == 3
     assert payload["chunk_count"] == 1
     assert payload["total_runs"] == 3
     assert {lane["lane"] for lane in payload["lanes"]} >= {
@@ -144,6 +146,35 @@ def test_plan_json_shape_tier_zero_predicates_and_lpt_order(
             "replicas": 1,
         },
     ]
+
+
+def test_plan_preserves_split_replica_overrides(
+    monkeypatch: pytest.MonkeyPatch, registry_root: Path
+) -> None:
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda spec: canned_target())
+
+    result = runner.invoke(
+        app,
+        [
+            "plan",
+            "--target",
+            "HEAD",
+            "--replicas",
+            "2",
+            "--adjudicate-replicas",
+            "1",
+            "--json",
+            "--registry",
+            str(registry_root),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["replicas"] == 2
+    assert payload["adjudicate_replicas"] == 1
+    assert payload["total_runs"] == 6
+    assert {lane["replicas"] for lane in payload["lanes"]} == {2}
 
 
 def test_plan_reports_chunk_expanded_total_runs(

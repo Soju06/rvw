@@ -22,17 +22,17 @@ The `rvw gate --target <pr>` command MUST accept only a pull-request target, MUS
 
 ### Requirement: Target gate defaults to one replica
 
-The `rvw gate --target <pr>` command MUST execute its shared review pipeline with one replica by default and MUST preserve an explicit positive `--replicas` count for opt-in replicated verification.
+The `rvw gate --target <pr>` command MUST execute its shared review pipeline with one discovery replica and three adjudication replicas by default. It MUST preserve explicit positive `--replicas` and `--adjudicate-replicas` values independently, MUST record both values in its gate plan while retaining `replicas` as the discovery count, and MUST validate coverage against discovery replicas only.
 
-#### Scenario: Target gate uses its default replica count
+#### Scenario: Target gate uses its split defaults
 
-- **WHEN** `rvw gate --target <pr>` is invoked without `--replicas`
-- **THEN** its gate plan records one replica and its shared review pipeline receives one replica
+- **WHEN** `rvw gate --target <pr>` is invoked without replica overrides
+- **THEN** its gate plan records `replicas: 1` and `adjudicate_replicas: 3`, and its shared review pipeline receives those counts for the corresponding stages
 
-#### Scenario: Target gate explicitly requests replication
+#### Scenario: Target gate explicitly requests split replication
 
-- **WHEN** `rvw gate --target <pr> --replicas 3` is invoked
-- **THEN** its gate plan records three replicas and its shared review pipeline receives three replicas
+- **WHEN** `rvw gate --target <pr> --replicas 2 --adjudicate-replicas 1` is invoked
+- **THEN** its gate plan records two discovery replicas and one adjudication replica, and coverage expects only the two discovery replica identities per lane and chunk
 
 ### Requirement: Resume never repeats review
 
@@ -89,7 +89,7 @@ Except for the completed-verdict publication-only resume defined above, after ta
 
 ### Requirement: Coverage exactly matches the activated plan
 
-Gate MUST require a nonempty activated lane plan with a positive chunk count, MUST derive every planned `(lane, replica, chunk)` combination, MUST require exact equality with the distinct persisted coverage run entries, and MUST require every planned entry to be VALID. It MUST reject missing, duplicate, unexpected, invalid, or aggregate-inconsistent coverage.
+Gate MUST require a nonempty activated lane plan with a positive chunk count, MUST derive every planned `(lane, discovery replica, chunk)` combination, MUST require exact equality with the distinct persisted coverage run entries, and MUST require every planned entry to be VALID. It MUST reject missing, duplicate, unexpected, invalid, or aggregate-inconsistent coverage and MUST NOT use the adjudication replica count for discovery coverage.
 
 #### Scenario: Vacuous run has no dispatches
 
@@ -129,6 +129,46 @@ Gate MUST classify CONFIRMED and UNCERTAIN groups as actionable, MUST require ex
 
 - **WHEN** a disposition record names an inherited run but the invocation has no matching `--inherit` source or the recomputed matcher left that finding unmatched
 - **THEN** gate rejects the document with machine-readable reason `inherited_from_unbound`
+
+### Requirement: Fresh PR gates automatically select prior dispositions
+
+When `rvw gate --target <pr>` is invoked without `--inherit`, without `--no-inherit`, and without `--run`, gate MUST search the configured output root for the most recent prior gate run of the same repository and pull-request number that records validated completed dispositions. It MUST select the qualifying candidate with the latest run-ID timestamp, MUST announce the selected run identifier, and MUST process it through the same validation, matching, summary, and provenance behavior as explicit inheritance.
+
+Gate MUST exclude the current run, non-pull-request targets, runs for another repository or pull-request number, and runs without validated completed dispositions. Repository identity comparison MUST be case-insensitive. A newer nonqualifying candidate MUST NOT prevent selection of an older qualifying candidate.
+
+#### Scenario: Most recent qualifying run is surrounded by decoys
+
+- **WHEN** the output root contains a qualifying same-repository and same-PR completed run plus newer runs for another PR, another repository, a commit target, and a run without dispositions
+- **THEN** gate selects the most recent qualifying same-PR run and records its identifier through the existing inheritance provenance
+
+#### Scenario: No qualifying prior run exists
+
+- **WHEN** fresh target mode finds no prior same-repository and same-PR run with validated completed dispositions
+- **THEN** gate emits one informational line and proceeds without inheritance or an error
+
+#### Scenario: Automatic selection cannot choose the current run
+
+- **WHEN** the newly allocated run is visible below the output root during discovery
+- **THEN** gate excludes that run identifier from candidate selection
+
+### Requirement: Gate inheritance selection has explicit precedence and opt-out
+
+The `rvw gate` command MUST accept `--no-inherit` to disable automatic source discovery. An explicit `--inherit <run-id>` MUST be used instead of automatic discovery, and supplying `--inherit` together with `--no-inherit` MUST be rejected as an invalid invocation with a clear message and nonzero exit. Resume mode MUST NOT perform automatic discovery.
+
+#### Scenario: Automatic inheritance is disabled
+
+- **WHEN** fresh target mode is invoked with `--no-inherit` while a qualifying prior run exists
+- **THEN** gate performs no automatic discovery and proceeds without an inherited source
+
+#### Scenario: Explicit source wins
+
+- **WHEN** fresh target mode supplies `--inherit <run-id>` while a newer qualifying source exists
+- **THEN** gate uses the explicitly named run and does not replace it through automatic discovery
+
+#### Scenario: Conflicting selection options are supplied
+
+- **WHEN** an invocation supplies both `--inherit <run-id>` and `--no-inherit`
+- **THEN** gate exits nonzero with a clear usage error before inheritance processing
 
 ### Requirement: Inheritance loads only a validated same-PR verdict
 

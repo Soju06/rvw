@@ -58,6 +58,7 @@ class GatePlan(BaseModel):
     schema_version: Literal[1] = 1
     lane_ids: list[str] = Field(min_length=1)
     replicas: int = Field(ge=1)
+    adjudicate_replicas: int = Field(default=3, ge=1)
     chunk_count: int = Field(ge=1)
 
     @field_validator("lane_ids")

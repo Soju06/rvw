@@ -1150,12 +1150,15 @@ def test_gate_plan_round_trip_is_strict(tmp_path: Path) -> None:
         schema_version=1,
         lane_ids=["lane-a", "lane-b"],
         replicas=3,
+        adjudicate_replicas=1,
         chunk_count=2,
     )
     path = save_gate_plan(tmp_path, plan)
 
     assert load_gate_plan(tmp_path) == plan
     raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["replicas"] == 3
+    assert raw["adjudicate_replicas"] == 1
     raw["extra"] = True
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ValidationError):

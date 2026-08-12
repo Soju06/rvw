@@ -145,8 +145,19 @@ async def run_fake(
     return outcome, runtime
 
 
-def test_adjudicate_defaults_to_one_replica() -> None:
-    assert inspect.signature(adjudicate).parameters["replicas"].default == 1
+def test_adjudicate_defaults_to_three_replicas() -> None:
+    assert inspect.signature(adjudicate).parameters["replicas"].default == 3
+
+
+async def test_explicit_single_replica_uses_single_vote(tmp_path: Path) -> None:
+    group = make_group("single-vote")
+    wave = [RuntimeAdjudication(items=[item(group.key, Verdict.REJECTED, evidence="safe")])]
+
+    outcome, runtime = await run_fake(tmp_path, [group], [wave], replicas=1)
+
+    assert outcome.verdicts[group.key] is Verdict.REJECTED
+    assert outcome.replica_votes[group.key] == [Verdict.REJECTED]
+    assert len(runtime.calls) == 1
 
 
 async def test_majority_confirmed_and_rejected(tmp_path: Path) -> None:

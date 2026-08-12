@@ -6,7 +6,7 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 
 ## Key decisions and measured basis
 
-- Owner decision (2026-07-30): ordinary `review`, `gate`, and `auto` runs are single-pass scans. Replication is an explicit heavy-verification mode for high-stakes or large-scope reviews because lanes x replicas x concurrent rvw instances overloaded `codex-lb`; four concurrent runs were observed demanding up to 64 sessions.
+- Owner decisions (2026-07-30 and 2026-08-12): ordinary `review`, `gate`, and `auto` runs keep one discovery replica because lanes x replicas x concurrent rvw instances overloaded `codex-lb`; four concurrent runs were observed demanding up to 64 sessions. Adjudication now defaults independently to three replicas because production reviews dispatched a median of one adjudication run versus eight discovery runs, so majority evidence adds token cost without increasing peak executor sessions.
 - Owner decision (2026-08-06): runtime wave concurrency defaults to eight after concurrent rvw runs saturated the shared `codex-lb` account pool, triggering local `account_stream_cap` overload, 30-second retry sleeps, and lane INVALIDs. Operators can set a positive `--concurrency` value on every command capable of runtime execution.
 - ADR-009 keeps one stage implementation while providing `review` and `auto` command surfaces. Policy handles reproducible inclusion/severity decisions after model-based factual adjudication.
 - The implemented pause point is after MERGE. This supersedes ADR-009 D2's original wording that pause occurred after ADJUDICATE.
@@ -19,6 +19,9 @@ This capability defines how operators and CI enter the common pipeline, how YAML
   loading helpers, then invokes that same implementation once per captured
   member. Stack-specific code owns only chain sequencing, immutable anchors,
   presence rechecks, and stack-level artifacts.
+- Stack member discovery uses the discovery replica count, while ordinary
+  member adjudication and descendant presence checks use the independent
+  adjudication replica count.
 
 ## Constraints
 

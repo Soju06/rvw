@@ -9,8 +9,8 @@ Adjudication is a machine stage that checks merged claims against the target che
 - ADR-007 locates the separation between discovery and adjudication rather than between machine and human. Automatic quality is the goal; a human pause is optional operation policy.
 - A measured nine-candidate fixture contained six genuine and three fabricated claims. Adjudication rejected all 3/3 fabricated claims, leaked none, and wrongly rejected 0/6 genuine findings. Five genuine claims were confirmed and one genuine cache-key issue remained UNCERTAIN because needed context was outside the diff.
 - ADR-008 turns that uncertainty into a single wider pass. The real PR #1119 smoke adjudicated 13 collapse groups with three unanimous replicas in about 197 seconds after DISCOVER took about 410 seconds.
-- Owner decision (2026-07-30): one adjudication replica is the ordinary default, while multiple replicas remain opt-in heavy verification for high-stakes or large-scope reviews.
-- Missing items become UNCERTAIN votes so a model cannot create an implicit rejection by omission. Majority is strict (`> 50%`), making ties uncertain; at the one-replica default, one valid vote wins because `1 > 1 / 2`.
+- Production measurement (2026-08-12, 26 runs): single-pass adjudication confirmed 250 of 272 groups (92%), and five of eight lanes produced no rejected groups. Because a review dispatched a median of one adjudication run versus eight discovery runs, restoring three adjudication replicas adds about 0.34M tokens per review without increasing peak sessions or critical-path wall time.
+- Missing items become UNCERTAIN votes so a model cannot create an implicit rejection by omission. Majority is strict (`> 50%`), making ties uncertain; explicit one-replica mode remains available and one valid vote then wins because `1 > 1 / 2`.
 
 ## Constraints
 

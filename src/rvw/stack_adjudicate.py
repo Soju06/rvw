@@ -244,7 +244,7 @@ async def adjudicate_presence(
     runtime: Runtime,
     repo_dir: Path,
     out_root: Path,
-    replicas: int = 1,
+    replicas: int = 3,
     deadline_seconds: int = 600,
     concurrency: int = DEFAULT_CONCURRENCY,
 ) -> PresenceOutcome:

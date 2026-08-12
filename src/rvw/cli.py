@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -97,7 +98,9 @@ EXIT_SYSTEM_ERROR = 3
 DEFAULT_REGISTRY_ROOT = Path("~/.hermes/review").expanduser()
 DEFAULT_AUTO_POLICY = Path("~/.hermes/review/policies/auto.yaml").expanduser()
 _PLAN_REPLICAS = 1
+_PLAN_ADJUDICATE_REPLICAS = 3
 DEFAULT_RUN_ROOT = Path("/tmp/rvw")
+_RUN_ID_TIMESTAMP = re.compile(r"^rvw-(\d{8}-\d{6})-")
 
 _EXAMPLES: dict[str, list[str]] = {
     "review": [
@@ -262,7 +265,12 @@ def _load_active_lanes(registry: Registry, lanes_root: Path, target: ResolvedTar
     return lanes
 
 
-def _gate_plan(registry_root: Path, target: ResolvedTarget, replicas: int) -> GatePlan:
+def _gate_plan(
+    registry_root: Path,
+    target: ResolvedTarget,
+    replicas: int,
+    adjudicate_replicas: int,
+) -> GatePlan:
     registry, lanes_root = _load_registry_root(registry_root)
     lane_ids = [lane.id for lane in _load_active_lanes(registry, lanes_root, target)]
     if not lane_ids:
@@ -271,6 +279,7 @@ def _gate_plan(registry_root: Path, target: ResolvedTarget, replicas: int) -> Ga
     return GatePlan(
         lane_ids=lane_ids,
         replicas=replicas,
+        adjudicate_replicas=adjudicate_replicas,
         chunk_count=len(chunks),
     )
 
@@ -288,6 +297,8 @@ def _plan_payload(
     lanes_root: Path,
     target: ResolvedTarget,
     dynamic_brief: Path | None,
+    replicas: int,
+    adjudicate_replicas: int,
 ) -> dict[str, Any]:
     active_layers = registry.activate(target.repo, target.changed_paths)
     lanes = _load_active_lanes(registry, lanes_root, target)
@@ -302,7 +313,7 @@ def _plan_payload(
         )
         for lane in lanes
         for chunk in chunks
-        for replica in range(1, _PLAN_REPLICAS + 1)
+        for replica in range(1, replicas + 1)
     ]
     ordered_runs = sorted(runs, key=lambda run: lpt_sort_key(run.lane.cost))
     return {
@@ -328,11 +339,13 @@ def _plan_payload(
                 "tier": lane.tier.value,
                 "cost": lane.cost,
                 "rules_count": len(lane.rules),
-                "replicas": _PLAN_REPLICAS,
+                "replicas": replicas,
             }
             for lane in lanes
         ],
         "dispatch_order": [run.lane.id for run in ordered_runs],
+        "replicas": replicas,
+        "adjudicate_replicas": adjudicate_replicas,
         "chunk_count": len(chunks),
         "total_runs": len(runs),
         "brief_source": _brief_source(target, dynamic_brief),
@@ -371,6 +384,7 @@ def _print_plan(payload: dict[str, Any]) -> None:
             str(lane_value["replicas"]),
         )
     _console.print(table)
+    _console.print(f"Adjudication replicas: {payload['adjudicate_replicas']}")
     _console.print(f"Chunks: {payload['chunk_count']}")
     _console.print(f"Total runs: {payload['total_runs']}")
 
@@ -450,6 +464,7 @@ def review(
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
     replicas: Annotated[int, Option("--replicas", min=1)] = 1,
+    adjudicate_replicas: Annotated[int, Option("--adjudicate-replicas", min=1)] = 3,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
@@ -463,7 +478,8 @@ def review(
                 target_spec=target,
                 repo_dir=repo_dir,
                 registry_root=registry_root,
-                replicas=replicas,
+                discover_replicas=replicas,
+                adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
                 out_root=out_root,
                 json_output=json_output,
@@ -493,7 +509,8 @@ async def _review_pipeline(
     target_spec: str,
     repo_dir: Path | None,
     registry_root: Path,
-    replicas: int,
+    discover_replicas: int,
+    adjudicate_replicas: int,
     concurrency: int,
     out_root: Path,
     json_output: bool,
@@ -511,7 +528,8 @@ async def _review_pipeline(
         target_spec=target_spec,
         repo_dir=repo_dir,
         registry_root=registry_root,
-        replicas=replicas,
+        discover_replicas=discover_replicas,
+        adjudicate_replicas=adjudicate_replicas,
         concurrency=concurrency,
         out_root=out_root,
         pause=pause,
@@ -561,7 +579,8 @@ async def _execute_pipeline(
     target_spec: str,
     repo_dir: Path | None,
     registry_root: Path,
-    replicas: int,
+    discover_replicas: int,
+    adjudicate_replicas: int,
     concurrency: int,
     out_root: Path,
     pause: bool,
@@ -581,7 +600,8 @@ async def _execute_pipeline(
         adjudicator=adjudicate,
         active_lanes=active_lanes,
         repo_dir=repo_dir,
-        replicas=replicas,
+        discover_replicas=discover_replicas,
+        adjudicate_replicas=adjudicate_replicas,
         concurrency=concurrency,
         out_root=out_root,
         pause=pause,
@@ -697,6 +717,44 @@ def _load_inherited_dispositions(
     return verdict
 
 
+def _discover_inherited_run_id(
+    *,
+    current_target: ResolvedTarget,
+    out_root: Path,
+    exclude_run_id: str,
+) -> str | None:
+    candidates: list[tuple[datetime, str]] = []
+    try:
+        entries = list(out_root.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        run_id = entry.name
+        if run_id == exclude_run_id:
+            continue
+        match = _RUN_ID_TIMESTAMP.match(run_id)
+        if match is None:
+            continue
+        try:
+            timestamp = datetime.strptime(match.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
+        except ValueError:
+            continue
+        candidates.append((timestamp, run_id))
+
+    for _timestamp, run_id in sorted(candidates, reverse=True):
+        try:
+            verdict = _load_inherited_dispositions(
+                run_id,
+                current_target=current_target,
+                out_root=out_root,
+            )
+        except _InheritanceSourceError:
+            continue
+        if verdict.findings:
+            return run_id
+    return None
+
+
 def _gate_failure_verdict(
     artifacts: _PipelineArtifacts,
     message: str,
@@ -748,10 +806,14 @@ def gate(
     run_id: Annotated[str | None, Option("--run")] = None,
     dispositions_path: Annotated[Path | None, Option("--dispositions")] = None,
     inherit_run_id: Annotated[str | None, Option("--inherit")] = None,
+    no_inherit: Annotated[bool, Option("--no-inherit")] = False,
     registry_root: Annotated[
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
     replicas: Annotated[int, Option("--replicas", min=1)] = _PLAN_REPLICAS,
+    adjudicate_replicas: Annotated[
+        int, Option("--adjudicate-replicas", min=1)
+    ] = _PLAN_ADJUDICATE_REPLICAS,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     execute: Annotated[bool, Option("--execute")] = False,
@@ -759,6 +821,12 @@ def gate(
 ) -> None:
     """Run or resume a fail-closed, artifact-backed pull-request gate."""
 
+    if inherit_run_id is not None and no_inherit:
+        _error_console.print(
+            "--inherit cannot be combined with --no-inherit",
+            markup=False,
+        )
+        raise typer.Exit(EXIT_USER_ERROR)
     if (target is None) == (run_id is None):
         _error_console.print("gate requires exactly one of --target or --run", markup=False)
         raise typer.Exit(EXIT_USER_ERROR)
@@ -774,8 +842,10 @@ def gate(
             run_id=run_id,
             dispositions_path=dispositions_path,
             inherit_run_id=inherit_run_id,
+            no_inherit=no_inherit,
             registry_root=registry_root,
-            replicas=replicas,
+            discover_replicas=replicas,
+            adjudicate_replicas=adjudicate_replicas,
             concurrency=concurrency,
             out_root=out_root,
             execute=execute,
@@ -790,8 +860,10 @@ async def _gate_pipeline(
     run_id: str | None,
     dispositions_path: Path | None,
     inherit_run_id: str | None,
+    no_inherit: bool,
     registry_root: Path,
-    replicas: int,
+    discover_replicas: int,
+    adjudicate_replicas: int,
     concurrency: int,
     out_root: Path,
     execute: bool,
@@ -821,7 +893,12 @@ async def _gate_pipeline(
                 except _InheritanceSourceError as exc:
                     _error_console.print(str(exc), markup=False)
                     raise typer.Exit(EXIT_USER_ERROR) from exc
-            plan = _gate_plan(registry_root, resolved, replicas)
+            plan = _gate_plan(
+                registry_root,
+                resolved,
+                discover_replicas,
+                adjudicate_replicas,
+            )
             with tempfile.TemporaryDirectory(prefix="rvw-gate-") as temporary_root:
                 checkout = provision_checkout(
                     repo=resolved.repo,
@@ -833,7 +910,8 @@ async def _gate_pipeline(
                     target_spec=target_spec,
                     repo_dir=checkout,
                     registry_root=registry_root,
-                    replicas=replicas,
+                    discover_replicas=discover_replicas,
+                    adjudicate_replicas=adjudicate_replicas,
                     concurrency=concurrency,
                     out_root=out_root,
                     pause=False,
@@ -843,6 +921,24 @@ async def _gate_pipeline(
             if executed is None:
                 raise RuntimeError("gate review stopped before report generation")
             artifacts = executed
+            if inherit_run_id is None and not no_inherit:
+                inherit_run_id = _discover_inherited_run_id(
+                    current_target=resolved,
+                    out_root=out_root,
+                    exclude_run_id=artifacts.run.run_id,
+                )
+                message_console = _error_console if json_output else _console
+                if inherit_run_id is None:
+                    message_console.print(
+                        "auto-inherit: no qualifying prior run found; "
+                        "proceeding without inheritance",
+                        markup=False,
+                    )
+                else:
+                    message_console.print(
+                        f"auto-inherit: selected {inherit_run_id}",
+                        markup=False,
+                    )
             save_gate_plan(artifacts.run.dir, plan)
         except typer.Exit:
             raise
@@ -1267,6 +1363,10 @@ def auto(
     publish: Annotated[bool | None, Option("--publish/--no-publish")] = None,
     allow_approve: Annotated[bool, Option("--allow-approve")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
+    replicas: Annotated[int, Option("--replicas", min=1)] = _PLAN_REPLICAS,
+    adjudicate_replicas: Annotated[
+        int, Option("--adjudicate-replicas", min=1)
+    ] = _PLAN_ADJUDICATE_REPLICAS,
 ) -> None:
     if allow_approve:
         _error_console.print(
@@ -1282,6 +1382,8 @@ def auto(
                 concurrency=concurrency,
                 publish=publish,
                 json_output=json_output,
+                discover_replicas=replicas,
+                adjudicate_replicas=adjudicate_replicas,
             )
         )
     except EmptyReviewDiffError as exc:
@@ -1296,13 +1398,16 @@ async def _auto_pipeline(
     concurrency: int,
     publish: bool | None,
     json_output: bool,
+    discover_replicas: int,
+    adjudicate_replicas: int,
 ) -> None:
     policy = load_policy(policy_path)
     artifacts = await _execute_pipeline(
         target_spec=target_spec,
         repo_dir=repo_dir,
         registry_root=DEFAULT_REGISTRY_ROOT,
-        replicas=_PLAN_REPLICAS,
+        discover_replicas=discover_replicas,
+        adjudicate_replicas=adjudicate_replicas,
         concurrency=concurrency,
         out_root=DEFAULT_RUN_ROOT,
         pause=False,
@@ -1352,11 +1457,22 @@ def plan(
     registry_root: Annotated[
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
+    replicas: Annotated[int, Option("--replicas", min=1)] = _PLAN_REPLICAS,
+    adjudicate_replicas: Annotated[
+        int, Option("--adjudicate-replicas", min=1)
+    ] = _PLAN_ADJUDICATE_REPLICAS,
 ) -> None:
     del pause
     registry, lanes_root = _load_registry_root(registry_root)
     resolved_target = _resolve_cli_target(target)
-    payload = _plan_payload(registry, lanes_root, resolved_target, dynamic_brief)
+    payload = _plan_payload(
+        registry,
+        lanes_root,
+        resolved_target,
+        dynamic_brief,
+        replicas,
+        adjudicate_replicas,
+    )
     if json_output:
         _write_json(payload)
     else:
@@ -1502,6 +1618,7 @@ def stack_review(
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
     replicas: Annotated[int, Option("--replicas", min=1)] = 1,
+    adjudicate_replicas: Annotated[int, Option("--adjudicate-replicas", min=1)] = 3,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
@@ -1513,7 +1630,8 @@ def stack_review(
             _stack_review_pipeline(
                 prs=prs,
                 registry_root=registry_root,
-                replicas=replicas,
+                discover_replicas=replicas,
+                adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
                 out_root=out_root,
                 json_output=json_output,
@@ -1536,7 +1654,8 @@ async def _stack_review_pipeline(
     *,
     prs: str,
     registry_root: Path,
-    replicas: int,
+    discover_replicas: int,
+    adjudicate_replicas: int,
     concurrency: int,
     out_root: Path,
     json_output: bool,
@@ -1571,7 +1690,8 @@ async def _stack_review_pipeline(
                 target_spec=str(member.number),
                 repo_dir=checkout,
                 registry_root=registry_root,
-                replicas=replicas,
+                discover_replicas=discover_replicas,
+                adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
                 out_root=out_root,
                 pause=False,
@@ -1601,7 +1721,7 @@ async def _stack_review_pipeline(
                     runtime=CodexRuntime(),
                     repo_dir=checkout,
                     out_root=handle.dir / "presence-runtime" / f"pr-{member.number}",
-                    replicas=replicas,
+                    replicas=adjudicate_replicas,
                     concurrency=concurrency,
                 )
                 lineages = [

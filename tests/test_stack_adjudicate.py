@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -25,6 +26,10 @@ from rvw.stack_adjudicate import (
     validate_presence_output,
 )
 from rvw.target import ResolvedTarget
+
+
+def test_presence_adjudication_defaults_to_three_replicas() -> None:
+    assert inspect.signature(adjudicate_presence).parameters["replicas"].default == 3
 
 
 def observation(pr_number: int, presence: Presence) -> PresenceObservation:
@@ -256,6 +261,7 @@ async def test_presence_accepts_non_monotonic_manifest_order(tmp_path: Path) -> 
         runtime=fake,
         repo_dir=tmp_path,
         out_root=tmp_path / "presence",
+        replicas=1,
     )
 
     assert outcome.observations[candidate.lineage_id].pr_number == 15
@@ -286,6 +292,7 @@ async def test_presence_maps_batch_local_ids_back_to_persisted_ids(
         runtime=fake,
         repo_dir=tmp_path,
         out_root=tmp_path / "presence",
+        replicas=1,
     )
 
     assert outcome.observations[first.lineage_id].presence is Presence.PRESENT

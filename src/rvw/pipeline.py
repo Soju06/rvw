@@ -73,7 +73,8 @@ async def execute_pipeline(
     runtime: Runtime,
     adjudicator: Adjudicator,
     repo_dir: Path | None,
-    replicas: int,
+    discover_replicas: int,
+    adjudicate_replicas: int,
     concurrency: int,
     out_root: Path,
     pause: bool,
@@ -83,6 +84,10 @@ async def execute_pipeline(
 ) -> PipelineArtifacts | None:
     """Execute and persist DISCOVER, MERGE, ADJUDICATE, and REPORT."""
 
+    if discover_replicas < 1:
+        raise ValueError("discover_replicas must be at least 1")
+    if adjudicate_replicas < 1:
+        raise ValueError("adjudicate_replicas must be at least 1")
     run = RunStore(out_root).create(target)
     run.save_target(target)
     brief = dynamic_brief.read_text(encoding="utf-8") if dynamic_brief is not None else None
@@ -94,7 +99,7 @@ async def execute_pipeline(
         out_root=run.dir / "discover-runtime",
         brief=brief,
         brief_source="operator" if dynamic_brief is not None else None,
-        replicas=replicas,
+        replicas=discover_replicas,
         concurrency=concurrency,
     )
     run.save_discover(discovered)
@@ -122,7 +127,7 @@ async def execute_pipeline(
             runtime=runtime,
             repo_dir=repo_dir,
             out_root=run.dir / "adjudicate-runtime",
-            replicas=replicas,
+            replicas=adjudicate_replicas,
             concurrency=concurrency,
         )
         run.save_outcome(outcome)

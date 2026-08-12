@@ -15,22 +15,32 @@ The `review` and `auto` commands MUST use the same target-resolution, DISCOVER, 
 
 ### Requirement: Routine review modes default to one replica
 
-The `rvw review` and `rvw auto` commands MUST default to one discovery and adjudication replica, and `rvw plan` MUST report one replica in its payload and calculate default total runs from that count. Review commands that expose `--replicas` MUST accept an explicit positive count and MUST preserve replicated execution when the count is greater than one.
+The `rvw review` and `rvw auto` commands MUST default to one discovery replica and three adjudication replicas. Commands that expose `--replicas` MUST use it only as the positive discovery replica count, MUST expose an independently positive `--adjudicate-replicas` count, and MUST preserve explicit values for each stage. `rvw plan` MUST report the discovery count as `replicas`, MUST report the adjudication count as `adjudicate_replicas`, and MUST calculate discovery run totals from the discovery count only.
 
-#### Scenario: Review uses its default replica count
+#### Scenario: Review uses split defaults
 
-- **WHEN** `rvw review` is invoked without `--replicas`
-- **THEN** the shared pipeline receives one replica for discovery and adjudication
+- **WHEN** `rvw review` is invoked without replica overrides
+- **THEN** the shared pipeline receives one discovery replica and three adjudication replicas
 
-#### Scenario: Plan reports the routine default
+#### Scenario: Plan reports split routine defaults
 
-- **WHEN** `rvw plan` renders a plan without a replica override
-- **THEN** its payload reports `replicas: 1` and its total run count uses one run per active lane per diff chunk
+- **WHEN** `rvw plan` renders a plan without replica overrides
+- **THEN** its payload reports `replicas: 1` and `adjudicate_replicas: 3`, and its total discovery run count uses one run per active lane per diff chunk
 
-#### Scenario: Replication is explicitly requested
+#### Scenario: Discovery replication is explicitly requested
 
-- **WHEN** a review command is invoked with `--replicas 3`
-- **THEN** the shared pipeline receives three replicas without changing dispatch, retry, widening, or voting behavior
+- **WHEN** a review command is invoked with `--replicas 2`
+- **THEN** the shared pipeline receives two discovery replicas and the independently selected adjudication count
+
+#### Scenario: Single-vote adjudication is explicitly requested
+
+- **WHEN** a review command is invoked with `--adjudicate-replicas 1`
+- **THEN** the shared pipeline preserves one adjudication replica without changing discovery dispatch, retry, widening, or voting rules
+
+#### Scenario: Replica count is invalid
+
+- **WHEN** either replica option is supplied with a value below one
+- **THEN** the command rejects the invocation before executing the pipeline
 
 ### Requirement: Runtime-executing commands expose bounded concurrency
 
