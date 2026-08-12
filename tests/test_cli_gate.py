@@ -389,7 +389,10 @@ def test_gate_auto_inherit_excludes_runs_newer_than_current(
 
     assert result.exit_code == 0, result.stderr
     assert f"auto-inherit: selected {older.run_id}" in result.stdout
-    assert "rvw-20990101-000000-pr-42" not in result.stdout
+    assert "rvw-20990101-000000-pr-42: newer_than_current" in result.stdout
+    persisted = current.run.load_gate_verdict()
+    assert persisted.inheritance_summary is not None
+    assert persisted.inheritance_summary.source_run_id == older.run_id
 
 
 def test_gate_auto_inherit_excludes_current_run(

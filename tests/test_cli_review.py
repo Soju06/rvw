@@ -201,24 +201,31 @@ def test_review_rejects_zero_concurrency_before_execution(
     assert calls == []
 
 
-async def test_shared_pipeline_propagates_concurrency_to_discovery_and_adjudication(
+async def test_shared_pipeline_propagates_split_replicas_and_concurrency(
     tmp_path: Path,
     registry_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    concurrency_calls: list[tuple[str, int]] = []
+    """Each stage must receive ITS OWN replica count: distinct values prove
+    execute_pipeline cannot forward one count to both stages."""
+
+    stage_calls: list[tuple[str, int, int]] = []
 
     async def fake_discover(**kwargs: object) -> DiscoverResult:
+        replicas = kwargs["replicas"]
         concurrency = kwargs["concurrency"]
+        assert isinstance(replicas, int)
         assert isinstance(concurrency, int)
-        concurrency_calls.append(("discover", concurrency))
+        stage_calls.append(("discover", replicas, concurrency))
         return DiscoverResult(lane_results={}, findings=[], coverage=[])
 
     async def fake_adjudicate(merged: MergeResult, **kwargs: object) -> AdjudicationOutcome:
         del merged
+        replicas = kwargs["replicas"]
         concurrency = kwargs["concurrency"]
+        assert isinstance(replicas, int)
         assert isinstance(concurrency, int)
-        concurrency_calls.append(("adjudicate", concurrency))
+        stage_calls.append(("adjudicate", replicas, concurrency))
         return AdjudicationOutcome(
             verdicts={},
             reasons={},
@@ -241,15 +248,15 @@ async def test_shared_pipeline_propagates_concurrency_to_discovery_and_adjudicat
         runtime=cast(Runtime, FakeRuntime()),
         adjudicator=fake_adjudicate,
         repo_dir=checkout,
-        discover_replicas=1,
-        adjudicate_replicas=1,
+        discover_replicas=2,
+        adjudicate_replicas=5,
         concurrency=3,
         out_root=tmp_path / "runs",
         pause=False,
         dynamic_brief=None,
     )
 
-    assert concurrency_calls == [("discover", 3), ("adjudicate", 3)]
+    assert stage_calls == [("discover", 2, 3), ("adjudicate", 5, 3)]
 
 
 def test_review_end_to_end_writes_all_stages_and_json_shape(

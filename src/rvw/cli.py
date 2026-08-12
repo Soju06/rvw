@@ -739,7 +739,16 @@ def _discover_inherited_run_id(
 ) -> _InheritanceScan:
     candidates: list[tuple[datetime, str]] = []
     current_parsed = parse_pr_run_id(exclude_run_id)
-    current_timestamp = current_parsed[0] if current_parsed is not None else None
+    if current_parsed is None:
+        # The current run id always comes from RunStore.create for a PR
+        # target; failing to parse it means generator/parser drift. Refuse to
+        # scan rather than silently disabling the newer-run ordering guard.
+        return _InheritanceScan(
+            run_id=None,
+            scan_error=f"current run id not canonical: {exclude_run_id}",
+        )
+    current_timestamp = current_parsed[0]
+    skipped: list[str] = []
     try:
         entries = list(out_root.iterdir())
     except OSError as exc:
@@ -754,13 +763,13 @@ def _discover_inherited_run_id(
         timestamp, pr_number = parsed
         if pr_number != current_target.pr_number:
             continue
-        if current_timestamp is not None and timestamp >= current_timestamp:
+        if timestamp >= current_timestamp:
             # A concurrent gate allocated after this run must never become
             # this run's "prior" source (selection-order inversion).
+            skipped.append(f"{run_id}: newer_than_current")
             continue
         candidates.append((timestamp, run_id))
 
-    skipped: list[str] = []
     for _timestamp, run_id in sorted(candidates, reverse=True):
         try:
             verdict = _load_inherited_dispositions(
