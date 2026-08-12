@@ -9,6 +9,8 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 - Owner decisions (2026-07-30 and 2026-08-12): ordinary `review`, `gate`, and `auto` runs keep one discovery replica because lanes x replicas x concurrent rvw instances overloaded `codex-lb`; four concurrent runs were observed demanding up to 64 sessions. Adjudication now defaults independently to three replicas because production reviews dispatched a median of one adjudication run versus eight discovery runs, so majority evidence adds token cost without increasing peak executor sessions.
 - Owner decision (2026-08-06): runtime wave concurrency defaults to eight after concurrent rvw runs saturated the shared `codex-lb` account pool, triggering local `account_stream_cap` overload, 30-second retry sleeps, and lane INVALIDs. Operators can set a positive `--concurrency` value on every command capable of runtime execution.
 - 2026-08-12: Per-process semaphores do not bound a shared host: six processes at the default capacity of 8 implied 48 theoretical runtime streams. Runtime commands therefore share a host-local flock gate capped at 12 by default; the effective bound is the smaller of the process and host caps, while `RVW_HOST_CONCURRENCY=0` disables the host gate.
+- 2026-08-12: On Linux, spawned runtime wrappers use `PR_SET_PDEATHSIG(SIGTERM)` plus a post-`prctl` parent-PID check. This prevents a SIGKILLed rvw process from releasing its flock while an orphaned timeout/codex execution continues consuming a gateway stream. Other platforms do not guarantee this coupling.
+- Slot directories are owner-only trust boundaries: pre-existing owned directories are normalized and descriptor-verified at 0700, `O_NOFOLLOW` is mandatory, and slot files are opened relative to a held validated directory descriptor.
 - ADR-009 keeps one stage implementation while providing `review` and `auto` command surfaces. Policy handles reproducible inclusion/severity decisions after model-based factual adjudication.
 - The implemented pause point is after MERGE. This supersedes ADR-009 D2's original wording that pause occurred after ADJUDICATE.
 - Approval is not expressible. Policy allows only `comment` or `none`; `--allow-approve` prints a placeholder warning and does not change publication event type.
@@ -35,6 +37,8 @@ This capability defines how operators and CI enter the common pipeline, how YAML
   dispositions; presence adjudication is a separate claim-status pass after
   each ordinary member review.
 - The host cap is configured only through `RVW_HOST_CONCURRENCY`; it is local to one host and does not change `--concurrency` semantics.
+- Cap-sharded `c{cap}` directories intentionally avoid cross-cap deadlock. Operators changing `RVW_HOST_CONCURRENCY` while processes are active temporarily run disjoint pools without one shared bound; the host bound converges when configurations converge.
+- After scanning all slots non-blockingly, a contending process waits on one uniformly random slot rather than rescanning. Kernel wakeup on that inode avoids a busy loop, but a free slot elsewhere may not wake that waiter; the effect is bounded by the configured cap.
 
 ## Failure modes
 

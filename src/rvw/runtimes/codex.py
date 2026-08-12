@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
+import os
 import re
+import signal
+import sys
 import time
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,6 +23,21 @@ from rvw.schema import RuntimeLaneOutput
 
 _REPLICA_DIRECTORY = re.compile(r"r([1-9][0-9]*)")
 _COMPLETION_MARKER = "tokens used"
+_PR_SET_PDEATHSIG = 1
+_LIBC = ctypes.CDLL(None, use_errno=True) if sys.platform.startswith("linux") else None
+
+
+def _set_parent_death_signal(parent_pid: int) -> None:
+    """Couple a Linux child to its parent; other platforms are unchanged."""
+
+    if _LIBC is None:
+        return
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    if _LIBC.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+    if os.getppid() != parent_pid:
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 async def _spawn(
@@ -25,6 +45,7 @@ async def _spawn(
 ) -> int:
     """Run a command without a shell and combine its output in one log."""
 
+    parent_pid = os.getpid()
     with log_path.open("wb") as log_file:
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -32,6 +53,7 @@ async def _spawn(
             stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
+            preexec_fn=partial(_set_parent_death_signal, parent_pid),
         )
         await process.communicate(stdin_text.encode("utf-8"))
     if process.returncode is None:

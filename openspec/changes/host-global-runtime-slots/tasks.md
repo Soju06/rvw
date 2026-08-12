@@ -26,3 +26,20 @@
   contexts with the implemented behavior.
 - [x] 3.2 Run the five required bare verification gates and inspect the final
   diff for scope drift.
+
+## 4. Adversarial Review Remediation
+
+- [x] 4.1 Extend the operation-modes delta and synchronized main
+  specification/context for Linux runtime-child parent-death coupling, strict
+  slot-directory permissions, descriptor-relative opens, mandatory
+  `O_NOFOLLOW`, and the accepted design dispositions.
+- [x] 4.2 Add offline Linux regression coverage proving a runtime child exits
+  after its spawning rvw process receives `SIGKILL`.
+- [x] 4.3 Add real cross-process regressions proving a live holder blocks
+  non-blocking acquisition and `SIGKILL` releases its flock.
+- [x] 4.4 Add regressions for pre-existing directory mode enforcement,
+  descriptor-relative slot opens, and missing `O_NOFOLLOW` support.
+- [x] 4.5 Implement the Linux parent-death signal and hardened descriptor-based
+  host-slot directory/file handling.
+- [x] 4.6 Run every required bare verification gate and inspect the final diff
+  for scope drift, including `uv.lock` and the external runtime registry.

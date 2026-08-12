@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -13,6 +18,48 @@ from rvw.runtimes import RunStatus
 from rvw.runtimes.codex import CodexRuntime
 
 FIXTURE = Path(__file__).parent / "fixtures" / "lanes" / "slop-hygiene.md"
+
+_SLEEP_CHILD_SCRIPT = """
+import os
+import sys
+import time
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(f"{os.getppid()} {os.getpid()}", encoding="utf-8")
+time.sleep(60)
+"""
+_SPAWN_PARENT_SCRIPT = f"""
+import asyncio
+import sys
+from pathlib import Path
+
+from rvw.runtimes.codex import _spawn
+
+
+async def main() -> None:
+    command = [
+        "timeout",
+        "--foreground",
+        "--signal=TERM",
+        "60s",
+        sys.executable,
+        "-c",
+        {_SLEEP_CHILD_SCRIPT!r},
+        sys.argv[1],
+    ]
+    await _spawn(command, "", Path(sys.argv[2]))
+
+
+asyncio.run(main())
+"""
+
+
+def _linux_process_is_running(pid: int) -> bool:
+    try:
+        stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    return stat_text.rsplit(") ", maxsplit=1)[1][0] != "Z"
 
 
 def valid_payload() -> dict[str, object]:
@@ -217,6 +264,49 @@ async def test_execute_raw_uses_custom_schema_validator_and_workdir(
     assert result.output.answer == "yes"
     assert json.loads((run_dir / "schema.json").read_text(encoding="utf-8")) == schema
     assert calls[0][1] == workdir
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux parent-death signal")
+def test_spawned_runtime_child_terminates_after_parent_sigkill(tmp_path: Path) -> None:
+    child_pid_path = tmp_path / "child.pid"
+    log_path = tmp_path / "child.log"
+    parent = subprocess.Popen(
+        [sys.executable, "-c", _SPAWN_PARENT_SCRIPT, str(child_pid_path), str(log_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    child_pids: tuple[int, int] | None = None
+    try:
+        ready_deadline = time.monotonic() + 3
+        while time.monotonic() < ready_deadline:
+            if child_pid_path.exists():
+                wrapper_pid, runtime_pid = child_pid_path.read_text(encoding="utf-8").split()
+                child_pids = (int(wrapper_pid), int(runtime_pid))
+                break
+            if parent.poll() is not None:
+                stdout, stderr = parent.communicate()
+                pytest.fail(f"spawn parent exited before readiness: {stdout=} {stderr=}")
+            time.sleep(0.01)
+        assert child_pids is not None, "runtime child did not signal readiness"
+
+        parent.send_signal(signal.SIGKILL)
+        parent.wait(timeout=3)
+
+        exit_deadline = time.monotonic() + 3
+        while (
+            any(_linux_process_is_running(pid) for pid in child_pids)
+            and time.monotonic() < exit_deadline
+        ):
+            time.sleep(0.01)
+        assert not any(_linux_process_is_running(pid) for pid in child_pids)
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait(timeout=3)
+        for child_pid in child_pids or ():
+            if _linux_process_is_running(child_pid):
+                os.kill(child_pid, signal.SIGKILL)
 
 
 @pytest.mark.live

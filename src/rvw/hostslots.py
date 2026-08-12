@@ -8,7 +8,7 @@ import os
 import random
 import stat
 from collections.abc import AsyncIterator, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 HOST_CONCURRENCY_ENV = "RVW_HOST_CONCURRENCY"
@@ -39,18 +39,15 @@ def _default_base_dir(environ: Mapping[str, str]) -> tuple[Path, Path | None]:
     return Path("/tmp/rvw-slots"), None
 
 
-def _checked_directory(path: Path, *, create: bool) -> None:
+def _checked_directory(path: Path, *, create: bool, nofollow: int) -> int:
     try:
         info = path.lstat()
     except FileNotFoundError:
         if not create:
             raise RuntimeError(f"host slot directory does not exist: {path}") from None
         try:
-            try:
+            with suppress(FileExistsError):
                 path.mkdir(mode=0o700)
-                path.chmod(0o700)
-            except FileExistsError:
-                pass
             info = path.lstat()
         except OSError as exc:
             raise RuntimeError(f"could not create host slot directory {path}: {exc}") from exc
@@ -66,7 +63,7 @@ def _checked_directory(path: Path, *, create: bool) -> None:
             f"host slot directory is owned by uid {info.st_uid}, expected {os.getuid()}: {path}"
         )
 
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | nofollow
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
@@ -75,8 +72,21 @@ def _checked_directory(path: Path, *, create: bool) -> None:
         opened = os.fstat(descriptor)
         if opened.st_uid != os.getuid() or not stat.S_ISDIR(opened.st_mode):
             raise RuntimeError(f"host slot directory changed during validation: {path}")
-    finally:
+        try:
+            os.fchmod(descriptor, 0o700)
+        except OSError as exc:
+            raise RuntimeError(f"could not enforce mode 0700 on {path}: {exc}") from exc
+        verified = os.fstat(descriptor)
+        if (
+            verified.st_uid != os.getuid()
+            or not stat.S_ISDIR(verified.st_mode)
+            or stat.S_IMODE(verified.st_mode) != 0o700
+        ):
+            raise RuntimeError(f"host slot directory failed descriptor verification: {path}")
+    except BaseException:
         os.close(descriptor)
+        raise
+    return descriptor
 
 
 class HostSlotGate:
@@ -91,24 +101,48 @@ class HostSlotGate:
     ) -> None:
         if cap < 1:
             raise ValueError("host slot cap must be at least 1")
+        if not hasattr(os, "O_NOFOLLOW"):
+            raise RuntimeError("host slot gate requires os.O_NOFOLLOW support")
         environment = os.environ if environ is None else environ
         default_base, checked_parent = _default_base_dir(environment)
         self.cap = cap
+        self._nofollow = os.O_NOFOLLOW
         self.base_dir = default_base if base_dir is None else base_dir
         self.slot_dir = self.base_dir / f"c{cap}"
         self._checked_parent = checked_parent if base_dir is None else None
 
-    def _prepare(self) -> None:
-        if self._checked_parent is not None:
-            _checked_directory(self._checked_parent, create=False)
-        _checked_directory(self.base_dir, create=True)
-        _checked_directory(self.slot_dir, create=True)
-
-    def _open_slot(self, index: int) -> int:
-        path = self.slot_dir / f"slot-{index:02d}"
-        flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+    def _prepare(self) -> int:
+        parent_descriptor: int | None = None
+        base_descriptor: int | None = None
         try:
-            descriptor = os.open(path, flags, 0o600)
+            if self._checked_parent is not None:
+                parent_descriptor = _checked_directory(
+                    self._checked_parent,
+                    create=False,
+                    nofollow=self._nofollow,
+                )
+            base_descriptor = _checked_directory(
+                self.base_dir,
+                create=True,
+                nofollow=self._nofollow,
+            )
+            return _checked_directory(
+                self.slot_dir,
+                create=True,
+                nofollow=self._nofollow,
+            )
+        finally:
+            if base_descriptor is not None:
+                os.close(base_descriptor)
+            if parent_descriptor is not None:
+                os.close(parent_descriptor)
+
+    def _open_slot(self, directory_descriptor: int, index: int) -> int:
+        name = f"slot-{index:02d}"
+        path = self.slot_dir / f"slot-{index:02d}"
+        flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | self._nofollow
+        try:
+            descriptor = os.open(name, flags, 0o600, dir_fd=directory_descriptor)
         except OSError as exc:
             raise RuntimeError(f"could not securely open host slot {path}: {exc}") from exc
         try:
@@ -125,27 +159,33 @@ class HostSlotGate:
         return descriptor
 
     def _acquire_blocking(self) -> int:
-        self._prepare()
-        start = random.randrange(self.cap)
-        for offset in range(self.cap):
-            descriptor = self._open_slot((start + offset) % self.cap)
+        directory_descriptor = self._prepare()
+        try:
+            start = random.randrange(self.cap)
+            for offset in range(self.cap):
+                descriptor = self._open_slot(
+                    directory_descriptor,
+                    (start + offset) % self.cap,
+                )
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    os.close(descriptor)
+                except BaseException:
+                    os.close(descriptor)
+                    raise
+                else:
+                    return descriptor
+
+            descriptor = self._open_slot(directory_descriptor, start)
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                os.close(descriptor)
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
             except BaseException:
                 os.close(descriptor)
                 raise
-            else:
-                return descriptor
-
-        descriptor = self._open_slot(start)
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-        except BaseException:
-            os.close(descriptor)
-            raise
-        return descriptor
+            return descriptor
+        finally:
+            os.close(directory_descriptor)
 
     async def _acquire(self) -> int:
         worker = asyncio.create_task(asyncio.to_thread(self._acquire_blocking))
