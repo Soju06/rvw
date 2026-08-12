@@ -142,7 +142,7 @@ def patch_target_dependencies(
     monkeypatch.setattr(
         cli_module,
         "_gate_plan",
-        lambda registry_root, resolved, replicas, adjudicate_replicas=3: GatePlan(
+        lambda registry_root, resolved, replicas, adjudicate_replicas: GatePlan(
             schema_version=1,
             lane_ids=["lane-a"],
             replicas=replicas,
@@ -240,35 +240,35 @@ def test_gate_auto_inherit_selects_newest_qualifying_run_among_decoys(
     inherited_source(
         out_root,
         current,
-        run_id="rvw-20260812-100000-pr-42",
+        run_id="rvw-20250810-100000-pr-42",
     )
     selected = inherited_source(
         out_root,
         current,
-        run_id="rvw-20260812-110000-pr-42",
+        run_id="rvw-20250810-110000-pr-42",
     )
     inherited_source(
         out_root,
         current,
-        run_id="rvw-20260812-120000-pr-99",
+        run_id="rvw-20250810-120000-pr-99",
         pr_number=99,
     )
     inherited_source(
         out_root,
         current,
-        run_id="rvw-20260812-130000-pr-42",
+        run_id="rvw-20250810-130000-pr-42",
         repo="other/repo",
     )
     inherited_source(
         out_root,
         current,
-        run_id="rvw-20260812-140000-commit-abcdef123",
+        run_id="rvw-20250810-140000-commit-abcdef123",
         target_kind="commit",
     )
     inherited_source(
         out_root,
         current,
-        run_id="rvw-20260812-150000-pr-42",
+        run_id="rvw-20250810-150000-pr-42",
         include_findings=False,
     )
     patch_target_dependencies(monkeypatch, current)
@@ -294,7 +294,7 @@ def test_gate_auto_inherit_rejects_suffixed_run_id(
 
     out_root = tmp_path / "runs"
     current = prepared_artifacts(out_root, actionable=True)
-    hostile = "rvw-20260812-160000-pr-42-github_pat_SECRETSECRET"
+    hostile = "rvw-20250810-160000-pr-42-github_pat_SECRETSECRET"
     inherited_source(out_root, current, run_id=hostile)
     patch_target_dependencies(monkeypatch, current)
 
@@ -315,12 +315,12 @@ def test_gate_auto_inherit_skips_unreadable_candidate(
 
     out_root = tmp_path / "runs"
     current = prepared_artifacts(out_root, actionable=True)
-    older = inherited_source(out_root, current, run_id="rvw-20260812-100000-pr-42")
-    inherited_source(out_root, current, run_id="rvw-20260812-110000-pr-42")
+    older = inherited_source(out_root, current, run_id="rvw-20250810-100000-pr-42")
+    inherited_source(out_root, current, run_id="rvw-20250810-110000-pr-42")
     original = cli_module._load_inherited_dispositions
 
     def flaky(run_id: str, *, current_target: ResolvedTarget, out_root: Path) -> GateVerdict:
-        if run_id == "rvw-20260812-110000-pr-42":
+        if run_id == "rvw-20250810-110000-pr-42":
             raise PermissionError(13, "Permission denied")
         return original(run_id, current_target=current_target, out_root=out_root)
 
@@ -334,7 +334,7 @@ def test_gate_auto_inherit_skips_unreadable_candidate(
 
     assert result.exit_code == 0, result.stderr
     assert f"auto-inherit: selected {older.run_id}" in result.stdout
-    assert "rvw-20260812-110000-pr-42: PermissionError" in result.stdout
+    assert "rvw-20250810-110000-pr-42: PermissionError" in result.stdout
 
 
 def test_gate_auto_inherit_reports_scan_failure_distinctly(
@@ -361,6 +361,35 @@ def test_gate_auto_inherit_reports_scan_failure_distinctly(
 
     assert "auto-inherit: run-root scan failed (PermissionError" in result.stdout
     assert "no qualifying prior run found" not in result.stdout
+    # The gate must PROCEED past the failed scan, not abort: the actionable
+    # fixture pauses with a disposition template and a persisted pause verdict.
+    assert result.exit_code == 1, result.stdout
+    assert "actionable findings require dispositions" in result.stdout
+    assert (current.run.dir / "gate-dispositions.yaml").is_file()
+    persisted = current.run.load_gate_verdict()
+    assert persisted.kind == "pause"
+
+
+def test_gate_auto_inherit_excludes_runs_newer_than_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent gate allocated AFTER the current run must never be
+    selected as the current run's 'prior' source (order inversion)."""
+
+    out_root = tmp_path / "runs"
+    current = prepared_artifacts(out_root, actionable=True)
+    older = inherited_source(out_root, current, run_id="rvw-20250810-100000-pr-42")
+    inherited_source(out_root, current, run_id="rvw-20990101-000000-pr-42")
+    patch_target_dependencies(monkeypatch, current)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["gate", "--target", "42", "--out", str(out_root)],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert f"auto-inherit: selected {older.run_id}" in result.stdout
+    assert "rvw-20990101-000000-pr-42" not in result.stdout
 
 
 def test_gate_auto_inherit_excludes_current_run(
@@ -416,11 +445,11 @@ def test_parse_pr_run_id_rejects_trailing_newline() -> None:
 
     from rvw.store import parse_pr_run_id
 
-    canonical = "rvw-20260812-100000-pr-42"
+    canonical = "rvw-20250810-100000-pr-42"
     assert parse_pr_run_id(canonical) is not None
     assert parse_pr_run_id(canonical + "\n") is None
-    assert parse_pr_run_id("rvw-20260812-100000-123456-pr-42") is not None
-    assert parse_pr_run_id("rvw-20260812-100000-123456-pr-42\n") is None
+    assert parse_pr_run_id("rvw-20250810-100000-123456-pr-42") is not None
+    assert parse_pr_run_id("rvw-20250810-100000-123456-pr-42\n") is None
 
 
 def test_gate_no_inherit_suppresses_auto_discovery(
@@ -431,7 +460,7 @@ def test_gate_no_inherit_suppresses_auto_discovery(
     source = inherited_source(
         out_root,
         current,
-        run_id="rvw-20260812-110000-pr-42",
+        run_id="rvw-20250810-110000-pr-42",
     )
     patch_target_dependencies(monkeypatch, current)
 
@@ -455,12 +484,12 @@ def test_gate_explicit_inherit_wins_over_newer_automatic_candidate(
     explicit = inherited_source(
         out_root,
         current,
-        run_id="rvw-20260812-100000-pr-42",
+        run_id="rvw-20250810-100000-pr-42",
     )
     inherited_source(
         out_root,
         current,
-        run_id="rvw-20260812-150000-pr-42",
+        run_id="rvw-20250810-150000-pr-42",
     )
     patch_target_dependencies(monkeypatch, current)
 
@@ -623,7 +652,7 @@ def test_gate_target_invalid_inherit_stops_before_provision_or_review(
     monkeypatch.setattr(
         cli_module,
         "_gate_plan",
-        lambda registry_root, resolved, replicas, adjudicate_replicas=3: GatePlan(
+        lambda registry_root, resolved, replicas, adjudicate_replicas: GatePlan(
             schema_version=1,
             lane_ids=["lane-a"],
             replicas=replicas,
@@ -1142,7 +1171,7 @@ def test_gate_checkout_failure_is_operational_error(
     monkeypatch.setattr(
         cli_module,
         "_gate_plan",
-        lambda registry_root, resolved, replicas, adjudicate_replicas=3: GatePlan(
+        lambda registry_root, resolved, replicas, adjudicate_replicas: GatePlan(
             schema_version=1,
             lane_ids=["lane-a"],
             replicas=replicas,

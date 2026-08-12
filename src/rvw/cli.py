@@ -738,6 +738,8 @@ def _discover_inherited_run_id(
     exclude_run_id: str,
 ) -> _InheritanceScan:
     candidates: list[tuple[datetime, str]] = []
+    current_parsed = parse_pr_run_id(exclude_run_id)
+    current_timestamp = current_parsed[0] if current_parsed is not None else None
     try:
         entries = list(out_root.iterdir())
     except OSError as exc:
@@ -751,6 +753,10 @@ def _discover_inherited_run_id(
             continue
         timestamp, pr_number = parsed
         if pr_number != current_target.pr_number:
+            continue
+        if current_timestamp is not None and timestamp >= current_timestamp:
+            # A concurrent gate allocated after this run must never become
+            # this run's "prior" source (selection-order inversion).
             continue
         candidates.append((timestamp, run_id))
 
@@ -1062,6 +1068,15 @@ async def _gate_pipeline(
         except _InheritanceSourceError as exc:
             _error_console.print(str(exc), markup=False)
             raise typer.Exit(EXIT_USER_ERROR) from exc
+        except OSError as exc:
+            # The source can become unreadable between discovery-time
+            # validation and this second read; fail with a controlled exit
+            # instead of letting a raw filesystem error escape the CLI.
+            _error_console.print(
+                f"inherit_source_unreadable: {inherit_run_id}: {type(exc).__name__}: {exc}",
+                markup=False,
+            )
+            raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
     anchor = GateAnchor(base_sha=target.base_sha, head_sha=target.head_sha)
     try:
         current = query_pull_request(target.repo, target.pr_number)
