@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
+import signal
 import sys
 import time
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -25,28 +27,48 @@ _PROCESS_TERMINATION_TIMEOUT_SECONDS = 5
 _SETPRIV = shutil.which("setpriv") if sys.platform.startswith("linux") else None
 
 
-async def _terminate_and_reap(process: asyncio.subprocess.Process) -> None:
+async def _terminate_and_reap(process: asyncio.subprocess.Process, log_file: BinaryIO) -> None:
     """Terminate a started subprocess, escalating to SIGKILL after a bounded wait."""
 
     if process.returncode is not None:
         return
+    pgid: int | None = None
     with suppress(ProcessLookupError):
-        process.terminate()
+        pgid = os.getpgid(process.pid)
+    if pgid is None:
+        with suppress(ProcessLookupError):
+            process.terminate()
+    else:
+        with suppress(ProcessLookupError):
+            os.killpg(pgid, signal.SIGTERM)
     try:
         await asyncio.wait_for(
             process.wait(),
             timeout=_PROCESS_TERMINATION_TIMEOUT_SECONDS,
         )
     except TimeoutError:
-        with suppress(ProcessLookupError):
-            process.kill()
+        if pgid is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+            signal_target = f"pid {process.pid}"
+        else:
+            with suppress(ProcessLookupError):
+                os.killpg(pgid, signal.SIGKILL)
+            signal_target = f"pgid {pgid}"
         await process.wait()
+        marker = (
+            "rvw: graceful termination timed out after "
+            f"{_PROCESS_TERMINATION_TIMEOUT_SECONDS}s; escalated to SIGKILL "
+            f"({signal_target})\n"
+        )
+        log_file.write(marker.encode("utf-8"))
+        log_file.flush()
 
 
-async def _cleanup_before_unwind(process: asyncio.subprocess.Process) -> None:
+async def _cleanup_before_unwind(process: asyncio.subprocess.Process, log_file: BinaryIO) -> None:
     """Finish subprocess cleanup even if the awaiting task is cancelled again."""
 
-    cleanup = asyncio.create_task(_terminate_and_reap(process))
+    cleanup = asyncio.create_task(_terminate_and_reap(process, log_file))
     while not cleanup.done():
         try:
             await asyncio.shield(cleanup)
@@ -72,11 +94,12 @@ async def _spawn(
             stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
+            start_new_session=True,
         )
         try:
             await process.communicate(stdin_text.encode("utf-8"))
         except BaseException:
-            await _cleanup_before_unwind(process)
+            await _cleanup_before_unwind(process, log_file)
             raise
     if process.returncode is None:
         raise RuntimeError("subprocess completed without a return code")

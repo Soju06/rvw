@@ -22,10 +22,11 @@ instead of burning retry sleeps.
 
 ### flock slot directory, kernel-released on death
 
-The gate is a directory of `_RVW_HOST_SLOT_COUNT` lock files (`slot-00` ..)
-under `$XDG_RUNTIME_DIR/rvw-slots/` when set, else `/tmp/rvw-slots/`,
-sharded by cap value (`.../c{cap}/`) so mixed-cap processes never deadlock on
-mismatched slot counts. Acquisition tries each slot file with
+The gate's slot count comes from `RVW_HOST_CONCURRENCY` and is stored as
+`HostSlotGate.cap`. Its lock files (`slot-00` through `slot-{cap-1}`) live
+under `$XDG_RUNTIME_DIR/rvw-slots/c{cap}/` when `XDG_RUNTIME_DIR` is set, else
+`/tmp/rvw-slots/c{cap}/`, so mixed-cap processes never deadlock on mismatched
+slot counts. Acquisition tries each slot file with
 `flock(LOCK_EX | LOCK_NB)` in random start order. If none is free, the async
 caller sleeps with modest jitter and capped backoff before rescanning every
 slot. `flock` locks are released by the kernel when
@@ -70,10 +71,13 @@ descriptor held and no blocking executor thread stranded. Polling does not
 provide kernel FIFO fairness, which is acceptable for caps of at most dozens
 and sub-second scans.
 
-Once a runtime subprocess starts, cancellation or any other exceptional unwind
-terminates and reaps it before the host-slot context can exit. Cleanup waits up
-to five seconds after `terminate()`, then escalates to `kill()` and waits again.
-This preserves the host cap even while the rvw parent remains alive.
+Each runtime wrapper leads a dedicated process group. Once a runtime subprocess
+starts, cancellation or any other exceptional unwind sends `SIGTERM` to that
+group and reaps the wrapper before the host-slot context can exit. Cleanup waits
+up to five seconds, then sends `SIGKILL` to the group, appends an escalation
+marker to the run log, and waits again. Group signaling prevents a killed
+timeout wrapper from orphaning its codex descendant while the rvw parent remains
+alive and the host slot is released.
 
 ### One env knob, min-of-gates semantics
 

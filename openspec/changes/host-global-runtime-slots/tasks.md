@@ -61,3 +61,17 @@
 - [x] 5.6 Synchronize main specifications and context, run all required bare
   verification gates plus change validation, and inspect the final diff for
   scope drift, including `uv.lock` and the external runtime registry.
+
+## 6. Adversarial Review Remediation Round 3
+
+- [x] 6.1 Synchronize the operation-modes delta, main specification, and
+  rationale for cancellation-time runtime process-group termination and
+  escalation logging; correct the slot-count identifier in the design.
+- [x] 6.2 Extend the cancellation regression to prove graceful cleanup removes
+  the wrapper and runtime child, and add a TERM-ignoring escalation regression
+  that proves the whole tree exits and the run log records `SIGKILL`.
+- [x] 6.3 Start runtime wrappers in dedicated sessions and terminate their
+  process groups, falling back to direct signals when the process group can no
+  longer be resolved.
+- [x] 6.4 Run every requested bare verification gate and inspect the final diff
+  for scope drift, including `uv.lock` and the external runtime registry.

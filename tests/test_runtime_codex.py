@@ -29,6 +29,17 @@ from pathlib import Path
 Path(sys.argv[1]).write_text(f"{os.getppid()} {os.getpid()}", encoding="utf-8")
 time.sleep(60)
 """
+_IGNORE_TERM_CHILD_SCRIPT = """
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path(sys.argv[1]).write_text(f"{os.getppid()} {os.getpid()}", encoding="utf-8")
+time.sleep(60)
+"""
 _SPAWN_PARENT_SCRIPT = f"""
 import asyncio
 import sys
@@ -278,7 +289,7 @@ async def test_spawn_fails_closed_when_setpriv_is_unavailable(
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux process inspection")
-async def test_spawn_cancellation_terminates_and_reaps_runtime_child(tmp_path: Path) -> None:
+async def test_spawn_cancellation_terminates_runtime_process_tree(tmp_path: Path) -> None:
     child_pid_path = tmp_path / "cancel-child.pid"
     task = asyncio.create_task(
         codex_module._spawn(
@@ -296,28 +307,80 @@ async def test_spawn_cancellation_terminates_and_reaps_runtime_child(tmp_path: P
             tmp_path / "cancel-child.log",
         )
     )
-    child_pids: tuple[int, int] | None = None
+    process_tree_pids: tuple[int, int] | None = None
     try:
         async with asyncio.timeout(3):
             while not child_pid_path.exists():
                 await asyncio.sleep(0.01)
         wrapper_pid, runtime_pid = child_pid_path.read_text(encoding="utf-8").split()
-        child_pids = (int(wrapper_pid), int(runtime_pid))
+        process_tree_pids = (int(wrapper_pid), int(runtime_pid))
 
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
 
         async with asyncio.timeout(3):
-            while any(_linux_process_is_running(pid) for pid in child_pids):
+            while any(_linux_process_is_running(pid) for pid in process_tree_pids):
                 await asyncio.sleep(0.01)
-        assert not any(_linux_process_is_running(pid) for pid in child_pids)
+        assert not any(_linux_process_is_running(pid) for pid in process_tree_pids)
     finally:
         if not task.done():
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
-        for child_pid in child_pids or ():
+        for child_pid in process_tree_pids or ():
+            if _linux_process_is_running(child_pid):
+                os.kill(child_pid, signal.SIGKILL)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux process inspection")
+async def test_spawn_cancellation_sigkills_term_ignoring_process_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(codex_module, "_PROCESS_TERMINATION_TIMEOUT_SECONDS", 0.2)
+    child_pid_path = tmp_path / "ignore-term-child.pid"
+    log_path = tmp_path / "ignore-term-child.log"
+    task = asyncio.create_task(
+        codex_module._spawn(
+            [
+                "timeout",
+                "--foreground",
+                "--signal=TERM",
+                "60s",
+                sys.executable,
+                "-c",
+                _IGNORE_TERM_CHILD_SCRIPT,
+                str(child_pid_path),
+            ],
+            "",
+            log_path,
+        )
+    )
+    process_tree_pids: tuple[int, int] | None = None
+    try:
+        async with asyncio.timeout(3):
+            while not child_pid_path.exists():
+                await asyncio.sleep(0.01)
+        wrapper_pid, runtime_pid = child_pid_path.read_text(encoding="utf-8").split()
+        process_tree_pids = (int(wrapper_pid), int(runtime_pid))
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        async with asyncio.timeout(3):
+            while any(_linux_process_is_running(pid) for pid in process_tree_pids):
+                await asyncio.sleep(0.01)
+        assert not any(_linux_process_is_running(pid) for pid in process_tree_pids)
+        log_text = log_path.read_text(encoding="utf-8")
+        assert "rvw: graceful termination timed out after 0.2s" in log_text
+        assert "escalated to SIGKILL (pgid " in log_text
+    finally:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        for child_pid in process_tree_pids or ():
             if _linux_process_is_running(child_pid):
                 os.kill(child_pid, signal.SIGKILL)
 
