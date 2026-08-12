@@ -81,6 +81,26 @@ class FakeRuntime(Runtime):
         return self._lane_call_counts.get(lane_id, 0)
 
 
+class ArtifactRuntime(FakeRuntime):
+    async def execute(
+        self,
+        *,
+        lane: Lane,
+        prompt: str,
+        run_dir: Path,
+        deadline_seconds: int,
+    ) -> RunResult:
+        marker = f"wave-{self.calls_for(lane.id) + 1}\n"
+        for artifact_name in ("prompt.md", "run.log", "out.json"):
+            (run_dir / artifact_name).write_text(marker, encoding="utf-8")
+        return await super().execute(
+            lane=lane,
+            prompt=prompt,
+            run_dir=run_dir,
+            deadline_seconds=deadline_seconds,
+        )
+
+
 def planned(lane: Lane, replica: int = 1, *, chunk: int = 1, chunk_count: int = 1) -> PlannedRun:
     return PlannedRun(
         lane=lane,
@@ -159,6 +179,21 @@ async def test_all_invalid_lane_is_redispatched_once(tmp_path: Path) -> None:
 
     assert runtime.calls_for(lane.id) == 4
     assert all(result.status is RunStatus.VALID for result in results)
+
+
+async def test_all_invalid_retry_preserves_initial_wave_artifacts(tmp_path: Path) -> None:
+    lane = make_lane("preserve-invalid")
+    runtime = ArtifactRuntime(
+        statuses={lane.id: [RunStatus.INVALID, RunStatus.VALID]},
+    )
+
+    await dispatch([planned(lane)], runtime, out_root=tmp_path)
+
+    initial_dir = tmp_path / lane.id / "r1"
+    retry_dir = tmp_path / lane.id / "retry" / "r1"
+    for artifact_name in ("prompt.md", "run.log", "out.json"):
+        assert (initial_dir / artifact_name).read_text(encoding="utf-8") == "wave-1\n"
+        assert (retry_dir / artifact_name).read_text(encoding="utf-8") == "wave-2\n"
 
 
 async def test_still_invalid_after_retry_is_returned_without_looping(tmp_path: Path) -> None:

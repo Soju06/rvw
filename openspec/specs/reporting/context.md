@@ -7,6 +7,7 @@ This capability makes the review inspectable before any network action and trans
 ## Key decisions and measured basis
 
 - ADR-012 makes the file the artifact of record. JSON stage files allow REPORT and publish to be rerun from a run ID without rerunning model discovery.
+- 2026-08-12: Same-target starts within one second reproduced `FileExistsError`, motivating microsecond run IDs with bounded collision regeneration.
 - The coverage table makes a zero-finding valid lane distinguishable from an all-INVALID lane and from a lane that never activated.
 - Persisted coverage keeps exact replica-chunk entries for fail-closed validation, while the report derives readable per-lane dispatched and valid totals. Diff-budget output also exposes the number and file placement of prompt chunks.
 - Only `## 종합` is author-written. Finding identity, votes, evidence, folds, coverage, and diff-budget accounting remain machine-generated.
