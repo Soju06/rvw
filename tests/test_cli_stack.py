@@ -228,6 +228,7 @@ def test_stack_review_forwards_split_replica_defaults(
     assert result.exit_code == 0, result.stdout
     assert calls[0]["discover_replicas"] == 1
     assert calls[0]["adjudicate_replicas"] == 3
+    assert calls[0]["deadline_seconds"] == 600
 
 
 def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
@@ -238,6 +239,8 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     presence_calls: list[tuple[int, list[str], int]] = []
     pipeline_concurrency: list[int] = []
     presence_concurrency: list[int] = []
+    pipeline_deadlines: list[int] = []
+    presence_deadlines: list[int] = []
 
     def fake_resolve(numbers: list[int], **kwargs: object) -> list[StackMember]:
         nonlocal resolve_calls
@@ -263,6 +266,9 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
         concurrency = kwargs["concurrency"]
         assert isinstance(concurrency, int)
         pipeline_concurrency.append(concurrency)
+        deadline_seconds = kwargs["deadline_seconds"]
+        assert isinstance(deadline_seconds, int)
+        pipeline_deadlines.append(deadline_seconds)
         return pipeline_artifacts(tmp_path, target.pr_number)
 
     async def fake_presence(
@@ -273,6 +279,9 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
         concurrency = kwargs["concurrency"]
         assert isinstance(concurrency, int)
         presence_concurrency.append(concurrency)
+        deadline_seconds = kwargs["deadline_seconds"]
+        assert isinstance(deadline_seconds, int)
+        presence_deadlines.append(deadline_seconds)
         lineage_ids = [item.lineage_id for item in lineages]
         presence_calls.append((pr_number, lineage_ids, replicas))
         presence = Presence.ABSENT if pr_number == 3 else Presence.PRESENT
@@ -316,6 +325,8 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
             "1",
             "--concurrency",
             "4",
+            "--deadline",
+            "1800",
             "--out",
             str(tmp_path / "stack-runs"),
             "--json",
@@ -326,12 +337,14 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     assert resolve_calls == 2
     assert pipeline_calls == [(1, 2, 1), (2, 2, 1), (3, 2, 1)]
     assert pipeline_concurrency == [4, 4, 4]
+    assert pipeline_deadlines == [1800, 1800, 1800]
     assert [(number, replicas) for number, _lineages, replicas in presence_calls] == [
         (2, 1),
         (3, 1),
     ]
     assert all(lineages for _number, lineages, _replicas in presence_calls)
     assert presence_concurrency == [4, 4]
+    assert presence_deadlines == [1800, 1800]
     payload = json.loads(result.stdout)
     handle = StackStore(tmp_path / "stack-runs").open(payload["run_id"])
     saved = handle.load_lineages()

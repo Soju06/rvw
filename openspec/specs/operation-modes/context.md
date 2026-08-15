@@ -8,6 +8,7 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 
 - Owner decisions (2026-07-30 and 2026-08-12): ordinary `review`, `gate`, and `auto` runs keep one discovery replica because lanes x replicas x concurrent rvw instances overloaded `codex-lb`; four concurrent runs were observed demanding up to 64 sessions. Adjudication now defaults independently to three replicas because production reviews dispatched a median of one adjudication run versus eight discovery runs, so majority evidence adds token cost without increasing peak executor sessions.
 - Owner decision (2026-08-06): runtime wave concurrency defaults to eight after concurrent rvw runs saturated the shared `codex-lb` account pool, triggering local `account_stream_cap` overload, 30-second retry sleeps, and lane INVALIDs. Operators can set a positive `--concurrency` value on every command capable of runtime execution.
+- Owner decision (2026-08-14): the runtime base deadline remains 600 seconds, and every runtime-executing command exposes `--deadline` from 1 through 1800 seconds. The ceiling is three times the established default and bounds the existing doubled expanded pass at one hour; PR #1119 completed 39 valid discovery runs with about 410 seconds of stage wall time, so raising the global default was not justified.
 - 2026-08-12: Per-process semaphores do not bound a shared host: six processes at the default capacity of 8 implied 48 theoretical runtime streams. Runtime commands therefore share a host-local flock gate capped at 12 by default; the effective bound is the smaller of the process and host caps, while `RVW_HOST_CONCURRENCY=0` disables the host gate.
 - 2026-08-12: On Linux, spawned runtime wrappers use the exec-side `setpriv --pdeathsig SIGTERM` command prefix. This avoids thread-unsafe `preexec_fn` work and normally prevents a SIGKILLed rvw process from releasing its flock while an orphaned timeout/codex execution continues consuming a gateway stream. Linux fails closed if `setpriv` is unavailable; other platforms do not guarantee this coupling. The tiny pre-`setpriv` orphan race is accepted.
 - The ambient `XDG_RUNTIME_DIR` is validated without mutating its permission contract. Rvw-owned `rvw-slots` and `c{cap}` directories are normalized and descriptor-verified at 0700, `O_NOFOLLOW` is mandatory, and slot files are opened relative to a held validated directory descriptor.
@@ -38,6 +39,7 @@ This capability defines how operators and CI enter the common pipeline, how YAML
   dispositions; presence adjudication is a separate claim-status pass after
   each ordinary member review.
 - The host cap is configured only through `RVW_HOST_CONCURRENCY`; it is local to one host and does not change `--concurrency` semantics.
+- The 1800-second deadline ceiling is enforced at the CLI boundary. Direct Python callers preserve the existing positive-deadline contract, and an expanded adjudication or stack-presence pass receives twice the selected base value.
 - Cap-sharded `c{cap}` directories intentionally avoid cross-cap deadlock. Operators changing `RVW_HOST_CONCURRENCY` while processes are active temporarily run disjoint pools without one shared bound; the host bound converges when configurations converge.
 - Contending acquisition polls all slots and does not promise FIFO fairness; a newly freed slot can take up to the capped polling interval to be observed.
 
@@ -53,6 +55,7 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 - Premature removal of external review guidance can leave a repo without a proven rvw lane replacement.
 - Long explicit stacks multiply ordinary review work and descendant presence
   passes; there is no concurrent-member mode in the initial stack capability.
+- A permitted high deadline can hold a host-global slot for 1800 seconds, or 3600 seconds during the one expanded pass; larger discovery work must be split through the existing chunk planner.
 
 ## Concrete example
 

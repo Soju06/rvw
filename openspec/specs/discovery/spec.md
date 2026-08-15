@@ -40,7 +40,7 @@ The DISCOVER stage MUST plan one run per active lane per diff chunk by default, 
 
 ### Requirement: Dispatch is bounded and heavy-first
 
-The dispatcher MUST sort runs heavy, normal, then light, MUST bound concurrent runtime executions with a semaphore whose default capacity is 8, and MUST preserve an explicitly requested positive capacity. When the host-global slot gate is enabled, each runtime execution MUST additionally hold one host-global slot for its duration, so in-flight executions never exceed the smaller of the per-process capacity and the host cap.
+The dispatcher MUST sort runs heavy, normal, then light, MUST bound concurrent runtime executions with a semaphore whose default capacity is 8, and MUST preserve an explicitly requested positive capacity. Each dispatched runtime execution MUST receive a deadline of 600 seconds by default and MUST preserve an explicitly requested positive deadline. When the host-global slot gate is enabled, each runtime execution MUST additionally hold one host-global slot for its duration, so in-flight executions never exceed the smaller of the per-process capacity and the host cap.
 
 #### Scenario: Heavy and light lanes share a plan
 
@@ -56,6 +56,11 @@ The dispatcher MUST sort runs heavy, normal, then light, MUST bound concurrent r
 
 - **WHEN** the host-global cap is 2 and discovery runs with process concurrency 8
 - **THEN** in-flight runtime executions never exceed 2 and every slot is released when its execution finishes or fails
+
+#### Scenario: Runtime uses the default deadline
+
+- **WHEN** discovery is called without an explicit deadline
+- **THEN** every initial and replacement dispatch receives a deadline of 600 seconds
 
 ### Requirement: Invalid replicas use one all-lane retry
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from rvw.diffbudget import apply_diff_budget, require_reviewable_diff
-from rvw.dispatch import DEFAULT_CONCURRENCY
+from rvw.dispatch import DEFAULT_CONCURRENCY, DEFAULT_DEADLINE_SECONDS
 from rvw.hostslots import HostSlotGate, host_slot
 from rvw.lane import Lane
 from rvw.prompts import build_chunk_context, build_lane_prompt
@@ -121,7 +121,7 @@ async def sample_lane(
     runtime: Runtime,
     out_root: Path,
     replicas: int = 3,
-    deadline_seconds: int = 600,
+    deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     concurrency: int = DEFAULT_CONCURRENCY,
     host_gate: HostSlotGate | None = None,
 ) -> SampleReport:

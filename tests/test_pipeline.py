@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from rvw.dispatch import DEFAULT_DEADLINE_SECONDS
 from rvw.pipeline import execute_pipeline
 from rvw.target import ResolvedTarget
 
@@ -27,6 +28,13 @@ def test_execute_pipeline_exposes_only_split_replica_parameters() -> None:
     assert "replicas" not in parameters
     assert "discover_replicas" in parameters
     assert "adjudicate_replicas" in parameters
+    assert "deadline_seconds" in parameters
+
+
+def test_execute_pipeline_preserves_default_deadline() -> None:
+    parameter = inspect.signature(execute_pipeline).parameters["deadline_seconds"]
+
+    assert parameter.default == DEFAULT_DEADLINE_SECONDS
 
 
 @pytest.mark.parametrize(
@@ -56,6 +64,7 @@ async def test_execute_pipeline_validates_both_replica_counts_before_creating_a_
             discover_replicas=discover_replicas,
             adjudicate_replicas=adjudicate_replicas,
             concurrency=8,
+            deadline_seconds=600,
             out_root=tmp_path / "runs",
             pause=False,
             dynamic_brief=None,

@@ -11,7 +11,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from rvw.dispatch import DEFAULT_CONCURRENCY
+from rvw.dispatch import DEFAULT_CONCURRENCY, DEFAULT_DEADLINE_SECONDS
 from rvw.hostslots import HostSlotGate, host_slot
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.stack import FindingLineage, Presence, PresenceObservation
@@ -246,7 +246,7 @@ async def adjudicate_presence(
     repo_dir: Path,
     out_root: Path,
     replicas: int = 3,
-    deadline_seconds: int = 600,
+    deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     concurrency: int = DEFAULT_CONCURRENCY,
     host_gate: HostSlotGate | None = None,
 ) -> PresenceOutcome:

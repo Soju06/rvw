@@ -622,6 +622,7 @@ def test_gate_target_executes_review_once_and_writes_dry_run_artifacts(
     assert len(calls) == 1
     assert calls[0]["discover_replicas"] == 1
     assert calls[0]["adjudicate_replicas"] == 3
+    assert calls[0]["deadline_seconds"] == 600
     assert calls[0]["resolved_target"] == target()
     repo_dir = calls[0]["repo_dir"]
     assert isinstance(repo_dir, Path)
@@ -659,6 +660,8 @@ def test_gate_preserves_explicit_split_replica_overrides(
             "1",
             "--concurrency",
             "4",
+            "--deadline",
+            "1800",
             "--out",
             str(out_root),
         ],
@@ -668,6 +671,7 @@ def test_gate_preserves_explicit_split_replica_overrides(
     assert calls[0]["discover_replicas"] == 3
     assert calls[0]["adjudicate_replicas"] == 1
     assert calls[0]["concurrency"] == 4
+    assert calls[0]["deadline_seconds"] == 1800
     plan = load_gate_plan(artifacts.run.dir)
     assert plan.replicas == 3
     assert plan.adjudicate_replicas == 1

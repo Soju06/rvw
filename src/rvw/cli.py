@@ -23,7 +23,13 @@ from rvw import __version__
 from rvw.adjudicate import AdjudicationOutcome, adjudicate
 from rvw.diffbudget import EmptyReviewDiffError, apply_diff_budget
 from rvw.discover import DiscoverResult, resolve_lane_path
-from rvw.dispatch import DEFAULT_CONCURRENCY, PlannedRun, lpt_sort_key
+from rvw.dispatch import (
+    DEFAULT_CONCURRENCY,
+    DEFAULT_DEADLINE_SECONDS,
+    MAX_DEADLINE_SECONDS,
+    PlannedRun,
+    lpt_sort_key,
+)
 from rvw.doctor import DoctorReport, diagnose
 from rvw.gate import (
     ACTIONABLE_DISPOSITIONS_PAUSE,
@@ -480,6 +486,9 @@ def review(
     replicas: Annotated[int, Option("--replicas", min=1)] = 1,
     adjudicate_replicas: Annotated[int, Option("--adjudicate-replicas", min=1)] = 3,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
+    deadline: Annotated[
+        int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = DEFAULT_DEADLINE_SECONDS,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
     pause: Annotated[bool, Option("--pause")] = False,
@@ -496,6 +505,7 @@ def review(
                 discover_replicas=replicas,
                 adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
+                deadline_seconds=deadline,
                 out_root=out_root,
                 json_output=json_output,
                 pause=pause,
@@ -528,6 +538,7 @@ async def _review_pipeline(
     discover_replicas: int,
     adjudicate_replicas: int,
     concurrency: int,
+    deadline_seconds: int,
     out_root: Path,
     json_output: bool,
     pause: bool,
@@ -548,6 +559,7 @@ async def _review_pipeline(
         discover_replicas=discover_replicas,
         adjudicate_replicas=adjudicate_replicas,
         concurrency=concurrency,
+        deadline_seconds=deadline_seconds,
         out_root=out_root,
         pause=pause,
         dynamic_brief=dynamic_brief,
@@ -600,6 +612,7 @@ async def _execute_pipeline(
     discover_replicas: int,
     adjudicate_replicas: int,
     concurrency: int,
+    deadline_seconds: int,
     out_root: Path,
     pause: bool,
     dynamic_brief: Path | None,
@@ -622,6 +635,7 @@ async def _execute_pipeline(
         discover_replicas=discover_replicas,
         adjudicate_replicas=adjudicate_replicas,
         concurrency=concurrency,
+        deadline_seconds=deadline_seconds,
         out_root=out_root,
         pause=pause,
         dynamic_brief=dynamic_brief,
@@ -893,6 +907,9 @@ def gate(
         int, Option("--adjudicate-replicas", min=1)
     ] = _PLAN_ADJUDICATE_REPLICAS,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
+    deadline: Annotated[
+        int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = DEFAULT_DEADLINE_SECONDS,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     execute: Annotated[bool, Option("--execute")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
@@ -926,6 +943,7 @@ def gate(
             discover_replicas=replicas,
             adjudicate_replicas=adjudicate_replicas,
             concurrency=concurrency,
+            deadline_seconds=deadline,
             out_root=out_root,
             execute=execute,
             json_output=json_output,
@@ -945,6 +963,7 @@ async def _gate_pipeline(
     discover_replicas: int,
     adjudicate_replicas: int,
     concurrency: int,
+    deadline_seconds: int,
     out_root: Path,
     execute: bool,
     json_output: bool,
@@ -994,6 +1013,7 @@ async def _gate_pipeline(
                     discover_replicas=discover_replicas,
                     adjudicate_replicas=adjudicate_replicas,
                     concurrency=concurrency,
+                    deadline_seconds=deadline_seconds,
                     out_root=out_root,
                     pause=False,
                     dynamic_brief=None,
@@ -1463,6 +1483,9 @@ def auto(
     ] = None,
     policy_path: Annotated[Path, Option("--policy")] = DEFAULT_AUTO_POLICY,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
+    deadline: Annotated[
+        int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = DEFAULT_DEADLINE_SECONDS,
     publish: Annotated[bool | None, Option("--publish/--no-publish")] = None,
     allow_approve: Annotated[bool, Option("--allow-approve")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
@@ -1484,6 +1507,7 @@ def auto(
                 repo_dir=repo_dir,
                 policy_path=policy_path,
                 concurrency=concurrency,
+                deadline_seconds=deadline,
                 publish=publish,
                 json_output=json_output,
                 discover_replicas=replicas,
@@ -1501,6 +1525,7 @@ async def _auto_pipeline(
     repo_dir: Path | None,
     policy_path: Path,
     concurrency: int,
+    deadline_seconds: int,
     publish: bool | None,
     json_output: bool,
     discover_replicas: int,
@@ -1515,6 +1540,7 @@ async def _auto_pipeline(
         discover_replicas=discover_replicas,
         adjudicate_replicas=adjudicate_replicas,
         concurrency=concurrency,
+        deadline_seconds=deadline_seconds,
         out_root=DEFAULT_RUN_ROOT,
         pause=False,
         dynamic_brief=None,
@@ -1727,6 +1753,9 @@ def stack_review(
     replicas: Annotated[int, Option("--replicas", min=1)] = 1,
     adjudicate_replicas: Annotated[int, Option("--adjudicate-replicas", min=1)] = 3,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
+    deadline: Annotated[
+        int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = DEFAULT_DEADLINE_SECONDS,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
 ) -> None:
@@ -1741,6 +1770,7 @@ def stack_review(
                 discover_replicas=replicas,
                 adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
+                deadline_seconds=deadline,
                 out_root=out_root,
                 json_output=json_output,
                 host_gate=host_gate,
@@ -1766,6 +1796,7 @@ async def _stack_review_pipeline(
     discover_replicas: int,
     adjudicate_replicas: int,
     concurrency: int,
+    deadline_seconds: int,
     out_root: Path,
     json_output: bool,
     host_gate: HostSlotGate | None = None,
@@ -1803,6 +1834,7 @@ async def _stack_review_pipeline(
                 discover_replicas=discover_replicas,
                 adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
+                deadline_seconds=deadline_seconds,
                 out_root=out_root,
                 pause=False,
                 dynamic_brief=None,
@@ -1834,6 +1866,7 @@ async def _stack_review_pipeline(
                     out_root=handle.dir / "presence-runtime" / f"pr-{member.number}",
                     replicas=adjudicate_replicas,
                     concurrency=concurrency,
+                    deadline_seconds=deadline_seconds,
                     host_gate=host_gate,
                 )
                 lineages = [
@@ -2123,6 +2156,9 @@ def sample(
     ] = DEFAULT_REGISTRY_ROOT,
     replicas: Annotated[int, Option("--replicas", min=1)] = 3,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
+    deadline: Annotated[
+        int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = DEFAULT_DEADLINE_SECONDS,
     out_root: Annotated[Path, Option("--out")] = Path("/tmp/rvw-sample"),
     json_output: Annotated[bool, Option("--json")] = False,
 ) -> None:
@@ -2154,6 +2190,7 @@ def sample(
                 out_root=out_root,
                 replicas=replicas,
                 concurrency=concurrency,
+                deadline_seconds=deadline,
                 host_gate=host_gate,
             )
         )

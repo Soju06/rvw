@@ -175,12 +175,24 @@ def invoke_review(
 
 
 @pytest.mark.parametrize(
-    ("extra", "expected_discover", "expected_adjudicate", "expected_concurrency"),
+    (
+        "extra",
+        "expected_discover",
+        "expected_adjudicate",
+        "expected_concurrency",
+        "expected_deadline",
+    ),
     [
-        ([], 1, 3, 8),
-        (["--replicas", "2"], 2, 3, 8),
-        (["--adjudicate-replicas", "1"], 1, 1, 8),
-        (["--replicas", "3", "--concurrency", "4"], 3, 3, 4),
+        ([], 1, 3, 8, 600),
+        (["--replicas", "2"], 2, 3, 8, 600),
+        (["--adjudicate-replicas", "1"], 1, 1, 8, 600),
+        (
+            ["--replicas", "3", "--concurrency", "4", "--deadline", "1800"],
+            3,
+            3,
+            4,
+            1800,
+        ),
     ],
 )
 def test_review_split_replica_defaults_and_explicit_overrides(
@@ -189,6 +201,7 @@ def test_review_split_replica_defaults_and_explicit_overrides(
     expected_discover: int,
     expected_adjudicate: int,
     expected_concurrency: int,
+    expected_deadline: int,
 ) -> None:
     calls: list[dict[str, object]] = []
 
@@ -203,6 +216,7 @@ def test_review_split_replica_defaults_and_explicit_overrides(
     assert calls[0]["discover_replicas"] == expected_discover
     assert calls[0]["adjudicate_replicas"] == expected_adjudicate
     assert calls[0]["concurrency"] == expected_concurrency
+    assert calls[0]["deadline_seconds"] == expected_deadline
 
 
 def test_review_cli_passes_command_host_gate_to_execute_pipeline(
@@ -246,7 +260,7 @@ def test_review_rejects_zero_concurrency_before_execution(
     assert calls == []
 
 
-async def test_shared_pipeline_propagates_split_replicas_and_concurrency(
+async def test_shared_pipeline_propagates_split_replicas_concurrency_and_deadline(
     tmp_path: Path,
     registry_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -254,16 +268,18 @@ async def test_shared_pipeline_propagates_split_replicas_and_concurrency(
     """Each stage must receive ITS OWN replica count: distinct values prove
     execute_pipeline cannot forward one count to both stages."""
 
-    stage_calls: list[tuple[str, int, int]] = []
+    stage_calls: list[tuple[str, int, int, int]] = []
     gate = HostSlotGate(1, base_dir=tmp_path / "host-slots")
 
     async def fake_discover(**kwargs: object) -> DiscoverResult:
         assert kwargs["host_gate"] is gate
         replicas = kwargs["replicas"]
         concurrency = kwargs["concurrency"]
+        deadline_seconds = kwargs["deadline_seconds"]
         assert isinstance(replicas, int)
         assert isinstance(concurrency, int)
-        stage_calls.append(("discover", replicas, concurrency))
+        assert isinstance(deadline_seconds, int)
+        stage_calls.append(("discover", replicas, concurrency, deadline_seconds))
         return DiscoverResult(lane_results={}, findings=[], coverage=[])
 
     async def fake_adjudicate(merged: MergeResult, **kwargs: object) -> AdjudicationOutcome:
@@ -271,9 +287,11 @@ async def test_shared_pipeline_propagates_split_replicas_and_concurrency(
         assert kwargs["host_gate"] is gate
         replicas = kwargs["replicas"]
         concurrency = kwargs["concurrency"]
+        deadline_seconds = kwargs["deadline_seconds"]
         assert isinstance(replicas, int)
         assert isinstance(concurrency, int)
-        stage_calls.append(("adjudicate", replicas, concurrency))
+        assert isinstance(deadline_seconds, int)
+        stage_calls.append(("adjudicate", replicas, concurrency, deadline_seconds))
         return AdjudicationOutcome(
             verdicts={},
             reasons={},
@@ -299,13 +317,14 @@ async def test_shared_pipeline_propagates_split_replicas_and_concurrency(
         discover_replicas=2,
         adjudicate_replicas=5,
         concurrency=3,
+        deadline_seconds=37,
         out_root=tmp_path / "runs",
         pause=False,
         dynamic_brief=None,
         host_gate=gate,
     )
 
-    assert stage_calls == [("discover", 2, 3), ("adjudicate", 5, 3)]
+    assert stage_calls == [("discover", 2, 3, 37), ("adjudicate", 5, 3, 37)]
 
 
 def test_review_end_to_end_writes_all_stages_and_json_shape(

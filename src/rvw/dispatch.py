@@ -13,6 +13,8 @@ from rvw.runtimes import RunResult, RunStatus, Runtime
 
 _COST_ORDER = {"heavy": 0, "normal": 1, "light": 2}
 DEFAULT_CONCURRENCY = 8
+DEFAULT_DEADLINE_SECONDS = 600
+MAX_DEADLINE_SECONDS = 1800
 
 
 def lpt_sort_key(lane_cost: str) -> int:
@@ -52,7 +54,7 @@ async def dispatch_outcome(
     *,
     out_root: Path,
     concurrency: int = DEFAULT_CONCURRENCY,
-    deadline_seconds: int = 600,
+    deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     on_progress: Callable[[RunResult], None] | None = None,
     host_gate: HostSlotGate | None = None,
 ) -> DispatchOutcome:
@@ -130,7 +132,7 @@ async def dispatch(
     *,
     out_root: Path,
     concurrency: int = DEFAULT_CONCURRENCY,
-    deadline_seconds: int = 600,
+    deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     on_progress: Callable[[RunResult], None] | None = None,
     host_gate: HostSlotGate | None = None,
 ) -> list[RunResult]:
@@ -150,6 +152,8 @@ async def dispatch(
 
 __all__: list[str] = [
     "DEFAULT_CONCURRENCY",
+    "DEFAULT_DEADLINE_SECONDS",
+    "MAX_DEADLINE_SECONDS",
     "DispatchOutcome",
     "PlannedRun",
     "dispatch",

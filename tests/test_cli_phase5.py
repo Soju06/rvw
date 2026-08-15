@@ -185,6 +185,8 @@ def test_auto_forwards_split_replica_defaults_overrides_and_concurrency(
             "1",
             "--concurrency",
             "4",
+            "--deadline",
+            "1800",
         ],
     )
 
@@ -192,9 +194,11 @@ def test_auto_forwards_split_replica_defaults_overrides_and_concurrency(
     assert result.exit_code == 0, result.stdout
     assert calls[0]["discover_replicas"] == 1
     assert calls[0]["adjudicate_replicas"] == 3
+    assert calls[0]["deadline_seconds"] == 600
     assert calls[1]["discover_replicas"] == 2
     assert calls[1]["adjudicate_replicas"] == 1
     assert calls[1]["concurrency"] == 4
+    assert calls[1]["deadline_seconds"] == 1800
 
 
 def test_allow_approve_is_placeholder_and_payload_remains_comment(
@@ -380,10 +384,13 @@ def test_sample_exit_codes_and_pass_hint(
             str(sample_registry),
             "--concurrency",
             "4",
+            "--deadline",
+            "1800",
         ],
     )
     assert result.exit_code == exit_code, result.stdout
     assert calls[0]["concurrency"] == 4
+    assert calls[0]["deadline_seconds"] == 1800
     assert ("may drop 'validation: pending'" in result.stdout) is (verdict == "PASS")
     if verdict == "PASS":
         assert "site variance" in result.stdout

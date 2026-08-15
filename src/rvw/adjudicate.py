@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from rvw.dispatch import DEFAULT_CONCURRENCY
+from rvw.dispatch import DEFAULT_CONCURRENCY, DEFAULT_DEADLINE_SECONDS
 from rvw.hostslots import HostSlotGate, host_slot
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.runtimes import RunResult, RunStatus, Runtime
@@ -181,7 +181,7 @@ async def adjudicate(
     repo_dir: Path,
     out_root: Path,
     replicas: int = 3,
-    deadline_seconds: int = 600,
+    deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     concurrency: int = DEFAULT_CONCURRENCY,
     host_gate: HostSlotGate | None = None,
 ) -> AdjudicationOutcome:

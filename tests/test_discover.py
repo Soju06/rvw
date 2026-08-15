@@ -9,7 +9,7 @@ import pytest
 import rvw.discover as discover_module
 from rvw.diffbudget import EmptyReviewDiffError
 from rvw.discover import RunCoverage, discover, resolve_lane_path
-from rvw.dispatch import DispatchOutcome, PlannedRun
+from rvw.dispatch import DEFAULT_DEADLINE_SECONDS, DispatchOutcome, PlannedRun
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import merge
@@ -184,7 +184,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
         *,
         out_root: Path,
         concurrency: int = 8,
-        deadline_seconds: int = 600,
+        deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
         on_progress: Callable[[RunResult], None] | None = None,
         host_gate: HostSlotGate | None = None,
     ) -> DispatchOutcome:

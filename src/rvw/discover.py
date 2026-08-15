@@ -9,7 +9,12 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rvw.diffbudget import DiffBudgetReport, apply_diff_budget, require_reviewable_diff
-from rvw.dispatch import DEFAULT_CONCURRENCY, PlannedRun, dispatch_outcome
+from rvw.dispatch import (
+    DEFAULT_CONCURRENCY,
+    DEFAULT_DEADLINE_SECONDS,
+    PlannedRun,
+    dispatch_outcome,
+)
 from rvw.hostslots import HostSlotGate
 from rvw.hunks import hunk_for_line, is_anchorable, parse_hunks
 from rvw.lane import load_lane
@@ -185,7 +190,7 @@ async def discover(
     replicas: int = 1,
     concurrency: int = DEFAULT_CONCURRENCY,
     lane_filter: Sequence[str] | None = None,
-    deadline_seconds: int = 600,
+    deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     host_gate: HostSlotGate | None = None,
 ) -> DiscoverResult:
     """Run all activated lanes in one dispatch call and enrich valid findings."""

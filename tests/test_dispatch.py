@@ -10,7 +10,7 @@ import pytest
 import rvw.dispatch as dispatch_module
 from rvw.adjudicate import adjudicate
 from rvw.discover import discover
-from rvw.dispatch import PlannedRun, dispatch
+from rvw.dispatch import PlannedRun, dispatch, dispatch_outcome
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.runtimes import RunResult, RunStatus, Runtime
@@ -123,6 +123,22 @@ def planned(lane: Lane, replica: int = 1, *, chunk: int = 1, chunk_count: int = 
 def test_runtime_concurrency_defaults_to_eight() -> None:
     for callable_ in (dispatch, discover, adjudicate, sample_lane, adjudicate_presence):
         assert inspect.signature(callable_).parameters["concurrency"].default == 8
+
+
+def test_runtime_deadline_defaults_to_shared_600_seconds() -> None:
+    assert dispatch_module.DEFAULT_DEADLINE_SECONDS == 600
+    for callable_ in (
+        dispatch_outcome,
+        dispatch,
+        discover,
+        adjudicate,
+        sample_lane,
+        adjudicate_presence,
+    ):
+        assert (
+            inspect.signature(callable_).parameters["deadline_seconds"].default
+            == dispatch_module.DEFAULT_DEADLINE_SECONDS
+        )
 
 
 async def test_heavy_runs_are_admitted_before_normal_and_light(tmp_path: Path) -> None:
