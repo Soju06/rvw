@@ -18,6 +18,7 @@ from rvw.adjudicate import (
     adjudication_schema,
     build_adjudication_prompt,
 )
+from rvw.diffbudget import apply_diff_budget
 from rvw.hostslots import HostSlotGate
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.runtimes import RunResult, RunStatus
@@ -26,6 +27,10 @@ from rvw.schema import RuntimeAdjudication, RuntimeAdjudicationItem, Severity, V
 from rvw.target import ResolvedTarget
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def diff_segment(path: str, body: str) -> str:
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+{body}\n"
 
 
 def make_group(key: str, *, body: str | None = None, line: int = 8) -> CollapseGroup:
@@ -49,14 +54,14 @@ def make_merged(*groups: CollapseGroup) -> MergeResult:
     return MergeResult(groups=list(groups), sites=[], pattern_folds=[], region_folds=[])
 
 
-def make_target(diff: str = "@@ -1 +1 @@\n-old\n+new\n") -> ResolvedTarget:
+def make_target(diff: str | None = None) -> ResolvedTarget:
     return ResolvedTarget(
         kind="commit",
         repo="owner/repo",
         base_sha="0" * 40,
         head_sha="1" * 40,
         changed_paths=["deep.ts"],
-        diff=diff,
+        diff=diff if diff is not None else diff_segment("deep.ts", "new"),
     )
 
 
@@ -452,3 +457,79 @@ async def test_adr007_rejects_fabricated_await_and_keeps_genuine_findings(
     assert outcome.verdicts[genuine_catch_key] is Verdict.CONFIRMED
     assert genuine_input_key not in outcome.unresolved
     assert genuine_catch_key not in outcome.unresolved
+
+
+async def test_adjudication_prompt_omits_budget_excluded_content(tmp_path: Path) -> None:
+    generated = diff_segment("pnpm-lock.yaml", "generated")
+    source = diff_segment("deep.ts", "kept")
+    group = make_group("filtered")
+    runtime = FakeRuntime([[RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)])]])
+
+    await adjudicate(
+        make_merged(group),
+        target=make_target(generated + source),
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "out",
+        replicas=1,
+    )
+
+    prompt = cast(str, runtime.calls[0]["prompt"])
+    assert generated not in prompt
+    assert source in prompt
+    assert "# rvw: 1 files excluded from review diff" in prompt
+    assert "pnpm-lock.yaml" in prompt
+
+
+async def test_adjudication_prompt_diff_equals_the_single_discovery_chunk(
+    tmp_path: Path,
+) -> None:
+    diff = diff_segment("deep.ts", "kept") + diff_segment("other.ts", "also kept")
+    chunks, _report = apply_diff_budget(diff)
+    group = make_group("byte-parity")
+    runtime = FakeRuntime([[RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)])]])
+
+    await adjudicate(
+        make_merged(group),
+        target=make_target(diff),
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "out",
+        replicas=1,
+    )
+
+    assert len(chunks) == 1
+    prompt = cast(str, runtime.calls[0]["prompt"])
+    assert chunks[0].text in prompt
+
+
+async def test_all_invalid_adjudication_retry_names_prior_invalid_reasons(
+    tmp_path: Path,
+) -> None:
+    group = make_group("retry-feedback")
+    runtime = FakeRuntime(
+        [
+            [None, None],
+            [RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)]), None],
+        ]
+    )
+
+    await adjudicate(
+        make_merged(group),
+        target=make_target(),
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "out",
+        replicas=2,
+    )
+
+    assert len(runtime.calls) == 4
+    initial_prompts = [cast(str, call["prompt"]) for call in runtime.calls[:2]]
+    retry_prompts = [cast(str, call["prompt"]) for call in runtime.calls[2:]]
+    for prompt in initial_prompts:
+        assert "# Retry feedback" not in prompt
+        assert "scripted-invalid" not in prompt
+    for prompt in retry_prompts:
+        assert "# Retry feedback" in prompt
+        assert "replica 1: scripted-invalid" in prompt
+        assert "replica 2: scripted-invalid" in prompt

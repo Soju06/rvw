@@ -31,6 +31,12 @@ publication. Normative behavior is in [spec.md](spec.md).
   are invalid, PRESENT and ABSENT require current source evidence, missing items
   are UNCERTAIN, an all-invalid wave retries once with its invalid reasons, and
   uncertain residue receives one expanded-context pass.
+- The descendant diff in a presence prompt is the budget-filtered reviewed diff,
+  the same projection discovery uses. A seven-member simulation with ten
+  confirmed findings per member and a 100,000-character diff accumulated
+  2,677,698 presence prompt characters, of which 1,800,972 were repeated diff
+  content; sending unfiltered generated segments through that quadratic path
+  multiplied the waste at every descendant.
 - Publication is one body-only COMMENT on the tip. Cross-head claims do not have
   safe inline anchors in the tip diff, and origin-member comments would create
   duplicated or stale review state. The request pins `commit_id` to the

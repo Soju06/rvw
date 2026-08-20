@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from rvw.lane import Lane
 from rvw.schema import Tier
 
@@ -61,6 +63,20 @@ def build_lane_prompt(
     return "\n\n".join(sections)
 
 
+def build_retry_feedback(invalid_reasons: Sequence[str]) -> str:
+    """Render the shared replacement-wave feedback section for invalid replicas."""
+
+    lines = [
+        "## Retry feedback",
+        (
+            "The previous wave produced no valid outputs. Correct the "
+            "machine-readable failures below while returning the same contract."
+        ),
+        *[f"- {reason}" for reason in invalid_reasons],
+    ]
+    return "\n".join(lines)
+
+
 def build_chunk_context(
     *,
     chunk: int,
@@ -76,4 +92,4 @@ def build_chunk_context(
     return "\n".join(lines)
 
 
-__all__: list[str] = ["build_chunk_context", "build_lane_prompt"]
+__all__: list[str] = ["build_chunk_context", "build_lane_prompt", "build_retry_feedback"]

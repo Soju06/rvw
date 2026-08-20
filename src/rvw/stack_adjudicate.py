@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
+from rvw.diffbudget import reviewed_diff
 from rvw.dispatch import DEFAULT_CONCURRENCY, DEFAULT_DEADLINE_SECONDS
 from rvw.hostslots import HostSlotGate, host_slot
 from rvw.runtimes import RunResult, RunStatus, Runtime
@@ -176,7 +177,8 @@ def build_presence_prompt(
         )
         for index, body in enumerate(lineage.bodies, start=1):
             parts.extend([f"### Body {index}", body])
-    parts.extend(["# Descendant unified diff", "```diff", target.diff, "```"])
+    reviewed = reviewed_diff(target.diff)
+    parts.extend(["# Descendant unified diff", "```diff", reviewed.text, "```"])
     return "\n\n".join(parts)
 
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from rvw.diffbudget import reviewed_diff
 from rvw.dispatch import DEFAULT_CONCURRENCY, DEFAULT_DEADLINE_SECONDS
 from rvw.hostslots import HostSlotGate, host_slot
 from rvw.merge import CollapseGroup, MergeResult
@@ -39,7 +40,13 @@ def adjudication_schema(group_keys: Sequence[str]) -> dict[str, Any]:
     return schema
 
 
-def build_adjudication_prompt(groups: Sequence[CollapseGroup], *, diff: str, expanded: bool) -> str:
+def build_adjudication_prompt(
+    groups: Sequence[CollapseGroup],
+    *,
+    diff: str,
+    expanded: bool,
+    retry_invalid_reasons: Sequence[str] = (),
+) -> str:
     """Render an adjudication-only prompt with every replica body preserved."""
 
     parts = [
@@ -74,6 +81,18 @@ def build_adjudication_prompt(groups: Sequence[CollapseGroup], *, diff: str, exp
                     "callers (grep), and check tests covering the path, before deciding. Prior "
                     "pass returned UNCERTAIN for these."
                 ),
+            ]
+        )
+
+    if retry_invalid_reasons:
+        parts.extend(
+            [
+                "# Retry feedback",
+                (
+                    "The previous wave produced no valid outputs. Correct the "
+                    "machine-readable failures below while returning the same batch."
+                ),
+                *[f"- {reason}" for reason in retry_invalid_reasons],
             ]
         )
 
@@ -197,11 +216,22 @@ async def adjudicate(
         return AdjudicationOutcome({}, {}, {}, {}, [], 0)
 
     semaphore = asyncio.Semaphore(concurrency)
+    reviewed = reviewed_diff(target.diff)
 
     async def execute_wave(
-        groups: Sequence[CollapseGroup], *, expanded: bool, label: str, deadline: int
+        groups: Sequence[CollapseGroup],
+        *,
+        expanded: bool,
+        label: str,
+        deadline: int,
+        retry_invalid_reasons: Sequence[str] = (),
     ) -> list[RunResult[Any]]:
-        prompt = build_adjudication_prompt(groups, diff=target.diff, expanded=expanded)
+        prompt = build_adjudication_prompt(
+            groups,
+            diff=reviewed.text,
+            expanded=expanded,
+            retry_invalid_reasons=retry_invalid_reasons,
+        )
         schema = adjudication_schema([group.key for group in groups])
 
         async def execute_one(replica: int) -> RunResult[Any]:
@@ -228,11 +258,16 @@ async def adjudicate(
     ) -> list[RunResult[Any]]:
         results = await execute_wave(groups, expanded=expanded, label=label, deadline=deadline)
         if all(result.status is RunStatus.INVALID for result in results):
+            retry_invalid_reasons = [
+                f"replica {result.replica}: {result.invalid_reason or 'unknown_invalid'}"
+                for result in results
+            ]
             return await execute_wave(
                 groups,
                 expanded=expanded,
                 label=f"{label}-retry",
                 deadline=deadline,
+                retry_invalid_reasons=retry_invalid_reasons,
             )
         return results
 

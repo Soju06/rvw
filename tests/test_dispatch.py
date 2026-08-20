@@ -453,6 +453,68 @@ async def test_all_invalid_retry_is_scoped_to_lane_chunk(tmp_path: Path) -> None
     ]
 
 
+async def test_all_invalid_lane_chunk_replacement_prompt_names_prior_invalid_reasons(
+    tmp_path: Path,
+) -> None:
+    retried = make_lane("retried")
+    steady = make_lane("steady")
+    prompts: list[tuple[str, str]] = []
+
+    class PromptRecordingRuntime(Runtime):
+        name = "prompt-recording"
+
+        def __init__(self) -> None:
+            self._calls: dict[str, int] = {}
+
+        async def execute(
+            self,
+            *,
+            lane: Lane,
+            prompt: str,
+            run_dir: Path,
+            deadline_seconds: int,
+        ) -> RunResult:
+            del deadline_seconds
+            index = self._calls.get(lane.id, 0)
+            self._calls[lane.id] = index + 1
+            prompts.append((lane.id, prompt))
+            invalid = lane.id == retried.id and index < 2
+            replica = int(run_dir.name.removeprefix("r"))
+            return RunResult(
+                lane_id=lane.id,
+                replica=replica,
+                status=RunStatus.INVALID if invalid else RunStatus.VALID,
+                output=None if invalid else RuntimeLaneOutput(verdict="PASS"),
+                invalid_reason="schema_invalid" if invalid else None,
+                wall_seconds=0.0,
+                artifact_dir=run_dir,
+            )
+
+    await dispatch(
+        [
+            planned(retried, 1),
+            planned(retried, 2),
+            planned(steady, 1),
+        ],
+        PromptRecordingRuntime(),
+        out_root=tmp_path,
+    )
+
+    retried_prompts = [prompt for lane_id, prompt in prompts if lane_id == retried.id]
+    steady_prompts = [prompt for lane_id, prompt in prompts if lane_id == steady.id]
+
+    assert len(retried_prompts) == 4
+    assert len(steady_prompts) == 1
+    for prompt in retried_prompts[:2]:
+        assert "## Retry feedback" not in prompt
+        assert "schema_invalid" not in prompt
+    for prompt in retried_prompts[2:]:
+        assert "## Retry feedback" in prompt
+        assert "replica 1: schema_invalid" in prompt
+        assert "replica 2: schema_invalid" in prompt
+    assert "## Retry feedback" not in steady_prompts[0]
+
+
 def assert_runtime_protocol(runtime: Runtime, callback: Callable[[RunResult], None]) -> None:
     del runtime, callback
 

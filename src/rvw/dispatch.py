@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rvw.hostslots import HostSlotGate, host_slot
 from rvw.lane import Lane
+from rvw.prompts import build_retry_feedback
 from rvw.runtimes import RunResult, RunStatus, Runtime
 
 _COST_ORDER = {"heavy": 0, "normal": 1, "light": 2}
@@ -67,21 +68,22 @@ async def dispatch_outcome(
 
     semaphore = asyncio.Semaphore(concurrency)
 
-    async def execute_one(run: PlannedRun, *, retry: bool = False) -> RunResult:
+    async def execute_one(run: PlannedRun, *, retry_feedback: str | None = None) -> RunResult:
         async with semaphore:
             lane_slug = run.lane.id.replace("/", "--")
             lane_dir = out_root / lane_slug
             if run.chunk_count > 1:
                 lane_dir /= f"c{run.chunk}"
-            if retry:
+            if retry_feedback is not None:
                 lane_dir /= "retry"
             run_dir = lane_dir / f"r{run.replica}"
             run_dir.mkdir(parents=True, exist_ok=True)
+            prompt = run.prompt if retry_feedback is None else f"{run.prompt}\n\n{retry_feedback}"
             async with host_slot(host_gate):
                 result = replace(
                     await runtime.execute(
                         lane=run.lane,
-                        prompt=run.prompt,
+                        prompt=prompt,
                         run_dir=run_dir,
                         deadline_seconds=deadline_seconds,
                     ),
@@ -92,10 +94,24 @@ async def dispatch_outcome(
             return result
 
     async def execute_wave(
-        wave_runs: Sequence[PlannedRun], *, retry: bool = False
+        wave_runs: Sequence[PlannedRun],
+        *,
+        retry_feedback_by_lane_chunk: Mapping[tuple[str, int], str] | None = None,
     ) -> list[RunResult]:
         ordered = sorted(wave_runs, key=lambda run: lpt_sort_key(run.lane.cost))
-        tasks = [asyncio.create_task(execute_one(run, retry=retry)) for run in ordered]
+        tasks = [
+            asyncio.create_task(
+                execute_one(
+                    run,
+                    retry_feedback=(
+                        None
+                        if retry_feedback_by_lane_chunk is None
+                        else retry_feedback_by_lane_chunk[(run.lane.id, run.chunk)]
+                    ),
+                )
+            )
+            for run in ordered
+        ]
         return list(await asyncio.gather(*tasks))
 
     main_results = await execute_wave(runs)
@@ -109,7 +125,21 @@ async def dispatch_outcome(
         if all(result.status is RunStatus.INVALID for result in lane_results)
     }
     retry_runs = [run for run in runs if (run.lane.id, run.chunk) in retry_lane_chunks]
-    retry_results = await execute_wave(retry_runs, retry=True)
+    retry_feedback_by_lane_chunk = {
+        lane_chunk: build_retry_feedback(
+            [
+                f"replica {result.replica}: {result.invalid_reason or 'unknown_invalid'}"
+                for result in sorted(
+                    results_by_lane_chunk[lane_chunk], key=lambda result: result.replica
+                )
+            ]
+        )
+        for lane_chunk in retry_lane_chunks
+    }
+    retry_results = await execute_wave(
+        retry_runs,
+        retry_feedback_by_lane_chunk=retry_feedback_by_lane_chunk,
+    )
 
     final_by_key = {
         (result.lane_id, result.replica, result.chunk): result

@@ -116,7 +116,10 @@ Missing output MUST vote UNCERTAIN, PRESENT or ABSENT without nonblank evidence
 MUST be coerced to UNCERTAIN, a wave with no valid replicas MUST retry exactly
 once with the prior replicas' machine-readable invalid reasons in the prompt,
 and candidates still uncertain MUST receive one expanded-context pass at twice
-the initial deadline.
+the initial deadline. The descendant diff supplied to a presence prompt MUST be
+the budget-filtered reviewed diff, so generated-path and oversized-file content
+MUST NOT appear in a presence prompt while its visible exclusion header is
+retained.
 
 #### Scenario: Candidate is omitted by a valid replica
 
@@ -137,6 +140,12 @@ the initial deadline.
 
 - **WHEN** a response votes ABSENT with whitespace-only evidence
 - **THEN** the vote is stored as UNCERTAIN
+
+#### Scenario: Descendant diff contains generated content
+
+- **WHEN** a descendant head's diff contains a lockfile alongside source changes
+- **THEN** the presence prompt omits the lockfile segment and names it in the
+  exclusion header
 
 #### Scenario: Initial result remains uncertain
 

@@ -169,6 +169,18 @@ def _matches_generated_glob(path: str, patterns: Sequence[str]) -> bool:
     return False
 
 
+def _exclusion_header(excluded_files: Sequence[str]) -> str:
+    """Render the one visible exclusion header shared by every review prompt."""
+
+    if not excluded_files:
+        return ""
+    paths = ", ".join(excluded_files)
+    return (
+        f"# rvw: {len(excluded_files)} files excluded from review diff "
+        f"(generated/oversize): {paths}\n"
+    )
+
+
 def apply_diff_budget(
     diff: str,
     *,
@@ -211,13 +223,7 @@ def apply_diff_budget(
     if current or not grouped:
         grouped.append(current)
 
-    header = ""
-    if excluded:
-        paths = ", ".join(segment.file for segment in excluded)
-        header = (
-            f"# rvw: {len(excluded)} files excluded from review diff "
-            f"(generated/oversize): {paths}\n"
-        )
+    header = _exclusion_header([segment.file for segment in excluded])
 
     chunks = [
         DiffChunk(
@@ -251,6 +257,46 @@ def require_reviewable_diff(report: DiffBudgetReport, *, source: str) -> None:
         raise EmptyReviewDiffError(source, report)
 
 
+@dataclass(frozen=True)
+class ReviewedDiff:
+    """The unpartitioned budget-filtered diff plus its exclusion accounting."""
+
+    text: str
+    report: DiffBudgetReport
+
+
+def reviewed_diff(
+    diff: str,
+    *,
+    generated_globs: Sequence[str] = DEFAULT_GENERATED_GLOBS,
+    max_file_chars: int = 200_000,
+    max_total_chars: int = 400_000,
+) -> ReviewedDiff:
+    """Project every kept segment behind one exclusion header without chunking.
+
+    Post-discovery stages verify one candidate against the reviewed content and
+    may need any kept file to do so, so they receive the retained diff whole
+    rather than one chunk. Sharing this projection with ``apply_diff_budget``
+    keeps a single owner for exclusion policy: an adjudication prompt can never
+    contain a path that discovery was not allowed to review.
+
+    The planner repeats the exclusion header on every chunk so each lane prompt
+    is self-describing. Joining chunk text would therefore restate that header
+    once per chunk, so this projection rebuilds the retained segments directly
+    and states the header exactly once.
+    """
+
+    _chunks, report = apply_diff_budget(
+        diff,
+        generated_globs=generated_globs,
+        max_file_chars=max_file_chars,
+        max_total_chars=max_total_chars,
+    )
+    kept = set(report.kept_files)
+    retained = "".join(segment.text for segment in split_diff_files(diff) if segment.file in kept)
+    return ReviewedDiff(text=f"{_exclusion_header(report.excluded_files)}{retained}", report=report)
+
+
 __all__ = [
     "DEFAULT_GENERATED_GLOBS",
     "DiffBudgetReport",
@@ -258,7 +304,9 @@ __all__ = [
     "DiffChunkPlacement",
     "DiffFileSegment",
     "EmptyReviewDiffError",
+    "ReviewedDiff",
     "apply_diff_budget",
     "require_reviewable_diff",
+    "reviewed_diff",
     "split_diff_files",
 ]

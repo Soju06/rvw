@@ -11,6 +11,9 @@ Adjudication is a machine stage that checks merged claims against the target che
 - ADR-008 turns that uncertainty into a single wider pass. The real PR #1119 smoke adjudicated 13 collapse groups with three unanimous replicas in about 197 seconds after DISCOVER took about 410 seconds.
 - Production measurement (2026-08-12, 26 runs): single-pass adjudication confirmed 250 of 272 groups (92%), and five of eight lanes produced no rejected groups. Because a review dispatched a median of one adjudication run versus eight discovery runs, restoring three adjudication replicas adds about 0.34M tokens per review without increasing peak sessions or critical-path wall time.
 - Missing items become UNCERTAIN votes so a model cannot create an implicit rejection by omission. Majority is strict (`> 50%`), making ties uncertain; explicit one-replica mode remains available and one valid vote then wins because `1 > 1 / 2`.
+- The reviewed diff an adjudication replica receives is the budget-filtered projection shared with discovery, not the raw target diff. A measured fixture with two excluded files and one kept file previously produced an adjudication prompt 37.2 times larger than discovery's retained content, because generated and oversized segments returned through the raw diff. Reusing one projection keeps the adjudicator from reasoning over content no lane was allowed to review.
+- Adjudication prompts stay unchunked. A candidate may need any kept file to be verified, so partitioning would change which evidence a verdict can rest on rather than remove waste.
+- The all-invalid retry carries each prior replica's machine-readable invalid reason, matching the presence-recheck retry contract. A byte-identical replacement prompt gives a schema-shaped failure no reason to resolve differently.
 
 ## Constraints
 

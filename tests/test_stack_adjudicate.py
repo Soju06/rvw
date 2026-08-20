@@ -65,6 +65,10 @@ def lineage(
     )
 
 
+def diff_segment(path: str, body: str) -> str:
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+{body}\n"
+
+
 def target(pr_number: int = 2) -> ResolvedTarget:
     return ResolvedTarget(
         kind="pr",
@@ -72,7 +76,7 @@ def target(pr_number: int = 2) -> ResolvedTarget:
         base_sha="1" * 40,
         head_sha="2" * 40,
         changed_paths=["src/a.py"],
-        diff="@@ -1 +1 @@\n-old\n+new\n",
+        diff=diff_segment("src/a.py", "new"),
         pr_number=pr_number,
     )
 
@@ -406,3 +410,35 @@ async def test_presence_uses_strict_majority(tmp_path: Path) -> None:
         Presence.PRESENT,
         Presence.ABSENT,
     ]
+
+
+async def test_presence_prompt_omits_budget_excluded_content(tmp_path: Path) -> None:
+    generated = diff_segment("pnpm-lock.yaml", "generated")
+    source = diff_segment("src/a.py", "kept")
+    descendant = ResolvedTarget(
+        kind="pr",
+        repo="owner/repo",
+        base_sha="1" * 40,
+        head_sha="2" * 40,
+        changed_paths=["src/a.py"],
+        diff=generated + source,
+        pr_number=2,
+    )
+    runtime = FakeRuntime([RuntimePresence(items=[runtime_item("L1", Presence.PRESENT)])])
+
+    await adjudicate_presence(
+        [lineage()],
+        pr_number=2,
+        member_order=[1, 2],
+        target=descendant,
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "presence",
+        replicas=1,
+    )
+
+    prompt = str(runtime.calls[0]["prompt"])
+    assert generated not in prompt
+    assert source in prompt
+    assert "# rvw: 1 files excluded from review diff" in prompt
+    assert "pnpm-lock.yaml" in prompt

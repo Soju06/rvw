@@ -16,6 +16,8 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 - A real one-chunk PR #1119 run dispatched 13 lanes x 3 replicas and completed DISCOVER in about 410 seconds with all 39 runs valid. ADJUDICATE then took about 197 seconds.
 - The same PR contained a 2.84 MB generated `contract-graph.json` inside a 2.87 MB diff. Excluding it left 26,195 characters of reviewable source and motivated visible, file-level diff budgeting.
 - On 2026-07-28, three `apifuse-provider-tabelog` worktree reviews retained 734,985 characters and `codex-lb` PR #1520 retained 464,425 characters. Both were legitimate source review units, so the 400,000-character aggregate limit now bounds one prompt and expands work into ordered whole-file chunks instead of rejecting the review.
+- 2026-08-21: adjudication and stack presence recheck were found re-embedding the unfiltered target diff, returning excluded generated and oversized segments to prompts. The exclusion policy therefore also exposes an unpartitioned reviewed-diff projection so post-discovery stages share one owner for that policy instead of re-implementing it.
+- 2026-08-21: the all-invalid replacement wave was found re-sending a byte-identical prompt, so it now carries that lane-chunk's prior invalid reasons in the same form stack presence recheck already used.
 
 ## Constraints
 
@@ -31,6 +33,7 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 
 - A base registry missing `unscoped-sweep` creates a silent coverage gap.
 - A generated file not matched by the default globs may create extra chunks and model work.
+- The exclusion header is rendered once by a shared helper. Rebuilding the unpartitioned reviewed diff by joining chunk text would restate that header once per chunk, and only the intersection of a nonempty exclusion set with a multi-chunk retained diff exposes it; a test covering either condition alone passes.
 - If all replicas remain invalid after the replacement wave, the lane contributes no findings but remains visible with zero valid coverage.
 - Missing, duplicated, unexpected, or invalid lane-replica-chunk coverage remains a fail-closed gate condition.
 - A PR body can be wrong or adversarial; it is intent provenance, not correctness evidence.
