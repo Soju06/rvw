@@ -80,7 +80,7 @@ from rvw.provenance import current_build_provenance, version_label
 from rvw.publish import PublishError, publish_body_review, publish_review
 from rvw.registry import Registry, load_registry
 from rvw.report import render_report
-from rvw.runtimes.codex import CodexRuntime
+from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.sample import SampleReport, sample_lane
 from rvw.schema import Severity, Tier, Verdict, finding_schema, lane_output_schema
 from rvw.stack import (
@@ -665,7 +665,9 @@ async def _execute_pipeline(
         registry=registry,
         lanes_root=lanes_root,
         target=target,
-        runtime=CodexRuntime(),
+        runtime=CodexRuntime(mode=CodexRuntimeMode.TOOL_LESS),
+        adjudication_runtime=CodexRuntime(mode=CodexRuntimeMode.TOOL_LESS),
+        expanded_adjudication_runtime=CodexRuntime(mode=CodexRuntimeMode.AGENTIC),
         adjudicator=adjudicate,
         active_lanes=active_lanes,
         repo_dir=repo_dir,

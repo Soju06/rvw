@@ -51,13 +51,16 @@ def build_adjudication_prompt(
 ) -> str:
     """Render an adjudication-only prompt with every replica body preserved."""
 
+    role = (
+        "You are an adjudicator, not a reviewer. For each candidate finding, decide from "
+        "the ACTUAL SOURCE in this working directory whether it is real. Do not report new findings."
+        if expanded
+        else "You are an adjudicator, not a reviewer. For each candidate finding, decide from "
+        "the supplied candidate bodies and unified diff. Do not report new findings."
+    )
     parts = [
         "# Role",
-        (
-            "You are an adjudicator, not a reviewer. For each candidate finding, decide from "
-            "the ACTUAL SOURCE in this working directory whether it is real. Do not report new "
-            "findings."
-        ),
+        role,
         "# Verdict contract",
         (
             "CONFIRMED = the defect is real at HEAD; evidence must quote the offending source "
@@ -82,6 +85,17 @@ def build_adjudication_prompt(
                     "the full enclosing function/class, find the symbol's definition and its "
                     "callers (grep), and check tests covering the path, before deciding. Prior "
                     "pass returned UNCERTAIN for these."
+                ),
+            ]
+        )
+    else:
+        parts.extend(
+            [
+                "## Evidence boundary",
+                (
+                    "The supplied candidate bodies and unified diff are the complete evidence for "
+                    "this initial pass. Do not inspect the working directory or use tools. Return "
+                    "UNCERTAIN when they cannot establish the verdict."
                 ),
             ]
         )
@@ -291,6 +305,7 @@ async def adjudicate(
     deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     concurrency: int = DEFAULT_CONCURRENCY,
     host_gate: HostSlotGate | None = None,
+    expanded_runtime: Runtime | None = None,
 ) -> AdjudicationOutcome:
     """Adjudicate all collapse groups, widening context once for uncertainty."""
 
@@ -309,6 +324,7 @@ async def adjudicate(
             unresolved=[],
             coerced_rejections=0,
         )
+    expanded_runtime = expanded_runtime or runtime
 
     semaphore = asyncio.Semaphore(concurrency)
     reviewed = reviewed_diff(target.diff)
@@ -319,6 +335,7 @@ async def adjudicate(
         expanded: bool,
         label: str,
         deadline: int,
+        pass_runtime: Runtime,
         retry_invalid_reasons: Sequence[str] = (),
     ) -> list[RunResult[Any]]:
         prompt = build_adjudication_prompt(
@@ -333,7 +350,7 @@ async def adjudicate(
             async with semaphore:
                 run_dir = out_root / label / f"r{replica}"
                 async with host_slot(host_gate):
-                    return await runtime.execute_raw(
+                    return await pass_runtime.execute_raw(
                         schema=schema,
                         prompt=prompt,
                         run_dir=run_dir,
@@ -351,7 +368,14 @@ async def adjudicate(
     async def execute_pass(
         groups: Sequence[CollapseGroup], *, expanded: bool, label: str, deadline: int
     ) -> list[RunResult[Any]]:
-        results = await execute_wave(groups, expanded=expanded, label=label, deadline=deadline)
+        pass_runtime = expanded_runtime if expanded else runtime
+        results = await execute_wave(
+            groups,
+            expanded=expanded,
+            label=label,
+            deadline=deadline,
+            pass_runtime=pass_runtime,
+        )
         if all(result.status is RunStatus.INVALID for result in results):
             retry_invalid_reasons = [
                 f"replica {result.replica}: {result.invalid_reason or 'unknown_invalid'}"
@@ -362,6 +386,7 @@ async def adjudicate(
                 expanded=expanded,
                 label=f"{label}-retry",
                 deadline=deadline,
+                pass_runtime=pass_runtime,
                 retry_invalid_reasons=retry_invalid_reasons,
             )
             if all(result.status is RunStatus.INVALID for result in retry_results):

@@ -288,6 +288,47 @@ async def test_missing_items_vote_uncertain_and_only_tied_group_is_expanded(
     assert all("DECIDED BODY" not in cast(str, call["prompt"]) for call in expanded_calls)
 
 
+async def test_expanded_uncertainty_uses_distinct_agentic_runtime(tmp_path: Path) -> None:
+    group = make_group("needs-source")
+    initial = FakeRuntime(
+        [
+            [
+                RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)]),
+                RuntimeAdjudication(items=[item(group.key, Verdict.REJECTED, evidence="counter")]),
+                RuntimeAdjudication(items=[item(group.key, Verdict.UNCERTAIN, evidence="")]),
+            ]
+        ]
+    )
+    expanded = FakeRuntime(
+        [
+            [
+                RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)]),
+                RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)]),
+                RuntimeAdjudication(items=[item(group.key, Verdict.REJECTED, evidence="counter")]),
+            ]
+        ]
+    )
+
+    outcome = await adjudicate(
+        make_merged(group),
+        target=make_target(),
+        runtime=initial,
+        expanded_runtime=expanded,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "out",
+    )
+
+    assert outcome.verdicts[group.key] is Verdict.CONFIRMED
+    assert len(initial.calls) == 3
+    assert len(expanded.calls) == 3
+    assert all("## Evidence boundary" in cast(str, call["prompt"]) for call in initial.calls)
+    assert all(
+        "ACTUAL SOURCE in this working directory" not in cast(str, call["prompt"])
+        for call in initial.calls
+    )
+    assert all("EXPANDED CONTEXT PASS" in cast(str, call["prompt"]) for call in expanded.calls)
+
+
 async def test_still_uncertain_after_expansion_is_unresolved(tmp_path: Path) -> None:
     group = make_group("uncertain")
     split = [

@@ -20,6 +20,7 @@ from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import MergeResult
 from rvw.runtimes import RunResult, RunStatus, Runtime
+from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Verdict
 from rvw.store import RunStore
 from rvw.target import ResolvedTarget
@@ -103,6 +104,9 @@ Find the fixture issue.
 
 class FakeRuntime:
     name = "fake"
+
+    def __init__(self, **_kwargs: object) -> None:
+        pass
 
     async def execute(
         self,
@@ -245,6 +249,31 @@ def test_review_cli_passes_command_host_gate_to_execute_pipeline(
     assert calls[0]["host_gate"] is gate
 
 
+def test_review_uses_tool_less_initial_and_agentic_expanded_runtime(
+    monkeypatch: pytest.MonkeyPatch, registry_root: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_execute_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _spec: pr_target())
+    monkeypatch.setattr(cli_module, "execute_pipeline", fake_execute_pipeline)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["review", "--target", "HEAD", "--registry", str(registry_root)],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert cast(CodexRuntime, calls[0]["runtime"]).mode is CodexRuntimeMode.TOOL_LESS
+    assert cast(CodexRuntime, calls[0]["adjudication_runtime"]).mode is CodexRuntimeMode.TOOL_LESS
+    assert (
+        cast(CodexRuntime, calls[0]["expanded_adjudication_runtime"]).mode
+        is CodexRuntimeMode.AGENTIC
+    )
+
+
 def test_review_rejects_zero_concurrency_before_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -286,9 +315,14 @@ async def test_shared_pipeline_propagates_split_replicas_concurrency_and_deadlin
         stage_calls.append(("discover", replicas, concurrency, deadline_seconds))
         return DiscoverResult(lane_results={}, findings=[], coverage=[])
 
+    discovery_runtime = cast(Runtime, FakeRuntime())
+    expanded_runtime = cast(Runtime, FakeRuntime())
+
     async def fake_adjudicate(merged: MergeResult, **kwargs: object) -> AdjudicationOutcome:
         del merged
         assert kwargs["host_gate"] is gate
+        assert kwargs["runtime"] is discovery_runtime
+        assert kwargs["expanded_runtime"] is expanded_runtime
         replicas = kwargs["replicas"]
         concurrency = kwargs["concurrency"]
         deadline_seconds = kwargs["deadline_seconds"]
@@ -315,7 +349,9 @@ async def test_shared_pipeline_propagates_split_replicas_concurrency_and_deadlin
         lanes_root=lanes_root,
         target=pr_target(),
         active_lanes=[],
-        runtime=cast(Runtime, FakeRuntime()),
+        runtime=discovery_runtime,
+        adjudication_runtime=discovery_runtime,
+        expanded_adjudication_runtime=expanded_runtime,
         adjudicator=fake_adjudicate,
         repo_dir=checkout,
         discover_replicas=2,

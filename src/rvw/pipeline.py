@@ -96,6 +96,8 @@ async def execute_pipeline(
     out_root: Path,
     pause: bool,
     dynamic_brief: Path | None,
+    adjudication_runtime: Runtime | None = None,
+    expanded_adjudication_runtime: Runtime | None = None,
     host_gate: HostSlotGate | None = None,
     on_pause: MessageSink | None = None,
     on_warning: MessageSink | None = None,
@@ -106,6 +108,8 @@ async def execute_pipeline(
         raise ValueError("discover_replicas must be at least 1")
     if adjudicate_replicas < 1:
         raise ValueError("adjudicate_replicas must be at least 1")
+    adjudication_runtime = adjudication_runtime or runtime
+    expanded_adjudication_runtime = expanded_adjudication_runtime or adjudication_runtime
     run = RunStore(out_root).create(target)
     if on_warning is not None and (warning := stale_install_warning()) is not None:
         on_warning(warning)
@@ -150,7 +154,8 @@ async def execute_pipeline(
             outcome = await adjudicator(
                 merged,
                 target=target,
-                runtime=runtime,
+                runtime=adjudication_runtime,
+                expanded_runtime=expanded_adjudication_runtime,
                 repo_dir=repo_dir,
                 out_root=run.dir / "adjudicate-runtime",
                 replicas=adjudicate_replicas,
