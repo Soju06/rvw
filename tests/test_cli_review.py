@@ -404,7 +404,14 @@ async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
             host_gate,
         )
         received_runtime = runtime
-        return AdjudicationOutcome({}, {}, {}, {}, [], 0)
+        return AdjudicationOutcome(
+            verdicts={},
+            reasons={},
+            evidence={},
+            replica_votes={},
+            unresolved=[],
+            coerced_rejections=0,
+        )
 
     registry, lanes_root = cli_module._load_registry_root(registry_root)
     checkout = tmp_path / "checkout"
