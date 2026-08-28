@@ -390,7 +390,14 @@ async def discover(
     runs_by_lane_chunk: dict[tuple[str, int], list[PlannedRun]] = {}
     for run in plan.runs:
         runs_by_lane_chunk.setdefault((run.lane.id, run.chunk), []).append(run)
-    retries_already_run = set(prior_retry_keys or ()) & planned_keys
+    # Older direct callers have attempt history but not per-attempt provenance.
+    # Treat a second recorded attempt as a completed replacement conservatively:
+    # a missing replacement may still be finished for another replica, but no
+    # identity may be sent to a third attempt.
+    retries_already_run = (
+        set(prior_retry_keys or ())
+        | {key for key, attempts in attempt_history.items() if len(attempts) > 1}
+    ) & planned_keys
     legacy_retry_lane_chunks = set(prior_retry_lane_chunks or ())
     retry_runs_by_lane_chunk: dict[tuple[str, int], list[PlannedRun]] = {}
     for lane_chunk, runs in runs_by_lane_chunk.items():

@@ -576,9 +576,9 @@ async def test_discover_resume_completes_only_missing_replacement_replicas(
     replacement_one = RunResult(
         lane_id="slop-hygiene",
         replica=1,
-        status=RunStatus.VALID,
-        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
-        invalid_reason=None,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "retry" / "r1",
     )
@@ -609,7 +609,7 @@ async def test_discover_resume_completes_only_missing_replacement_replicas(
 
     assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "retry" / "r2"]
     assert [[attempt.valid for attempt in run.attempts] for run in result.coverage[0].runs] == [
-        [False, True],
+        [False, False],
         [False, True],
     ]
 
@@ -631,7 +631,7 @@ async def test_discover_resume_does_not_complete_partial_retry_without_all_inval
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="exit_nonzero:1",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r1",
     )
@@ -644,12 +644,12 @@ async def test_discover_resume_does_not_complete_partial_retry_without_all_inval
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "retry" / "r1",
     )
-    valid_two = RunResult(
+    correctable_initial_two = RunResult(
         lane_id="slop-hygiene",
         replica=2,
-        status=RunStatus.VALID,
-        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
-        invalid_reason=None,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r2",
     )
@@ -664,13 +664,59 @@ async def test_discover_resume_does_not_complete_partial_retry_without_all_inval
         planned=plan,
         prior_attempts={
             ("slop-hygiene", 1, 1): [initial_one, replacement_one],
-            ("slop-hygiene", 2, 1): [valid_two],
+            ("slop-hygiene", 2, 1): [correctable_initial_two],
         },
         prior_retry_keys={("slop-hygiene", 1, 1)},
     )
 
     assert runtime.calls == []
-    assert result.coverage[0].valid == 2
+    assert result.coverage[0].valid == 1
+
+
+async def test_discover_does_not_start_a_third_attempt_without_retry_metadata(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=1,
+    )
+    initial = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    replacement = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "retry" / "r1",
+    )
+    runtime = FakeRuntime()
+
+    with pytest.raises(IncompleteDiscoveryError, match="slop-hygiene"):
+        await discover(
+            registry=reg,
+            lanes_root=lanes_root,
+            target=target(),
+            runtime=runtime,
+            out_root=tmp_path / "out",
+            planned=plan,
+            prior_attempts={("slop-hygiene", 1, 1): [initial, replacement]},
+        )
+
+    assert runtime.calls == []
 
 
 async def test_discover_accepts_legacy_retry_lane_chunk_state(tmp_path: Path) -> None:
