@@ -6,8 +6,24 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 
 ## Key decisions and measured basis
 
+- 2026-08-27: `git status --porcelain` may report an untracked OpenSpec archive
+  as one directory. Uncommitted target resolution now expands its regular
+  non-symlink members before diff rendering, so a directory is never passed to
+  `read_text()` and symlink targets remain outside review scope.
+
 - ADR-005 makes `unscoped-sweep` the structural coverage net. On a six-defect fixture, the scoped slop lane found 0/3 deep defects in both enum and free-ID conditions, while the sweep found 3/3. Its warning cap contains the higher expected false-positive rate.
 - ADR-006 measured the benefit of three replicas. Eight repeated runs showed an individual run recovered about 88% of the union; three replicas raised expected union recall to about 99%, while four added little. The 2026-07-30 owner decision keeps discovery replication as opt-in heavy verification and makes one discovery replica the ordinary default to avoid executor overload across concurrent rvw runs; the 2026-08-12 split decouples that count from adjudication.
+- 2026-08-27: five cancelled reviews created 48 Codex sessions and used
+  6,090,617 reported CLI tokens; three broad lanes accounted for about 95%.
+  A request for three discovery replicas across four lanes created 12 initial
+  runs and could create 24 with all-invalid retry. One pure planner now supplies
+  both the exact initial prompts sent to dispatch and preflight accounting, so
+  prompt-character totals cannot drift from execution.
+- 2026-08-27: cancellation left individual runtime artifacts but no safe
+  run-level reuse record. DISCOVER now persists a manifest before dispatch and
+  each completed result through its existing progress seam; resume reuses only
+  a VALID identity whose target, prompt, lane document, schema, policy, and
+  RVW version all still match.
 - Concurrency tests on a 22-core host found N=4, 8, and 16 completed in 49.1, 50.0, and 50.6 seconds. After concurrent rvw processes saturated the shared account pool on 2026-08-06, the default cap was reduced to 8 while retaining an explicit positive override, one wave, and heavy-first LPT ordering.
 - The runtime deadline remains 600 seconds by default. Operators can select a 1-through-1800-second base deadline through runtime-executing CLI commands; the ceiling is three times the established default and prevents one dispatched runtime from pinning a host-global slot for hours.
 - 2026-08-12: Process-local semaphores multiply across concurrent rvw processes. Six processes at the per-process default of 8 implied 48 theoretical runtime streams, following the 2026-08-06 account-pool saturation incident that produced selection retries and 503 degraded-mode lane failures. A host-global default cap of 12 now bounds aggregate runtime streams; the effective bound is the smaller of the process and host caps, and `RVW_HOST_CONCURRENCY=0` disables only the host gate.
@@ -19,6 +35,21 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 - 2026-08-21: adjudication and stack presence recheck were found re-embedding the unfiltered target diff, returning excluded generated and oversized segments to prompts. The exclusion policy therefore also exposes an unpartitioned reviewed-diff projection so post-discovery stages share one owner for that policy instead of re-implementing it.
 - 2026-08-21: the all-invalid replacement wave was found re-sending a byte-identical prompt, so it now carries that lane-chunk's prior invalid reasons in the same form stack presence recheck already used.
 - Final planned execution loss is evaluated separately from retry history. Ordered attempts remain the audit trail, while the final diagnostic and normalized reason drive strict coverage status: mixed valid/invalid execution is degraded and all-invalid planned execution is failed.
+- 2026-08-27: unfinished sessions dominated observed token usage. Only output
+  contract failures (`json_parse_error` and `schema_validation_error`) now get
+  one corrective replacement; timeout and other non-correctable all-invalid
+  groups fail closed instead of repeating a full wave.
+- 2026-08-27: a self-review showed that replacing one manifest row per identity
+  erased retry evidence and reused artifact paths under resume. New manifests
+  retain append-only v2 attempt records; v1 rows remain readable as one initial
+  attempt, and later resume work receives a distinct artifact path.
+- 2026-08-27: filesystem expansion of Git's abbreviated untracked directories
+  could include ignored files. Uncommitted target resolution now uses Git's
+  `--others --exclude-standard` inventory as the review-input boundary.
+- 2026-08-28: three full and sliced `gpt-5.6-sol / max` discovery runs exhausted
+  their 600-second deadline while continuing shell exploration and never emitted
+  strict output. A tool-less strict-JSON Codex spike completed with zero shell
+  events, so planned prompt evidence is now the default discovery boundary.
 
 ## Constraints
 
@@ -28,6 +59,14 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 - Cross-chunk prompts list all kept paths and mark the current subset, but do not duplicate other chunks' source text.
 - Per-process concurrency above 16 has not been measured; operators who override the defaults are responsible for matching shared gateway capacity.
 - Direct discovery callers preserve any positive deadline for API compatibility; the 1800-second ceiling applies to CLI operator input.
+- Initial prompt characters are exact before execution. Retry-feedback
+  characters depend on observed invalid reasons, so preflight represents retry
+  cost as a run upper bound rather than fabricating an exact retry prompt total.
+- Resume is discovery-only in this transition. Incomplete adjudication remains
+  non-reusable until its different grouping and expanded-pass identities have a
+  similarly proven manifest contract.
+- Lane scope and brief requirement are declarative code metadata only until an
+  explicitly approved external registry update assigns them to real lanes.
 - PR fallback uses title and body; linked issues from ADR-010 are not resolved by the current target model.
 
 ## Failure modes

@@ -97,7 +97,7 @@ The CLI MUST load layer definitions from `~/.hermes/review/layers.yaml` by defau
 
 ### Requirement: Lane documents combine frontmatter and prompt text
 
-A lane document MUST contain YAML frontmatter followed by a Markdown prompt body, and its frontmatter MUST provide `lane`, `tier`, and at least one `rules` entry while accepting cost, severity cap, covered-rule injection, and validation lifecycle metadata.
+A lane document MUST contain YAML frontmatter followed by a Markdown prompt body, and its frontmatter MUST provide `lane`, `tier`, and at least one `rules` entry while accepting cost, severity cap, covered-rule injection, validation lifecycle, `scope`, and `requires_brief` metadata. `scope` MUST be one of `diff`, `direct-deps`, or `repository`, defaulting to `repository`; `requires_brief` defaults false.
 
 #### Scenario: Valid pending lane
 
@@ -108,6 +108,11 @@ A lane document MUST contain YAML frontmatter followed by a Markdown prompt body
 
 - **WHEN** a lane document omits its closing frontmatter delimiter
 - **THEN** lane loading fails instead of treating the file as prompt text
+
+#### Scenario: Existing lane omits scope metadata
+
+- **WHEN** a legacy lane document omits `scope` and `requires_brief`
+- **THEN** it loads as `repository` scope with no brief requirement
 
 ### Requirement: Lane IDs cannot escape the registry
 

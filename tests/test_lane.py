@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import cast
 
-from rvw.lane import load_lane
+from rvw.lane import Lane, load_lane
 
 FIXTURES = Path(__file__).parent / "fixtures" / "lanes"
 FIXTURE = FIXTURES / "slop-hygiene.md"
@@ -67,3 +67,24 @@ def test_output_schema_satisfies_openai_strict_required() -> None:
 def test_validation_lifecycle_field() -> None:
     lane = load_lane(FIXTURE)
     assert lane.validation is None  # fixture pre-dates the sample gate
+
+
+def test_lane_scope_and_brief_requirement_default_compatibly() -> None:
+    lane = load_lane(FIXTURE)
+
+    assert lane.scope == "repository"
+    assert lane.requires_brief is False
+
+
+def test_lane_accepts_explicit_scope_and_brief_requirement() -> None:
+    lane = Lane(
+        lane="dynamic/change-intent",
+        tier="dynamic",
+        rules=["dynamic/intent"],
+        prompt_body="Review the stated intent.",
+        scope="direct-deps",
+        requires_brief=True,
+    )
+
+    assert lane.scope == "direct-deps"
+    assert lane.requires_brief is True

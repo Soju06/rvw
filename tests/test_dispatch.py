@@ -38,9 +38,11 @@ class FakeRuntime(Runtime):
         self,
         *,
         statuses: dict[str, Sequence[RunStatus]] | None = None,
+        invalid_reasons: dict[str, Sequence[str]] | None = None,
         delays: dict[str, float] | None = None,
     ) -> None:
         self._statuses = statuses or {}
+        self._invalid_reasons = invalid_reasons or {}
         self._delays = delays or {}
         self._lane_call_counts: dict[str, int] = {}
         self.starts: list[tuple[str, int]] = []
@@ -81,7 +83,13 @@ class FakeRuntime(Runtime):
             replica=replica,
             status=status,
             output=RuntimeLaneOutput(verdict="PASS") if status is RunStatus.VALID else None,
-            invalid_reason="scripted_invalid" if status is RunStatus.INVALID else None,
+            invalid_reason=(
+                self._invalid_reasons.get(lane.id, ("scripted_invalid",))[call_index]
+                if call_index < len(self._invalid_reasons.get(lane.id, ()))
+                else "scripted_invalid"
+            )
+            if status is RunStatus.INVALID
+            else None,
             wall_seconds=self._delays.get(lane.id, 0.001),
             artifact_dir=run_dir,
         )
@@ -287,6 +295,43 @@ async def test_dispatch_releases_host_slot_after_runtime_cancellation(tmp_path: 
         pass
 
 
+async def test_cancellation_does_not_start_queued_runtime_work(tmp_path: Path) -> None:
+    first = make_lane("first")
+    queued = make_lane("queued")
+    started = asyncio.Event()
+    calls: list[str] = []
+
+    class BlockingRuntime(FakeRuntime):
+        async def execute(
+            self,
+            *,
+            lane: Lane,
+            prompt: str,
+            run_dir: Path,
+            deadline_seconds: int,
+        ) -> RunResult:
+            del prompt, run_dir, deadline_seconds
+            calls.append(lane.id)
+            started.set()
+            await asyncio.Future()
+            raise AssertionError("unreachable")
+
+    task = asyncio.create_task(
+        dispatch(
+            [planned(first), planned(queued)],
+            BlockingRuntime(),
+            out_root=tmp_path / "runs",
+            concurrency=1,
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert calls == ["first"]
+
+
 async def test_one_invalid_replica_does_not_trigger_redispatch(tmp_path: Path) -> None:
     lane = make_lane("partly-valid")
     runtime = FakeRuntime(
@@ -313,7 +358,8 @@ async def test_all_invalid_lane_is_redispatched_once(tmp_path: Path) -> None:
                 RunStatus.VALID,
                 RunStatus.VALID,
             ]
-        }
+        },
+        invalid_reasons={lane.id: ["schema_validation_error", "schema_validation_error"]},
     )
 
     results = await dispatch(
@@ -326,6 +372,70 @@ async def test_all_invalid_lane_is_redispatched_once(tmp_path: Path) -> None:
     assert all(result.status is RunStatus.VALID for result in results)
 
 
+async def test_all_timeout_replicas_do_not_start_an_identical_retry(tmp_path: Path) -> None:
+    lane = make_lane("times-out")
+    runtime = FakeRuntime(
+        statuses={lane.id: [RunStatus.INVALID, RunStatus.INVALID]},
+        invalid_reasons={lane.id: ["exit_nonzero:124", "exit_nonzero:124"]},
+    )
+
+    results = await dispatch([planned(lane, 1), planned(lane, 2)], runtime, out_root=tmp_path)
+
+    assert runtime.calls_for(lane.id) == 2
+    assert [result.invalid_reason for result in results] == ["exit_nonzero:124", "exit_nonzero:124"]
+
+
+async def test_prior_valid_lane_chunk_prevents_pending_invalid_retry(tmp_path: Path) -> None:
+    lane = make_lane("resumed-valid")
+    runtime = FakeRuntime(
+        statuses={lane.id: [RunStatus.INVALID]},
+        invalid_reasons={lane.id: ["schema_validation_error"]},
+    )
+
+    outcome = await dispatch_outcome(
+        [planned(lane, 2)],
+        runtime,
+        out_root=tmp_path,
+        prior_valid_lane_chunks={(lane.id, 1)},
+    )
+
+    assert runtime.calls_for(lane.id) == 1
+    assert outcome.results[0].invalid_reason == "schema_validation_error"
+
+
+async def test_prior_retry_lane_chunk_prevents_another_replacement_wave(tmp_path: Path) -> None:
+    lane = make_lane("resumed-retry")
+    runtime = FakeRuntime(
+        statuses={lane.id: [RunStatus.INVALID]},
+        invalid_reasons={lane.id: ["schema_validation_error"]},
+    )
+
+    await dispatch_outcome(
+        [planned(lane)],
+        runtime,
+        out_root=tmp_path,
+        prior_retry_lane_chunks={(lane.id, 1)},
+        attempt_numbers_by_key={(lane.id, 1, 1): 3},
+    )
+
+    assert runtime.calls_for(lane.id) == 1
+    assert runtime.run_dirs == [tmp_path / lane.id / "resume" / "a3" / "r1"]
+
+
+async def test_resumed_attempt_uses_a_distinct_artifact_directory(tmp_path: Path) -> None:
+    lane = make_lane("resumed-attempt")
+    runtime = FakeRuntime()
+
+    await dispatch_outcome(
+        [planned(lane)],
+        runtime,
+        out_root=tmp_path,
+        attempt_numbers_by_key={(lane.id, 1, 1): 2},
+    )
+
+    assert runtime.run_dirs == [tmp_path / lane.id / "resume" / "a2" / "r1"]
+
+
 async def test_dispatch_outcome_exposes_initial_results_only_for_retried_keys(
     tmp_path: Path,
 ) -> None:
@@ -335,7 +445,8 @@ async def test_dispatch_outcome_exposes_initial_results_only_for_retried_keys(
         statuses={
             recovers.id: [RunStatus.INVALID, RunStatus.VALID],
             steady.id: [RunStatus.VALID],
-        }
+        },
+        invalid_reasons={recovers.id: ["schema_validation_error"]},
     )
     outcome = await dispatch_module.dispatch_outcome(
         [planned(recovers), planned(steady)],
@@ -355,6 +466,7 @@ async def test_all_invalid_retry_preserves_initial_wave_artifacts(tmp_path: Path
     lane = make_lane("preserve-invalid")
     runtime = ArtifactRuntime(
         statuses={lane.id: [RunStatus.INVALID, RunStatus.VALID]},
+        invalid_reasons={lane.id: ["schema_validation_error"]},
     )
 
     await dispatch([planned(lane)], runtime, out_root=tmp_path)
@@ -368,7 +480,10 @@ async def test_all_invalid_retry_preserves_initial_wave_artifacts(tmp_path: Path
 
 async def test_still_invalid_after_retry_is_returned_without_looping(tmp_path: Path) -> None:
     lane = make_lane("never-valid")
-    runtime = FakeRuntime(statuses={lane.id: [RunStatus.INVALID] * 4})
+    runtime = FakeRuntime(
+        statuses={lane.id: [RunStatus.INVALID] * 4},
+        invalid_reasons={lane.id: ["schema_validation_error", "schema_validation_error"]},
+    )
 
     results = await dispatch(
         [planned(lane, 1), planned(lane, 2)],
@@ -383,7 +498,10 @@ async def test_still_invalid_after_retry_is_returned_without_looping(tmp_path: P
 async def test_results_are_sorted_and_progress_includes_retries(tmp_path: Path) -> None:
     lane_z = make_lane("z-lane")
     lane_a = make_lane("a-lane")
-    runtime = FakeRuntime(statuses={lane_z.id: [RunStatus.INVALID] * 4})
+    runtime = FakeRuntime(
+        statuses={lane_z.id: [RunStatus.INVALID] * 4},
+        invalid_reasons={lane_z.id: ["schema_validation_error", "schema_validation_error"]},
+    )
     progress: list[tuple[str, int]] = []
 
     def on_progress(result: RunResult) -> None:
@@ -435,7 +553,10 @@ async def test_multi_chunk_paths_and_result_keys_are_distinct(tmp_path: Path) ->
 
 async def test_all_invalid_retry_is_scoped_to_lane_chunk(tmp_path: Path) -> None:
     lane = make_lane("chunk-retry")
-    runtime = FakeRuntime(statuses={lane.id: [RunStatus.INVALID, RunStatus.VALID, RunStatus.VALID]})
+    runtime = FakeRuntime(
+        statuses={lane.id: [RunStatus.INVALID, RunStatus.VALID, RunStatus.VALID]},
+        invalid_reasons={lane.id: ["schema_validation_error"]},
+    )
 
     results = await dispatch(
         [
@@ -485,7 +606,7 @@ async def test_all_invalid_lane_chunk_replacement_prompt_names_prior_invalid_rea
                 replica=replica,
                 status=RunStatus.INVALID if invalid else RunStatus.VALID,
                 output=None if invalid else RuntimeLaneOutput(verdict="PASS"),
-                invalid_reason="schema_invalid" if invalid else None,
+                invalid_reason="schema_validation_error" if invalid else None,
                 wall_seconds=0.0,
                 artifact_dir=run_dir,
             )
@@ -507,11 +628,11 @@ async def test_all_invalid_lane_chunk_replacement_prompt_names_prior_invalid_rea
     assert len(steady_prompts) == 1
     for prompt in retried_prompts[:2]:
         assert "## Retry feedback" not in prompt
-        assert "schema_invalid" not in prompt
+        assert "schema_validation_error" not in prompt
     for prompt in retried_prompts[2:]:
         assert "## Retry feedback" in prompt
-        assert "replica 1: schema_invalid" in prompt
-        assert "replica 2: schema_invalid" in prompt
+        assert "replica 1: schema_validation_error" in prompt
+        assert "replica 2: schema_validation_error" in prompt
     assert "## Retry feedback" not in steady_prompts[0]
 
 

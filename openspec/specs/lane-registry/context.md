@@ -8,6 +8,11 @@ A planned Run expands across lane, replica, and diff chunk. `rvw plan` derives c
 
 ## Key decisions and measured basis
 
+- Scope (`diff`, `direct-deps`, or `repository`) and `requires_brief` are
+  compatible optional lane metadata. Their defaults preserve the current
+  registry behavior; this repository does not modify the external runtime
+  registry to select real scope values.
+
 - ADR-001 separates Rule, Lane, Layer, Runtime, and Run so review content, activation, execution mechanics, and publication policy do not collapse into one kind of document.
 - ADR-002 fixes four increasingly specific tiers. Base is the structural always-on floor; project and scope use repository/path predicates; dynamic carries per-target intent.
 - ADR-011 places the live registry at `~/.hermes/review/` and makes call sites refer to IDs. A lane document is YAML frontmatter plus its prompt body.

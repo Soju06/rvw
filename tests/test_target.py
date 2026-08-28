@@ -41,6 +41,7 @@ def test_resolve_uncommitted_includes_worktree_shape_and_untracked_file(
         ("gh", "repo", "view", "--json", "nameWithOwner"): REPO_RESPONSE,
         ("git", "rev-parse", "HEAD"): "abc123def456\n",
         ("git", "status", "--porcelain"): " M src/changed.py\n?? new.txt\n",
+        ("git", "ls-files", "--others", "--exclude-standard", "-z"): "new.txt\0",
         ("git", "diff", "HEAD"): "diff --git a/src/changed.py b/src/changed.py\n",
     }
     install_fake_run(monkeypatch, responses)
@@ -58,11 +59,75 @@ def test_resolve_uncommitted_includes_worktree_shape_and_untracked_file(
     assert resolved.pr_number is None
 
 
+def test_resolve_uncommitted_expands_untracked_directory_without_following_symlinks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    archive = tmp_path / "openspec" / "changes" / "archive" / "example"
+    nested = archive / "specs" / "discovery"
+    nested.mkdir(parents=True)
+    (archive / "proposal.md").write_text("proposal\n", encoding="utf-8")
+    (nested / "spec.md").write_text("spec\n", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("must not be read\n", encoding="utf-8")
+    (archive / "outside-link.md").symlink_to(outside)
+    responses: dict[Command, str | Exception] = {
+        ("gh", "repo", "view", "--json", "nameWithOwner"): REPO_RESPONSE,
+        ("git", "rev-parse", "HEAD"): "abc123def456\n",
+        ("git", "status", "--porcelain"): "?? openspec/changes/archive/example/\n",
+        ("git", "ls-files", "--others", "--exclude-standard", "-z"): (
+            "openspec/changes/archive/example/proposal.md\0"
+            "openspec/changes/archive/example/specs/discovery/spec.md\0"
+        ),
+        ("git", "diff", "HEAD"): "",
+    }
+    install_fake_run(monkeypatch, responses)
+
+    resolved = resolve_target("uncommitted", cwd=tmp_path)
+
+    assert resolved.changed_paths == [
+        "openspec/changes/archive/example/proposal.md",
+        "openspec/changes/archive/example/specs/discovery/spec.md",
+    ]
+    assert "+++ b/openspec/changes/archive/example/proposal.md" in resolved.diff
+    assert "+++ b/openspec/changes/archive/example/specs/discovery/spec.md" in resolved.diff
+    assert "outside-link.md" not in resolved.diff
+    assert "must not be read" not in resolved.diff
+
+
+def test_resolve_uncommitted_excludes_ignored_files_from_untracked_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    archive = tmp_path / "openspec" / "changes" / "archive" / "example"
+    archive.mkdir(parents=True)
+    included = archive / "proposal.md"
+    ignored = archive / ".env"
+    included.write_text("proposal\n", encoding="utf-8")
+    ignored.write_text("TOP_SECRET=must-not-reach-a-prompt\n", encoding="utf-8")
+    responses: dict[Command, str | Exception] = {
+        ("gh", "repo", "view", "--json", "nameWithOwner"): REPO_RESPONSE,
+        ("git", "rev-parse", "HEAD"): "abc123def456\n",
+        ("git", "status", "--porcelain"): "?? openspec/changes/archive/example/\n",
+        ("git", "ls-files", "--others", "--exclude-standard", "-z"): (
+            "openspec/changes/archive/example/proposal.md\0"
+        ),
+        ("git", "diff", "HEAD"): "",
+    }
+    install_fake_run(monkeypatch, responses)
+
+    resolved = resolve_target("uncommitted", cwd=tmp_path)
+
+    assert resolved.changed_paths == ["openspec/changes/archive/example/proposal.md"]
+    assert "proposal.md" in resolved.diff
+    assert ".env" not in resolved.diff
+    assert "TOP_SECRET" not in resolved.diff
+
+
 def test_resolve_uncommitted_alias(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     responses: dict[Command, str | Exception] = {
         ("gh", "repo", "view", "--json", "nameWithOwner"): REPO_RESPONSE,
         ("git", "rev-parse", "HEAD"): "abc123\n",
         ("git", "status", "--porcelain"): "",
+        ("git", "ls-files", "--others", "--exclude-standard", "-z"): "",
         ("git", "diff", "HEAD"): "",
     }
     install_fake_run(monkeypatch, responses)

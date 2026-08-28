@@ -115,6 +115,17 @@ def _untracked_diff(path: str, cwd: Path) -> str:
     return f"diff --git a/{path} b/{path}\nnew file mode 100644\n{body}"
 
 
+def _untracked_files(cwd: Path) -> list[str]:
+    """Return Git-visible untracked regular files without following symlinks."""
+
+    listed = _run(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd)
+    return sorted(
+        path
+        for path in listed.split("\0")
+        if path and (disk_path := cwd / path).is_file() and not disk_path.is_symlink()
+    )
+
+
 def _combine_diffs(parts: list[str]) -> str:
     return "".join(part if not part or part.endswith("\n") else f"{part}\n" for part in parts)
 
@@ -124,8 +135,11 @@ def _resolve_uncommitted(cwd: Path) -> ResolvedTarget:
     head_sha = _run(["git", "rev-parse", "HEAD"], cwd).strip()
     status = _run(["git", "status", "--porcelain"], cwd)
     changed_paths, untracked_paths = _status_paths(status)
+    changed_paths = [path for path in changed_paths if path not in untracked_paths]
+    untracked_files = _untracked_files(cwd)
+    changed_paths.extend(path for path in untracked_files if path not in changed_paths)
     tracked_diff = _run(["git", "diff", "HEAD"], cwd)
-    diff = _combine_diffs([tracked_diff, *(_untracked_diff(path, cwd) for path in untracked_paths)])
+    diff = _combine_diffs([tracked_diff, *(_untracked_diff(path, cwd) for path in untracked_files)])
     return ResolvedTarget(
         kind="uncommitted",
         repo=repo,

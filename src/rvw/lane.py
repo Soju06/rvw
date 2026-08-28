@@ -25,6 +25,8 @@ class Lane(BaseModel):
     # Lane lifecycle: "pending" = not yet gated by `rvw sample --compare-free`
     # (ADR-004 verification). None = validated / pre-dates the gate.
     validation: Literal["pending"] | None = None
+    scope: Literal["diff", "direct-deps", "repository"] = "repository"
+    requires_brief: bool = False
     prompt_body: str
 
     def output_schema(self) -> dict[str, Any]:

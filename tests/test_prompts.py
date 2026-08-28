@@ -104,5 +104,7 @@ def test_diff_is_included_verbatim_in_a_fenced_block() -> None:
     )
 
     assert f"```diff\n{diff}```" in prompt
+    assert "## Evidence boundary" in prompt
+    assert "Do not use tools or inspect files outside this supplied evidence." in prompt
     assert "use `file` and NEW-file `line` numbers" in prompt
     assert "Do not modify files" in prompt

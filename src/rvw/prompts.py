@@ -51,6 +51,12 @@ def build_lane_prompt(
     if chunk_context is not None:
         sections.append(chunk_context)
 
+    sections.append(
+        "## Evidence boundary\n\n"
+        "The supplied lane instructions, brief, chunk context, and unified diff are the complete "
+        "evidence for this pass. Do not use tools or inspect files outside this supplied evidence. "
+        "If a claim needs unavailable context, do not report it as a finding."
+    )
     sections.append(f"## Unified diff under review\n\n```diff\n{diff}```")
     declared_rules = ", ".join(f"`{rule}`" for rule in lane.rules)
     sections.append(

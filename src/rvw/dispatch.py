@@ -13,6 +13,7 @@ from rvw.prompts import build_retry_feedback
 from rvw.runtimes import RunResult, RunStatus, Runtime
 
 _COST_ORDER = {"heavy": 0, "normal": 1, "light": 2}
+_CORRECTABLE_INVALID_REASONS = {"json_parse_error", "schema_validation_error"}
 DEFAULT_CONCURRENCY = 8
 DEFAULT_DEADLINE_SECONDS = 600
 MAX_DEADLINE_SECONDS = 1800
@@ -58,6 +59,9 @@ async def dispatch_outcome(
     deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     on_progress: Callable[[RunResult], None] | None = None,
     host_gate: HostSlotGate | None = None,
+    prior_valid_lane_chunks: set[tuple[str, int]] | None = None,
+    prior_retry_lane_chunks: set[tuple[str, int]] | None = None,
+    attempt_numbers_by_key: Mapping[tuple[str, int, int], int] | None = None,
 ) -> DispatchOutcome:
     """Dispatch runs and retain initial results shadowed by the retry wave."""
 
@@ -68,7 +72,12 @@ async def dispatch_outcome(
 
     semaphore = asyncio.Semaphore(concurrency)
 
-    async def execute_one(run: PlannedRun, *, retry_feedback: str | None = None) -> RunResult:
+    async def execute_one(
+        run: PlannedRun,
+        *,
+        retry_feedback: str | None = None,
+        attempt_number: int = 1,
+    ) -> RunResult:
         async with semaphore:
             lane_slug = run.lane.id.replace("/", "--")
             lane_dir = out_root / lane_slug
@@ -76,6 +85,11 @@ async def dispatch_outcome(
                 lane_dir /= f"c{run.chunk}"
             if retry_feedback is not None:
                 lane_dir /= "retry"
+                if attempt_number > 2:
+                    lane_dir /= f"a{attempt_number}"
+            elif attempt_number > 1:
+                lane_dir /= "resume"
+                lane_dir /= f"a{attempt_number}"
             run_dir = lane_dir / f"r{run.replica}"
             run_dir.mkdir(parents=True, exist_ok=True)
             prompt = run.prompt if retry_feedback is None else f"{run.prompt}\n\n{retry_feedback}"
@@ -108,6 +122,10 @@ async def dispatch_outcome(
                         if retry_feedback_by_lane_chunk is None
                         else retry_feedback_by_lane_chunk[(run.lane.id, run.chunk)]
                     ),
+                    attempt_number=(
+                        (attempt_numbers_by_key or {}).get((run.lane.id, run.replica, run.chunk), 1)
+                        + (1 if retry_feedback_by_lane_chunk is not None else 0)
+                    ),
                 )
             )
             for run in ordered
@@ -119,10 +137,15 @@ async def dispatch_outcome(
     for result in main_results:
         results_by_lane_chunk.setdefault((result.lane_id, result.chunk), []).append(result)
 
+    prior_valid = prior_valid_lane_chunks or set()
+    prior_retry = prior_retry_lane_chunks or set()
     retry_lane_chunks = {
         lane_chunk
         for lane_chunk, lane_results in results_by_lane_chunk.items()
-        if all(result.status is RunStatus.INVALID for result in lane_results)
+        if lane_chunk not in prior_valid
+        and lane_chunk not in prior_retry
+        and all(result.status is RunStatus.INVALID for result in lane_results)
+        and all(result.invalid_reason in _CORRECTABLE_INVALID_REASONS for result in lane_results)
     }
     retry_runs = [run for run in runs if (run.lane.id, run.chunk) in retry_lane_chunks]
     retry_feedback_by_lane_chunk = {

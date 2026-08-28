@@ -52,3 +52,9 @@ An invalid replica MUST be excluded from finding enrichment, and the dispatcher 
 
 - **WHEN** a `discover.json` persisted before attempt records is loaded
 - **THEN** loading succeeds and each coverage run reports empty attempt history
+
+#### Scenario: Exact-match resume reuses a valid result
+
+- **WHEN** an interrupted run's target, prompt, lane document, schema, policy,
+  and RVW version match a rebuilt discovery plan
+- **THEN** resume reuses its VALID result and dispatches only identities without one

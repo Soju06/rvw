@@ -15,6 +15,28 @@ The runtime registry MUST register `unscoped-sweep` in a predicate-free base lay
 - **WHEN** a target activates project, scope, and dynamic lanes
 - **THEN** `unscoped-sweep` is still dispatched and cannot emit a blocker-severity finding
 
+### Requirement: Uncommitted targets expand untracked directories safely
+
+An uncommitted target MUST obtain untracked paths from Git with the repository's
+standard exclusion rules, then include only sorted regular non-symlink files
+beneath the worktree. Each included member MUST appear in `changed_paths` and
+be rendered through the ordinary untracked-file diff path. The resolver MUST
+not read a directory as a text file, follow symlinks outside the worktree, or
+include ignored files in the review diff.
+
+#### Scenario: OpenSpec archive directory is untracked
+
+- **WHEN** Git status reports an untracked directory containing Markdown files
+- **THEN** the uncommitted target includes each non-ignored Markdown file in its
+  diff and changed paths without raising `IsADirectoryError`
+
+#### Scenario: Untracked directory contains ignored credentials
+
+- **WHEN** an untracked directory contains a regular source file and an ignored
+  `.env` file
+- **THEN** the source file is included and the ignored `.env` contents and path
+  are absent from the target diff and changed paths
+
 ### Requirement: Sweep prompts receive covered rules
 
 A lane declaring `covered_by_others: inject` MUST receive every other active lane's rule IDs in an already-covered section and MUST be instructed not to re-report those classes.
@@ -24,9 +46,33 @@ A lane declaring `covered_by_others: inject` MUST receive every other active lan
 - **WHEN** the sweep runs beside security and schema lanes
 - **THEN** its prompt names both lanes and their rule IDs as already covered
 
+### Requirement: Discovery uses only planned evidence by default
+
+Every default discovery execution MUST receive a tool-less runtime and MUST
+treat its lane prompt, dynamic brief, declared rules, and planned diff chunk as
+its complete evidence boundary. It MUST not invoke shell, browser, app,
+computer, plugin, image, or multi-agent tools. A claim that cannot be supported
+by this evidence MUST not become a finding.
+
+#### Scenario: Lane needs an unchanged caller
+
+- **WHEN** a discovery lane cannot establish a defect from the supplied diff
+  chunk and prompt evidence alone
+- **THEN** it returns no finding rather than searching the repository
+
 ### Requirement: Discovery dispatch defaults to one replica
 
-The DISCOVER stage MUST plan one run per active lane per diff chunk by default, independently of the adjudication replica count, and MUST dispatch all lane-replica-chunk runs through one shared wave. It MUST preserve the requested positive discovery count when callers explicitly request multiple replicas.
+The DISCOVER stage MUST plan one run per active lane per diff chunk by default,
+independently of the adjudication replica count, and MUST dispatch all
+lane-replica-chunk runs through one shared wave. It MUST preserve the requested
+positive discovery count when callers explicitly request multiple replicas. One
+shared pure planning operation MUST load active lanes, apply the diff budget,
+derive the effective brief, and build every initial lane prompt used for both
+preflight accounting and dispatch. The planner MUST expose exact aggregate
+initial prompt characters and the one-retry upper bound of twice its initial
+run count; retry-feedback characters are excluded because invalid reasons do
+not exist before execution. The dispatcher MUST surface each completed initial
+or replacement result through progress before the full wave returns.
 
 #### Scenario: Four lanes activate over two chunks
 
@@ -37,6 +83,19 @@ The DISCOVER stage MUST plan one run per active lane per diff chunk by default, 
 
 - **WHEN** discovery is called with three replicas for four active lanes over two chunks
 - **THEN** it submits 24 planned runs through the existing shared wave regardless of the adjudication replica count
+
+#### Scenario: Preflight and dispatch share a plan
+
+- **WHEN** a target activates four lanes with three discovery replicas over one
+  chunk
+- **THEN** preflight reports 12 initial runs, 24 retry-upper-bound runs, and
+  the exact sum of the twelve prompts that dispatch will send
+
+#### Scenario: A dispatch is interrupted
+
+- **WHEN** one discovery result completes before cancellation
+- **THEN** the run manifest already contains that result and queued work does
+  not start after cancellation
 
 ### Requirement: Dispatch is bounded and heavy-first
 
@@ -64,7 +123,16 @@ The dispatcher MUST sort runs heavy, normal, then light, MUST bound concurrent r
 
 ### Requirement: Invalid replicas use one all-lane retry
 
-An invalid replica MUST be excluded from finding enrichment, and the dispatcher MUST retry a lane-chunk group exactly once only when every initial replica for that lane and chunk is INVALID. The one replacement prompt for a retried lane-chunk MUST carry each prior replica's machine-readable invalid reason for that lane-chunk, and an initial wave prompt MUST NOT contain that retry feedback. The replacement wave MUST persist its artifacts in a run directory distinct from the initial wave's so the initial INVALID artifacts remain inspectable, while the directory's final component preserves the runtime replica-derivation contract. Persisted run coverage MUST record every attempt's validity and machine-readable invalid reason in execution order, while row-level validity continues to reflect the final attempt, and discovery artifacts persisted before attempt records existed MUST load with empty attempt history.
+An invalid replica MUST be excluded from finding enrichment. A lane-chunk group
+MUST receive exactly one replacement wave only when every initial replica is
+INVALID and every invalid reason is `json_parse_error` or
+`schema_validation_error`; an initial wave MUST NOT contain retry feedback. A
+timeout, cancellation, budget, spawn, completion-marker, missing-artifact, or
+other invalid reason MUST NOT cause an identical full-wave retry. Any lane-chunk
+group with no valid result after its permitted retry decision MUST make
+DISCOVER fail closed as incomplete rather than contributing a zero-finding PASS.
+Replacement artifacts and ordered attempt coverage retain the existing contract,
+and legacy discovery artifacts continue to load with empty attempt history.
 
 #### Scenario: One of three replicas is invalid
 
@@ -73,8 +141,10 @@ An invalid replica MUST be excluded from finding enrichment, and the dispatcher 
 
 #### Scenario: All replicas are invalid
 
-- **WHEN** all three initial replicas for one lane-chunk are INVALID
-- **THEN** the dispatcher executes one replacement wave for that lane-chunk and performs no further retry
+- **WHEN** all three initial replicas for one lane-chunk are INVALID with
+  correctable schema or format reasons
+- **THEN** the dispatcher executes one replacement wave for that lane-chunk and
+  performs no further retry
 
 #### Scenario: Replacement prompt names prior failures
 
@@ -96,9 +166,42 @@ An invalid replica MUST be excluded from finding enrichment, and the dispatcher 
 - **WHEN** a `discover.json` persisted before attempt records is loaded
 - **THEN** loading succeeds and each coverage run reports empty attempt history
 
+#### Scenario: Exact-match resume reuses a valid result
+
+- **WHEN** an interrupted run's target, prompt, lane document, schema, policy,
+  and RVW version match a rebuilt discovery plan
+- **THEN** resume reuses its VALID result and dispatches only identities without one
+
+### Requirement: Discovery attempt evidence survives resume
+
+DISCOVER MUST persist every completed initial, replacement, and resumed attempt
+in chronological per-identity order without overwriting earlier artifacts or
+usage. It MUST reuse only the latest compatible VALID identity, retain earlier
+attempt validity and reasons in coverage, and use all compatible prior attempt
+state when deciding whether a lane-chunk may receive its single replacement
+wave. Manifests persisted before attempt history MUST remain readable as one
+initial attempt per recorded result.
+
+#### Scenario: Resume follows an invalid then valid replacement
+
+- **WHEN** a run resumes after an initial INVALID result and a replacement VALID
+  result was already persisted
+- **THEN** it reuses the VALID result, preserves both ordered attempts and their
+  artifacts, and does not dispatch another replacement wave
+
+#### Scenario: Reusable valid result shares a lane-chunk with pending work
+
+- **WHEN** a lane-chunk has one persisted compatible VALID replica and its
+  pending replicas all return correctable INVALID results
+- **THEN** no replacement wave is dispatched for that lane-chunk
+
 ### Requirement: Dynamic brief falls back to PR claims
 
-Dynamic lanes MUST use an operator-supplied brief when present, SHALL otherwise use the PR title and body when available, and MUST label the PR-derived brief as an UNVERIFIED claim of intent.
+Dynamic lanes MUST use an operator-supplied brief when present, SHALL otherwise
+use the PR title and body when available, and MUST label the PR-derived brief
+as an UNVERIFIED claim of intent. A dynamic lane declaring `requires_brief:
+true` with neither source MUST not invoke a runtime and MUST record zero
+dispatch with `skipped_reason: brief_unavailable`.
 
 #### Scenario: No operator brief for a PR
 
@@ -107,8 +210,16 @@ Dynamic lanes MUST use an operator-supplied brief when present, SHALL otherwise 
 
 #### Scenario: No brief source exists
 
-- **WHEN** a commit target has no operator brief
+- **WHEN** a commit target has no operator brief and a dynamic lane does not
+  require one
 - **THEN** dynamic prompts state that the brief is unavailable and findings should be marked inconclusive
+
+#### Scenario: No brief source exists for a required lane
+
+- **WHEN** a commit target has no operator brief and an activated dynamic lane
+  declares `requires_brief: true`
+- **THEN** that lane is recorded as skipped for `brief_unavailable` and makes
+  no model call
 
 ### Requirement: Generated and oversized files are visibly excluded
 

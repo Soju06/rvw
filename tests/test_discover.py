@@ -8,12 +8,21 @@ import pytest
 
 import rvw.discover as discover_module
 from rvw.diffbudget import EmptyReviewDiffError
-from rvw.discover import RunCoverage, discover, resolve_lane_path
+from rvw.discover import (
+    IncompleteDiscoveryError,
+    RunCoverage,
+    discover,
+    plan_discovery,
+    remaining_discovery_plan,
+    resolve_lane_path,
+)
+from rvw.discovery_cost import build_discovery_preflight
 from rvw.dispatch import DEFAULT_DEADLINE_SECONDS, DispatchOutcome, PlannedRun
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import merge
 from rvw.registry import Registry
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
 from rvw.runtimes import RunDiagnostic, RunResult, RunStatus, Runtime
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Tier
 from rvw.target import ResolvedTarget
@@ -160,6 +169,88 @@ def test_discover_defaults_to_one_replica() -> None:
     assert inspect.signature(discover).parameters["replicas"].default == 1
 
 
+def test_plan_discovery_builds_the_exact_initial_prompts_for_dispatch(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    write_lane(lanes_root, "dynamic/goal-parity", Tier.DYNAMIC)
+    reg = registry(("slop-hygiene", Tier.BASE), ("dynamic/goal-parity", Tier.DYNAMIC))
+
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(pr=True),
+        replicas=2,
+    )
+
+    assert [run.lane.id for run in plan.runs] == [
+        "slop-hygiene",
+        "slop-hygiene",
+        "dynamic/goal-parity",
+        "dynamic/goal-parity",
+    ]
+    assert plan.initial_runs == 4
+    assert plan.retry_upper_bound == 8
+    assert plan.initial_prompt_characters == sum(len(run.prompt) for run in plan.runs)
+    assert all(run.prompt for run in plan.runs)
+    assert "UNVERIFIED claim of intent" in plan.runs[2].prompt
+
+
+def test_discovery_preflight_identifies_every_explicit_heavy_condition(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    write_lane(lanes_root, "dynamic/goal-parity", Tier.DYNAMIC)
+    plan = plan_discovery(
+        registry=registry(("slop-hygiene", Tier.BASE), ("dynamic/goal-parity", Tier.DYNAMIC)),
+        lanes_root=lanes_root,
+        target=target(pr=True),
+        replicas=2,
+    )
+
+    preflight = build_discovery_preflight(
+        plan,
+        replicas=2,
+        max_discovery_runs=7,
+        runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+    )
+
+    assert preflight.heavy_discovery_reasons == (
+        "discovery_replicas=2",
+        "retry_upper_bound=8 exceeds max_discovery_runs=7",
+        "reasoning_effort=max",
+    )
+    assert preflight.requires_allow_heavy_discovery is True
+
+
+def test_remaining_preflight_counts_only_remaining_lane_chunks(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "first", Tier.BASE)
+    write_lane(lanes_root, "second", Tier.BASE)
+    plan = plan_discovery(
+        registry=registry(("first", Tier.BASE), ("second", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=1,
+    )
+    reused = RunResult(
+        lane_id="first",
+        replica=1,
+        status=RunStatus.VALID,
+        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+        invalid_reason=None,
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+
+    preflight = build_discovery_preflight(
+        remaining_discovery_plan(plan, {("first", 1, 1): reused}),
+        replicas=1,
+        max_discovery_runs=12,
+        runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+    )
+
+    assert (preflight.lanes, preflight.chunks, preflight.initial_runs) == (1, 1, 1)
+
+
 def test_resolve_lane_path_error_lists_attempted_path(tmp_path: Path) -> None:
     attempted = tmp_path / "scope" / "frontend" / "missing.md"
     with pytest.raises(FileNotFoundError, match=str(attempted)):
@@ -187,6 +278,9 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
         deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
         on_progress: Callable[[RunResult], None] | None = None,
         host_gate: HostSlotGate | None = None,
+        prior_valid_lane_chunks: set[tuple[str, int]] | None = None,
+        prior_retry_lane_chunks: set[tuple[str, int]] | None = None,
+        attempt_numbers_by_key: dict[tuple[str, int, int], int] | None = None,
     ) -> DispatchOutcome:
         nonlocal dispatch_calls
         dispatch_calls += 1
@@ -199,6 +293,9 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
             deadline_seconds=deadline_seconds,
             on_progress=on_progress,
             host_gate=host_gate,
+            prior_valid_lane_chunks=prior_valid_lane_chunks,
+            prior_retry_lane_chunks=prior_retry_lane_chunks,
+            attempt_numbers_by_key=attempt_numbers_by_key,
         )
 
     monkeypatch.setattr(discover_module, "dispatch_outcome", counting_dispatch)
@@ -218,6 +315,94 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
     assert dispatch_concurrency == [3]
     assert set(result.lane_results) == {"slop-hygiene"}
     assert runtime.calls == [("slop-hygiene", 1), ("slop-hygiene", 2)]
+
+
+async def test_discover_reuses_manifest_bound_valid_results_without_dispatching_them(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=1,
+    )
+    reused = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.VALID,
+        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+        invalid_reason=None,
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    runtime = FakeRuntime()
+
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        completed_results={("slop-hygiene", 1, 1): reused},
+    )
+
+    assert runtime.calls == []
+    assert result.coverage[0].valid == 1
+
+
+async def test_discover_resume_preserves_prior_invalid_attempt_and_uses_new_path(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=1,
+    )
+    prior = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="exit_nonzero:124",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    reused = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.VALID,
+        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+        invalid_reason=None,
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    assert remaining_discovery_plan(plan, {}).initial_runs == 1
+    assert remaining_discovery_plan(plan, {("slop-hygiene", 1, 1): reused}).initial_runs == 0
+    runtime = FakeRuntime()
+
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={("slop-hygiene", 1, 1): [prior]},
+    )
+
+    assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "resume" / "a2" / "r1"]
+    assert [attempt.model_dump() for attempt in result.coverage[0].runs[0].attempts] == [
+        {"attempt": 1, "valid": False, "invalid_reason": "exit_nonzero:124"},
+        {"attempt": 2, "valid": True, "invalid_reason": None},
+    ]
 
 
 async def test_pr_brief_fallback_and_operator_brief_wins(tmp_path: Path) -> None:
@@ -253,6 +438,31 @@ async def test_pr_brief_fallback_and_operator_brief_wins(tmp_path: Path) -> None
     assert "Operator-authored intent" in operator_prompt
     assert "Add a thing" not in operator_prompt
     assert "UNVERIFIED claim of intent" not in operator_prompt
+
+
+async def test_required_dynamic_brief_is_skipped_without_a_runtime_call(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    path = write_lane(lanes_root, "dynamic/goal-parity", Tier.DYNAMIC)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "rules:\n", "requires_brief: true\nscope: diff\nrules:\n"
+        ),
+        encoding="utf-8",
+    )
+    runtime = FakeRuntime()
+
+    result = await discover(
+        registry=registry(("dynamic/goal-parity", Tier.DYNAMIC)),
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+    )
+
+    assert runtime.calls == []
+    coverage = result.coverage[0]
+    assert coverage.dispatched == 0
+    assert coverage.skipped_reason == "brief_unavailable"
 
 
 async def test_enrichment_computes_hunks_anchors_and_off_diff_fallback(tmp_path: Path) -> None:
@@ -302,60 +512,17 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
     write_lane(lanes_root, "bad", Tier.BASE)
     runtime = FakeRuntime(invalid_lanes={"bad"})
 
-    result = await discover(
-        registry=registry(("good", Tier.BASE), ("bad", Tier.BASE)),
-        lanes_root=lanes_root,
-        target=target(),
-        runtime=runtime,
-        out_root=tmp_path / "out",
-        replicas=2,
-    )
+    with pytest.raises(IncompleteDiscoveryError, match="bad"):
+        await discover(
+            registry=registry(("good", Tier.BASE), ("bad", Tier.BASE)),
+            lanes_root=lanes_root,
+            target=target(),
+            runtime=runtime,
+            out_root=tmp_path / "out",
+            replicas=2,
+        )
 
-    coverage = {entry.lane_id: entry for entry in result.coverage}
-    assert coverage["good"].model_dump() == {
-        "lane_id": "good",
-        "dispatched": 2,
-        "valid": 2,
-        "findings": 0,
-        "runs": [
-            {
-                "replica": replica,
-                "chunk": 1,
-                "valid": True,
-                "findings": 0,
-                "invalid_reason": None,
-                "attempts": [{"attempt": 1, "valid": True, "invalid_reason": None}],
-                "diagnostic": None,
-            }
-            for replica in (1, 2)
-        ],
-    }
-    assert coverage["bad"].model_dump() == {
-        "lane_id": "bad",
-        "dispatched": 2,
-        "valid": 0,
-        "findings": 0,
-        "runs": [
-            {
-                "replica": replica,
-                "chunk": 1,
-                "valid": False,
-                "findings": 0,
-                "invalid_reason": "scripted invalid",
-                "attempts": [
-                    {
-                        "attempt": attempt,
-                        "valid": False,
-                        "invalid_reason": "scripted invalid",
-                    }
-                    for attempt in (1, 2)
-                ],
-                "diagnostic": None,
-            }
-            for replica in (1, 2)
-        ],
-    }
-    assert len(runtime.calls) == 6  # two good + two initial bad + two retry bad
+    assert len(runtime.calls) == 4  # two good + two non-correctable invalid bad
 
 
 async def test_retried_coverage_preserves_ordered_attempt_status_and_reason(
@@ -365,7 +532,7 @@ async def test_retried_coverage_preserves_ordered_attempt_status_and_reason(
     write_lane(lanes_root, "recovers", Tier.BASE)
     runtime = FakeRuntime(
         statuses={"recovers": [RunStatus.INVALID, RunStatus.VALID]},
-        invalid_reasons={"recovers": ["exit_nonzero:124"]},
+        invalid_reasons={"recovers": ["schema_validation_error"]},
     )
 
     result = await discover(
@@ -380,7 +547,7 @@ async def test_retried_coverage_preserves_ordered_attempt_status_and_reason(
     assert run.valid is True
     assert run.invalid_reason is None
     assert [attempt.model_dump() for attempt in run.attempts] == [
-        {"attempt": 1, "valid": False, "invalid_reason": "exit_nonzero:124"},
+        {"attempt": 1, "valid": False, "invalid_reason": "schema_validation_error"},
         {"attempt": 2, "valid": True, "invalid_reason": None},
     ]
 
