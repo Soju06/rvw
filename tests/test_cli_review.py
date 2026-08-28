@@ -367,6 +367,69 @@ async def test_shared_pipeline_propagates_split_replicas_concurrency_and_deadlin
     assert stage_calls == [("discover", 2, 3, 37), ("adjudicate", 5, 3, 37)]
 
 
+async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
+    tmp_path: Path,
+    registry_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The optional expanded runtime must not change the default callback contract."""
+
+    runtime = cast(Runtime, FakeRuntime())
+    received_runtime: Runtime | None = None
+
+    async def fake_discover(**_kwargs: object) -> DiscoverResult:
+        return DiscoverResult(lane_results={}, findings=[], coverage=[])
+
+    async def legacy_adjudicate(
+        merged: MergeResult,
+        *,
+        target: ResolvedTarget,
+        runtime: Runtime,
+        repo_dir: Path,
+        out_root: Path,
+        replicas: int,
+        concurrency: int,
+        deadline_seconds: int,
+        host_gate: HostSlotGate | None,
+    ) -> AdjudicationOutcome:
+        nonlocal received_runtime
+        del (
+            merged,
+            target,
+            repo_dir,
+            out_root,
+            replicas,
+            concurrency,
+            deadline_seconds,
+            host_gate,
+        )
+        received_runtime = runtime
+        return AdjudicationOutcome({}, {}, {}, {}, [], 0)
+
+    registry, lanes_root = cli_module._load_registry_root(registry_root)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    monkeypatch.setattr(pipeline_module, "discover", fake_discover)
+
+    await pipeline_module.execute_pipeline(
+        registry=registry,
+        lanes_root=lanes_root,
+        target=pr_target(),
+        active_lanes=[],
+        runtime=runtime,
+        adjudicator=legacy_adjudicate,
+        repo_dir=checkout,
+        discover_replicas=1,
+        adjudicate_replicas=1,
+        concurrency=1,
+        out_root=tmp_path / "runs",
+        pause=False,
+        dynamic_brief=None,
+    )
+
+    assert received_runtime is runtime
+
+
 def test_review_end_to_end_writes_all_stages_and_json_shape(
     tmp_path: Path, registry_root: Path, patched_pipeline: None
 ) -> None:
