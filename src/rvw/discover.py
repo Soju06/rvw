@@ -327,6 +327,7 @@ async def discover(
     completed_results: Mapping[tuple[str, int, int], RunResult] | None = None,
     prior_attempts: Mapping[tuple[str, int, int], Sequence[RunResult]] | None = None,
     prior_retry_keys: set[tuple[str, int, int]] | None = None,
+    prior_retry_lane_chunks: set[tuple[str, int]] | None = None,
     on_progress: Callable[[RunResult], None] | None = None,
 ) -> DiscoverResult:
     """Run all activated lanes in one dispatch call and enrich valid findings."""
@@ -390,9 +391,26 @@ async def discover(
     for run in plan.runs:
         runs_by_lane_chunk.setdefault((run.lane.id, run.chunk), []).append(run)
     retries_already_run = set(prior_retry_keys or ()) & planned_keys
+    legacy_retry_lane_chunks = set(prior_retry_lane_chunks or ())
     retry_runs_by_lane_chunk: dict[tuple[str, int], list[PlannedRun]] = {}
     for lane_chunk, runs in runs_by_lane_chunk.items():
-        if any((run.lane.id, run.replica, run.chunk) in retries_already_run for run in runs):
+        initial_results = [
+            (
+                attempt_history.get((run.lane.id, run.replica, run.chunk))
+                or [final_by_key.get((run.lane.id, run.replica, run.chunk))]
+            )[0]
+            for run in runs
+        ]
+        all_initial_results_are_correctable = all(
+            result is not None
+            and result.status is RunStatus.INVALID
+            and result.invalid_reason in CORRECTABLE_INVALID_REASONS
+            for result in initial_results
+        )
+        if (
+            any((run.lane.id, run.replica, run.chunk) in retries_already_run for run in runs)
+            and all_initial_results_are_correctable
+        ):
             retry_runs_by_lane_chunk[lane_chunk] = [
                 run
                 for run in runs
@@ -401,12 +419,7 @@ async def discover(
                 and result.status is RunStatus.INVALID
                 and result.invalid_reason in CORRECTABLE_INVALID_REASONS
             ]
-        elif all((run.lane.id, run.replica, run.chunk) in final_by_key for run in runs) and all(
-            final_by_key[(run.lane.id, run.replica, run.chunk)].status is RunStatus.INVALID
-            and final_by_key[(run.lane.id, run.replica, run.chunk)].invalid_reason
-            in CORRECTABLE_INVALID_REASONS
-            for run in runs
-        ):
+        elif lane_chunk not in legacy_retry_lane_chunks and all_initial_results_are_correctable:
             retry_runs_by_lane_chunk[lane_chunk] = list(runs)
     retry_runs = [run for runs in retry_runs_by_lane_chunk.values() for run in runs]
     retry_feedback = {

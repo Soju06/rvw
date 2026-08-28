@@ -614,6 +614,101 @@ async def test_discover_resume_completes_only_missing_replacement_replicas(
     ]
 
 
+async def test_discover_resume_does_not_complete_partial_retry_without_all_invalid_initials(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=2,
+    )
+    initial_one = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    replacement_one = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.VALID,
+        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+        invalid_reason=None,
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "retry" / "r1",
+    )
+    valid_two = RunResult(
+        lane_id="slop-hygiene",
+        replica=2,
+        status=RunStatus.VALID,
+        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+        invalid_reason=None,
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r2",
+    )
+    runtime = FakeRuntime()
+
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={
+            ("slop-hygiene", 1, 1): [initial_one, replacement_one],
+            ("slop-hygiene", 2, 1): [valid_two],
+        },
+        prior_retry_keys={("slop-hygiene", 1, 1)},
+    )
+
+    assert runtime.calls == []
+    assert result.coverage[0].valid == 2
+
+
+async def test_discover_accepts_legacy_retry_lane_chunk_state(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=1,
+    )
+    prior = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    runtime = FakeRuntime()
+
+    with pytest.raises(IncompleteDiscoveryError, match="slop-hygiene"):
+        await discover(
+            registry=reg,
+            lanes_root=lanes_root,
+            target=target(),
+            runtime=runtime,
+            out_root=tmp_path / "out",
+            planned=plan,
+            prior_attempts={("slop-hygiene", 1, 1): [prior]},
+            prior_retry_lane_chunks={("slop-hygiene", 1)},
+        )
+
+    assert runtime.calls == []
+
+
 async def test_discover_resume_ignores_history_outside_the_rebuilt_plan(tmp_path: Path) -> None:
     lanes_root = tmp_path / "lanes"
     write_lane(lanes_root, "slop-hygiene", Tier.BASE)
