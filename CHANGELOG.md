@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/Soju06/rvw/compare/v0.5.0...v0.6.0) (2026-08-28)
+
+
+### Features
+
+* **build:** embed honest build provenance ([#32](https://github.com/Soju06/rvw/issues/32)) ([f868c74](https://github.com/Soju06/rvw/commit/f868c743b6997edd6f03b3ab5871e26d5ff317d5))
+
+
+### Bug Fixes
+
+* **review:** fail closed on lost review execution ([#30](https://github.com/Soju06/rvw/issues/30)) ([38389cb](https://github.com/Soju06/rvw/commit/38389cb5953d6fc59fcc569c1f5ef8a484fc50fc))
+
 ## [0.5.0](https://github.com/Soju06/rvw/compare/v0.4.1...v0.5.0) (2026-08-28)
 
 
