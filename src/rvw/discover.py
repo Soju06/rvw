@@ -326,7 +326,7 @@ async def discover(
     planned: DiscoveryPlan | None = None,
     completed_results: Mapping[tuple[str, int, int], RunResult] | None = None,
     prior_attempts: Mapping[tuple[str, int, int], Sequence[RunResult]] | None = None,
-    prior_retry_lane_chunks: set[tuple[str, int]] | None = None,
+    prior_retry_keys: set[tuple[str, int, int]] | None = None,
     on_progress: Callable[[RunResult], None] | None = None,
 ) -> DiscoverResult:
     """Run all activated lanes in one dispatch call and enrich valid findings."""
@@ -340,8 +340,15 @@ async def discover(
         replicas=replicas,
         lane_filter=lane_filter,
     )
-    attempt_history = {key: list(attempts) for key, attempts in (prior_attempts or {}).items()}
-    reusable = dict(completed_results or {})
+    planned_keys = {(run.lane.id, run.replica, run.chunk) for run in plan.runs}
+    attempt_history = {
+        key: list(attempts)
+        for key, attempts in (prior_attempts or {}).items()
+        if key in planned_keys
+    }
+    reusable = {
+        key: result for key, result in (completed_results or {}).items() if key in planned_keys
+    }
     for key, attempts in attempt_history.items():
         valid_attempts = [attempt for attempt in attempts if attempt.status is RunStatus.VALID]
         if valid_attempts:
@@ -382,28 +389,42 @@ async def discover(
     runs_by_lane_chunk: dict[tuple[str, int], list[PlannedRun]] = {}
     for run in plan.runs:
         runs_by_lane_chunk.setdefault((run.lane.id, run.chunk), []).append(run)
-    prior_retry = set(prior_retry_lane_chunks or ())
-    retry_lane_chunks = {
-        lane_chunk
-        for lane_chunk, runs in runs_by_lane_chunk.items()
-        if lane_chunk not in prior_retry
-        and all((run.lane.id, run.replica, run.chunk) in final_by_key for run in runs)
-        and all(
+    retries_already_run = set(prior_retry_keys or ()) & planned_keys
+    retry_runs_by_lane_chunk: dict[tuple[str, int], list[PlannedRun]] = {}
+    for lane_chunk, runs in runs_by_lane_chunk.items():
+        if any((run.lane.id, run.replica, run.chunk) in retries_already_run for run in runs):
+            retry_runs_by_lane_chunk[lane_chunk] = [
+                run
+                for run in runs
+                if (run.lane.id, run.replica, run.chunk) not in retries_already_run
+                and (result := final_by_key.get((run.lane.id, run.replica, run.chunk))) is not None
+                and result.status is RunStatus.INVALID
+                and result.invalid_reason in CORRECTABLE_INVALID_REASONS
+            ]
+        elif all((run.lane.id, run.replica, run.chunk) in final_by_key for run in runs) and all(
             final_by_key[(run.lane.id, run.replica, run.chunk)].status is RunStatus.INVALID
             and final_by_key[(run.lane.id, run.replica, run.chunk)].invalid_reason
             in CORRECTABLE_INVALID_REASONS
             for run in runs
-        )
-    }
-    retry_runs = [run for run in plan.runs if (run.lane.id, run.chunk) in retry_lane_chunks]
+        ):
+            retry_runs_by_lane_chunk[lane_chunk] = list(runs)
+    retry_runs = [run for runs in retry_runs_by_lane_chunk.values() for run in runs]
     retry_feedback = {
         lane_chunk: build_retry_feedback(
             [
-                f"replica {run.replica}: {final_by_key[(run.lane.id, run.replica, run.chunk)].invalid_reason}"
+                f"replica {run.replica}: {initial.invalid_reason}"
                 for run in runs_by_lane_chunk[lane_chunk]
+                if (
+                    initial := (
+                        attempt_history.get((run.lane.id, run.replica, run.chunk))
+                        or [final_by_key[(run.lane.id, run.replica, run.chunk)]]
+                    )[0]
+                ).status
+                is RunStatus.INVALID
             ]
         )
-        for lane_chunk in retry_lane_chunks
+        for lane_chunk, runs in retry_runs_by_lane_chunk.items()
+        if runs
     }
     retry_attempt_numbers = {
         (run.lane.id, run.replica, run.chunk): len(

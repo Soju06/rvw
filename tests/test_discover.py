@@ -552,6 +552,116 @@ async def test_discover_resume_does_not_replace_when_a_sibling_is_already_valid(
     assert [run.valid for run in result.coverage[0].runs] == [True, False]
 
 
+async def test_discover_resume_completes_only_missing_replacement_replicas(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=2,
+    )
+    initial_one = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    replacement_one = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.VALID,
+        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+        invalid_reason=None,
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "retry" / "r1",
+    )
+    initial_two = RunResult(
+        lane_id="slop-hygiene",
+        replica=2,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r2",
+    )
+    runtime = FakeRuntime()
+
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={
+            ("slop-hygiene", 1, 1): [initial_one, replacement_one],
+            ("slop-hygiene", 2, 1): [initial_two],
+        },
+        prior_retry_keys={("slop-hygiene", 1, 1)},
+    )
+
+    assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "retry" / "r2"]
+    assert [[attempt.valid for attempt in run.attempts] for run in result.coverage[0].runs] == [
+        [False, True],
+        [False, True],
+    ]
+
+
+async def test_discover_resume_ignores_history_outside_the_rebuilt_plan(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=1,
+    )
+    planned_valid = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.VALID,
+        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+        invalid_reason=None,
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    stale_invalid = RunResult(
+        lane_id="slop-hygiene",
+        replica=2,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r2",
+    )
+    runtime = FakeRuntime()
+
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={
+            ("slop-hygiene", 1, 1): [planned_valid],
+            ("slop-hygiene", 2, 1): [stale_invalid],
+        },
+    )
+
+    assert runtime.calls == []
+    assert [run.replica for run in result.coverage[0].runs] == [1]
+    assert result.coverage[0].valid == 1
+
+
 async def test_pr_brief_fallback_and_operator_brief_wins(tmp_path: Path) -> None:
     lanes_root = tmp_path / "lanes"
     write_lane(lanes_root, "dynamic/goal-parity", Tier.DYNAMIC)
