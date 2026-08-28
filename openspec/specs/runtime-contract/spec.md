@@ -44,7 +44,7 @@ A lane runtime output MUST contain a verdict string and a findings list whose it
 
 ### Requirement: Validity requires four signals
 
-A runtime execution MUST be VALID only when the process exits zero, a non-empty output artifact exists, the artifact parses and validates against the supplied schema validator, and the combined run log contains the terminal completion marker `tokens used`.
+A runtime execution MUST be VALID only when the process exits zero, a non-empty output artifact exists, the artifact parses and validates against the supplied schema validator, and the combined run log contains the terminal completion marker `tokens used`. Optional structured or textual usage telemetry MUST NOT make an otherwise invalid run VALID, and unavailable telemetry MUST NOT make a valid run INVALID.
 
 #### Scenario: Schema-valid artifact without completion marker
 
@@ -53,8 +53,14 @@ A runtime execution MUST be VALID only when the process exits zero, a non-empty 
 
 #### Scenario: Process times out
 
-- **WHEN** the timeout wrapper exits nonzero
+- **WHEN** RVW deadline enforcement expires and returns a nonzero timeout result
 - **THEN** the result is INVALID with reason `exit_nonzero:<code>` and has no promoted output
+
+#### Scenario: Usage telemetry is absent
+
+- **WHEN** a completed traditional log contains the completion marker but no
+  parseable token count
+- **THEN** the result can remain VALID and its optional token fields are absent
 
 ### Requirement: Invalidity is machine-readable
 
@@ -77,7 +83,14 @@ Every INVALID result MUST have no output, a non-empty machine-readable `invalid_
 
 ### Requirement: Runtime artifacts are persisted per replica
 
-The Codex adapter MUST write `prompt.md`, `schema.json`, `out.json`, and `run.log` beneath an `r<replica>` artifact directory before or during execution and MUST derive the replica number from that directory name. Discovery and sampling MUST preserve the existing lane-or-variant `r<replica>` path for a one-chunk plan and MUST insert a `c<chunk>` directory immediately before `r<replica>` for a multi-chunk plan.
+The Codex adapter MUST write `prompt.md`, `schema.json`, `out.json`, `run.log`,
+and `usage.json` beneath an `r<replica>` artifact directory before or during
+execution and MUST derive the replica number from that directory name.
+`usage.json` MUST record model, reasoning effort, wall time, and final
+completed/invalid/canceled state; token, turn, and tool-call fields MAY be
+absent when telemetry is unavailable. Discovery and sampling MUST preserve the
+existing lane-or-variant `r<replica>` path for a one-chunk plan and MUST insert
+a `c<chunk>` directory immediately before `r<replica>` for a multi-chunk plan.
 
 #### Scenario: Malformed run directory
 
@@ -94,6 +107,12 @@ The Codex adapter MUST write `prompt.md`, `schema.json`, `out.json`, and `run.lo
 - **WHEN** a lane's diff requires two chunks
 - **THEN** its artifacts are separated beneath `<lane>/c1/r<replica>/` and `<lane>/c2/r<replica>/`
 
+#### Scenario: Runtime is cancelled
+
+- **WHEN** a runtime task is cancelled after its process starts
+- **THEN** its process group is cleaned up, `usage.json` records `canceled`,
+  and cancellation continues to the dispatcher
+
 ### Requirement: Raw execution supports stage-specific schemas and workdirs
 
 The runtime protocol MUST provide `execute_raw` with a caller-supplied schema, validator, optional working directory, deadline, prompt, and artifact directory so adjudication and sampling can reuse the same validity contract.
@@ -105,9 +124,66 @@ The runtime protocol MUST provide `execute_raw` with a caller-supplied schema, v
 
 ### Requirement: Codex execution is read-only and bounded
 
-The Codex adapter SHALL invoke `codex exec` through a foreground timeout, SHALL select the read-only sandbox, and SHALL disable multi-agent and collaboration modes for each runtime execution.
+The Codex adapter SHALL invoke `codex exec` directly and MUST expose distinct
+tool-less and agentic execution modes under the same explicit typed model and
+reasoning policy. Tool-less mode MUST select the read-only sandbox, disable
+shell, browser, computer, app, plugin, image, multi-agent, and collaboration
+tools, disable rule loading and persisted sessions, and use strict structured
+output. Agentic mode SHALL select the read-only sandbox and disable multi-agent
+and collaboration modes while retaining source exploration for explicitly
+expanded adjudication only. The adapter MUST capture its newly created process
+group before awaiting the runtime and enforce each configured deadline by
+cancelling its process-owning task. That task MUST terminate the complete
+captured process group with TERM, wait no more than five seconds for the group
+to disappear, and escalate to KILL. After KILL, it MUST wait no more than a
+further five seconds for the captured group to disappear. If the group still
+exists or cannot be verified because a probe receives `EPERM`, it MUST record
+persistent or unverified cleanup in the run log and return so the original
+cancellation or timeout classification can continue. Runtime identity and
+usage MUST record the selected mode so resume cannot reuse a result from
+another mode. The initial default policy MUST be `gpt-5.6-sol` with `max`
+reasoning effort.
+
+#### Scenario: Tool-less discovery execution
+
+- **WHEN** DISCOVER starts a lane replica
+- **THEN** its Codex command disables shell and other interactive tools, writes
+  no persisted Codex session, and records zero tool calls in usage
+
+#### Scenario: Expanded adjudication execution
+
+- **WHEN** an initially UNCERTAIN candidate starts its one expanded pass
+- **THEN** its Codex command uses agentic read-only mode and can inspect the
+  provisioned checkout
 
 #### Scenario: Deadline expires
 
 - **WHEN** a run exceeds its configured deadline
-- **THEN** the wrapper sends TERM, allows a 30-second kill-after window, and the nonzero result is classified INVALID
+- **THEN** RVW terminates and reaps the full runtime process group and classifies
+  the run INVALID with reason `exit_nonzero:124`
+
+#### Scenario: Runtime leader exits before its child
+
+- **WHEN** TERM ends the runtime leader but a child in its captured process group
+  remains alive
+- **THEN** RVW detects the surviving group during the grace period, sends KILL,
+  and returns after the group exits
+
+#### Scenario: Process group persists after KILL
+
+- **WHEN** the captured process group still appears to exist for five seconds
+  after RVW sends KILL
+- **THEN** RVW records a persistent-cleanup marker and does not wait
+  indefinitely before returning the original cancellation or timeout result
+
+#### Scenario: Process group cannot be verified after KILL
+
+- **WHEN** the post-KILL process-group probe receives `EPERM`
+- **THEN** RVW records an unverified-cleanup marker and returns the original
+  cancellation or timeout result without propagating the probe exception
+
+#### Scenario: Ambient configuration requests a different policy
+
+- **WHEN** a host config selects another model or reasoning effort
+- **THEN** an RVW Codex invocation still carries `--model gpt-5.6-sol` and an
+  explicit `model_reasoning_effort="max"` override

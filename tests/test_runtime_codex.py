@@ -8,15 +8,18 @@ import signal
 import subprocess
 import sys
 import time
+from io import BytesIO
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict
 
 import rvw.runtimes.codex as codex_module
 from rvw.lane import Lane, load_lane
-from rvw.runtimes import RunStatus
-from rvw.runtimes.codex import CodexRuntime
+from rvw.runtime_policy import CodexRuntimePolicy
+from rvw.runtimes import RunStatus, RunUsage, RunUsageStatus
+from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 
 FIXTURE = Path(__file__).parent / "fixtures" / "lanes" / "slop-hygiene.md"
 
@@ -40,6 +43,21 @@ signal.signal(signal.SIGTERM, signal.SIG_IGN)
 Path(sys.argv[1]).write_text(f"{os.getppid()} {os.getpid()}", encoding="utf-8")
 time.sleep(60)
 """
+_LEADER_EXITS_CHILD_IGNORES_TERM_SCRIPT = f"""
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+child = subprocess.Popen(
+    [sys.executable, "-c", {_IGNORE_TERM_CHILD_SCRIPT!r}, sys.argv[2]],
+)
+Path(sys.argv[1]).write_text(f"{{os.getpid()}} {{child.pid}}", encoding="utf-8")
+while True:
+    time.sleep(60)
+"""
 _SPAWN_PARENT_SCRIPT = f"""
 import asyncio
 import sys
@@ -50,10 +68,6 @@ from rvw.runtimes.codex import _spawn
 
 async def main() -> None:
     command = [
-        "timeout",
-        "--foreground",
-        "--signal=TERM",
-        "60s",
         sys.executable,
         "-c",
         {_SLEEP_CHILD_SCRIPT!r},
@@ -133,13 +147,12 @@ async def test_valid_run_materializes_artifacts_and_command(
     assert calls == [
         (
             [
-                "timeout",
-                "--foreground",
-                "--signal=TERM",
-                "--kill-after=30s",
-                "60s",
                 "codex",
                 "exec",
+                "--model",
+                "gpt-5.6-sol",
+                "-c",
+                'model_reasoning_effort="max"',
                 "--sandbox",
                 "read-only",
                 "--color",
@@ -157,6 +170,96 @@ async def test_valid_run_materializes_artifacts_and_command(
             None,
         )
     ]
+    usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
+    assert usage.model == "gpt-5.6-sol"
+    assert usage.reasoning_effort == "max"
+    assert usage.status is RunUsageStatus.COMPLETED
+    assert usage.cli_tokens_used == 42
+    assert result.usage == usage
+
+
+async def test_cancelled_runtime_persists_usage_before_propagating_cancellation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "cancel" / "r1"
+
+    async def cancelled_spawn(
+        cmd: list[str], stdin_text: str, log_path: Path, *, cwd: Path | None = None
+    ) -> int:
+        del cmd, stdin_text, log_path, cwd
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(codex_module, "_spawn", cancelled_spawn)
+
+    with pytest.raises(asyncio.CancelledError):
+        await execute_fixture(lane, run_dir)
+
+    usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
+    assert usage.status is RunUsageStatus.CANCELED
+    assert usage.cli_tokens_used is None
+
+
+async def test_runtime_policy_overrides_model_and_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "custom" / "r1"
+    calls = install_spawn(monkeypatch, run_dir=run_dir, payload=valid_payload())
+
+    result = await CodexRuntime(
+        policy=CodexRuntimePolicy(model="gpt-test", reasoning_effort="high")
+    ).execute(
+        lane=lane,
+        prompt="Review this tiny diff.",
+        run_dir=run_dir,
+        deadline_seconds=60,
+    )
+
+    assert result.status is RunStatus.VALID
+    command = calls[0][0]
+    assert command[command.index("--model") + 1] == "gpt-test"
+    config_index = command.index("-c", command.index("--model"))
+    assert command[config_index + 1] == 'model_reasoning_effort="high"'
+
+
+async def test_tool_less_runtime_disables_interactive_tools_and_records_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "tool-less" / "r1"
+    calls = install_spawn(monkeypatch, run_dir=run_dir, payload=valid_payload())
+
+    result = await CodexRuntime(mode=CodexRuntimeMode.TOOL_LESS).execute(
+        lane=lane,
+        prompt="Review only the supplied evidence.",
+        run_dir=run_dir,
+        deadline_seconds=60,
+    )
+
+    assert result.status is RunStatus.VALID
+    command = calls[0][0]
+    disabled_features = {
+        command[index + 1] for index, value in enumerate(command[:-1]) if value == "--disable"
+    }
+    assert {
+        "shell_tool",
+        "browser_use",
+        "in_app_browser",
+        "computer_use",
+        "apps",
+        "plugins",
+        "image_generation",
+        "multi_agent",
+        "collaboration_modes",
+    } <= disabled_features
+    assert "--ignore-rules" in command
+    assert "--ephemeral" in command
+    assert 'web_search="disabled"' in command
+    assert "allow_login_shell=false" in command
+    assert result.usage is not None
+    assert result.usage.runtime_mode == "tool-less"
+    assert result.usage.tool_calls == 0
 
 
 async def test_exit_124_is_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -197,6 +300,44 @@ async def test_spawn_failure_retains_inspectable_detail(
     assert result.diagnostic.detail == "FileNotFoundError: missing checkout"
     assert result.diagnostic.log_path == str(run_dir / "run.log")
     assert result.diagnostic.output_path == str(run_dir / "out.json")
+
+
+async def test_deadline_cancels_spawn_and_returns_timeout_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "deadline" / "r1"
+    spawn_started = asyncio.Event()
+    spawn_cancelled = asyncio.Event()
+
+    async def blocking_spawn(
+        cmd: list[str], stdin_text: str, log_path: Path, *, cwd: Path | None = None
+    ) -> int:
+        del cmd, stdin_text, log_path, cwd
+        spawn_started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            spawn_cancelled.set()
+            raise
+        return 0
+
+    monkeypatch.setattr(codex_module, "_spawn", blocking_spawn)
+
+    result = await CodexRuntime(mode=CodexRuntimeMode.TOOL_LESS).execute(
+        lane=lane,
+        prompt="Review this tiny diff.",
+        run_dir=run_dir,
+        deadline_seconds=1,
+    )
+
+    assert spawn_started.is_set()
+    assert spawn_cancelled.is_set()
+    assert result.status is RunStatus.INVALID
+    assert result.output is None
+    assert result.invalid_reason == "exit_nonzero:124"
+    assert result.usage is not None
+    assert result.usage.status is RunUsageStatus.INVALID
 
 
 async def test_missing_output_artifact_is_invalid(
@@ -354,10 +495,6 @@ async def test_spawn_cancellation_terminates_runtime_process_tree(tmp_path: Path
     task = asyncio.create_task(
         codex_module._spawn(
             [
-                "timeout",
-                "--foreground",
-                "--signal=TERM",
-                "60s",
                 sys.executable,
                 "-c",
                 _SLEEP_CHILD_SCRIPT,
@@ -367,13 +504,15 @@ async def test_spawn_cancellation_terminates_runtime_process_tree(tmp_path: Path
             tmp_path / "cancel-child.log",
         )
     )
-    process_tree_pids: tuple[int, int] | None = None
+    process_tree_pids: tuple[int, ...] | None = None
     try:
         async with asyncio.timeout(3):
             while not child_pid_path.exists():
                 await asyncio.sleep(0.01)
-        wrapper_pid, runtime_pid = child_pid_path.read_text(encoding="utf-8").split()
-        process_tree_pids = (int(wrapper_pid), int(runtime_pid))
+        _, runtime_pid_text = child_pid_path.read_text(encoding="utf-8").split()
+        runtime_pid = int(runtime_pid_text)
+        assert runtime_pid != os.getpid()
+        process_tree_pids = (runtime_pid,)
 
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -403,10 +542,6 @@ async def test_spawn_cancellation_sigkills_term_ignoring_process_tree(
     task = asyncio.create_task(
         codex_module._spawn(
             [
-                "timeout",
-                "--foreground",
-                "--signal=TERM",
-                "60s",
                 sys.executable,
                 "-c",
                 _IGNORE_TERM_CHILD_SCRIPT,
@@ -416,13 +551,15 @@ async def test_spawn_cancellation_sigkills_term_ignoring_process_tree(
             log_path,
         )
     )
-    process_tree_pids: tuple[int, int] | None = None
+    process_tree_pids: tuple[int, ...] | None = None
     try:
         async with asyncio.timeout(3):
             while not child_pid_path.exists():
                 await asyncio.sleep(0.01)
-        wrapper_pid, runtime_pid = child_pid_path.read_text(encoding="utf-8").split()
-        process_tree_pids = (int(wrapper_pid), int(runtime_pid))
+        _, runtime_pid_text = child_pid_path.read_text(encoding="utf-8").split()
+        runtime_pid = int(runtime_pid_text)
+        assert runtime_pid != os.getpid()
+        process_tree_pids = (runtime_pid,)
 
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -435,6 +572,136 @@ async def test_spawn_cancellation_sigkills_term_ignoring_process_tree(
         log_text = log_path.read_text(encoding="utf-8")
         assert "rvw: graceful termination timed out after 0.2s" in log_text
         assert "escalated to SIGKILL (pgid " in log_text
+    finally:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        for child_pid in process_tree_pids or ():
+            if _linux_process_is_running(child_pid):
+                os.kill(child_pid, signal.SIGKILL)
+
+
+async def test_terminate_and_reap_returns_when_process_group_persists_after_sigkill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ReapedProcess:
+        pid = 123
+        returncode: int | None = None
+
+        async def wait(self) -> int:
+            return 0
+
+    async def never_exits(_: int) -> None:
+        await asyncio.Future()
+
+    signals: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(codex_module, "_PROCESS_TERMINATION_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(codex_module, "_wait_for_process_group_exit", never_exits)
+    monkeypatch.setattr(
+        codex_module.os,
+        "killpg",
+        lambda pgid, sig: signals.append((pgid, sig)),
+    )
+    log_file = BytesIO()
+
+    await asyncio.wait_for(
+        codex_module._terminate_and_reap(
+            cast(asyncio.subprocess.Process, ReapedProcess()),
+            log_file,
+            pgid=123,
+        ),
+        timeout=0.1,
+    )
+
+    assert signals == [(123, signal.SIGTERM), (123, signal.SIGKILL)]
+    assert log_file.getvalue().decode("utf-8") == (
+        "rvw: graceful termination timed out after 0.01s; escalated to SIGKILL (pgid 123)\n"
+        "rvw: process group remained after SIGKILL for 0.01s; continuing cleanup (pgid 123)\n"
+    )
+
+
+async def test_terminate_and_reap_returns_when_post_kill_group_probe_is_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ReapedProcess:
+        pid = 123
+        returncode: int | None = None
+
+        async def wait(self) -> int:
+            return 0
+
+    signals: list[tuple[int, signal.Signals | int]] = []
+    sent_kill = False
+
+    def fake_killpg(pgid: int, sig: signal.Signals | int) -> None:
+        nonlocal sent_kill
+        signals.append((pgid, sig))
+        if sig == signal.SIGKILL:
+            sent_kill = True
+        if sig == 0 and sent_kill:
+            raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(codex_module, "_PROCESS_TERMINATION_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(codex_module.os, "killpg", fake_killpg)
+    log_file = BytesIO()
+
+    await asyncio.wait_for(
+        codex_module._terminate_and_reap(
+            cast(asyncio.subprocess.Process, ReapedProcess()),
+            log_file,
+            pgid=123,
+        ),
+        timeout=0.1,
+    )
+
+    assert signals[0] == (123, signal.SIGTERM)
+    assert (123, signal.SIGKILL) in signals
+    assert log_file.getvalue().decode("utf-8") == (
+        "rvw: graceful termination timed out after 0.01s; escalated to SIGKILL (pgid 123)\n"
+        "rvw: process group could not be verified after SIGKILL; continuing cleanup "
+        "(pgid 123)\n"
+    )
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux process inspection")
+async def test_spawn_cancellation_kills_child_after_term_exits_its_leader(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(codex_module, "_PROCESS_TERMINATION_TIMEOUT_SECONDS", 0.2)
+    pid_path = tmp_path / "leader-child.pid"
+    child_pid_path = tmp_path / "ignored-child.pid"
+    log_path = tmp_path / "leader-child.log"
+    task = asyncio.create_task(
+        codex_module._spawn(
+            [
+                sys.executable,
+                "-c",
+                _LEADER_EXITS_CHILD_IGNORES_TERM_SCRIPT,
+                str(pid_path),
+                str(child_pid_path),
+            ],
+            "",
+            log_path,
+        )
+    )
+    process_tree_pids: tuple[int, int] | None = None
+    try:
+        async with asyncio.timeout(3):
+            while not pid_path.exists() or not child_pid_path.exists():
+                await asyncio.sleep(0.01)
+        leader_pid, child_pid = pid_path.read_text(encoding="utf-8").split()
+        process_tree_pids = (int(leader_pid), int(child_pid))
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        async with asyncio.timeout(3):
+            while any(_linux_process_is_running(pid) for pid in process_tree_pids):
+                await asyncio.sleep(0.01)
+        assert not any(_linux_process_is_running(pid) for pid in process_tree_pids)
+        assert "escalated to SIGKILL (pgid " in log_path.read_text(encoding="utf-8")
     finally:
         if not task.done():
             task.cancel()
@@ -502,7 +769,7 @@ async def test_real_codex_returns_valid_result(tmp_path: Path) -> None:
         f"File: {fixture.name}\n```python\n{fixture.read_text(encoding='utf-8')}```"
     )
 
-    result = await CodexRuntime().execute(
+    result = await CodexRuntime(mode=CodexRuntimeMode.TOOL_LESS).execute(
         lane=lane,
         prompt=prompt,
         run_dir=tmp_path / "live" / "r1",

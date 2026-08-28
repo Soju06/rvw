@@ -32,6 +32,31 @@ class RunDiagnostic(BaseModel):
     output_bytes: int | None = Field(default=None, ge=0)
 
 
+class RunUsageStatus(StrEnum):
+    COMPLETED = "completed"
+    INVALID = "invalid"
+    CANCELED = "canceled"
+
+
+class RunUsage(BaseModel):
+    """Best-effort runtime telemetry that never affects validity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str
+    reasoning_effort: str
+    runtime_mode: str | None = None
+    status: RunUsageStatus
+    wall_seconds: float = Field(ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    cached_input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    cli_tokens_used: int | None = Field(default=None, ge=0)
+    turns: int | None = Field(default=None, ge=0)
+    tool_calls: int | None = Field(default=None, ge=0)
+
+
 @dataclass(frozen=True, slots=True)
 class RunResult[OutputT: BaseModel]:
     lane_id: str
@@ -43,6 +68,7 @@ class RunResult[OutputT: BaseModel]:
     artifact_dir: Path
     chunk: int = 1
     diagnostic: RunDiagnostic | None = None
+    usage: RunUsage | None = None
 
     def __post_init__(self) -> None:
         if self.replica < 1:
@@ -92,4 +118,11 @@ class Runtime(Protocol):
     ) -> RunResult[BaseModel]: ...
 
 
-__all__: list[str] = ["RunDiagnostic", "RunResult", "RunStatus", "Runtime"]
+__all__: list[str] = [
+    "RunDiagnostic",
+    "RunResult",
+    "RunStatus",
+    "RunUsage",
+    "RunUsageStatus",
+    "Runtime",
+]
