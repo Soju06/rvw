@@ -451,6 +451,107 @@ async def test_discover_resume_does_not_start_a_third_attempt_after_replacement(
     assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "retry" / "r1"]
 
 
+async def test_discover_resume_completes_partial_initial_wave_before_one_replacement(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=2,
+    )
+    prior = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    runtime = FakeRuntime(
+        statuses={
+            "slop-hygiene": [RunStatus.INVALID, RunStatus.VALID, RunStatus.VALID],
+        },
+        invalid_reasons={"slop-hygiene": ["schema_validation_error"]},
+    )
+
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={
+            ("slop-hygiene", 1, 1): [prior],
+        },
+    )
+
+    assert runtime.run_dirs == [
+        tmp_path / "out" / "slop-hygiene" / "r2",
+        tmp_path / "out" / "slop-hygiene" / "retry" / "r1",
+        tmp_path / "out" / "slop-hygiene" / "retry" / "r2",
+    ]
+    assert [[attempt.valid for attempt in run.attempts] for run in result.coverage[0].runs] == [
+        [False, True],
+        [False, True],
+    ]
+
+
+async def test_discover_resume_does_not_replace_when_a_sibling_is_already_valid(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=2,
+    )
+    valid_prior = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.VALID,
+        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+        invalid_reason=None,
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    invalid_prior = RunResult(
+        lane_id="slop-hygiene",
+        replica=2,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r2",
+    )
+    runtime = FakeRuntime()
+
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={
+            ("slop-hygiene", 1, 1): [valid_prior],
+            ("slop-hygiene", 2, 1): [invalid_prior],
+        },
+    )
+
+    assert runtime.calls == []
+    assert result.coverage[0].valid == 1
+    assert [run.valid for run in result.coverage[0].runs] == [True, False]
+
+
 async def test_pr_brief_fallback_and_operator_brief_wins(tmp_path: Path) -> None:
     lanes_root = tmp_path / "lanes"
     write_lane(lanes_root, "dynamic/goal-parity", Tier.DYNAMIC)

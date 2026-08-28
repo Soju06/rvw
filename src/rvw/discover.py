@@ -14,6 +14,7 @@ from rvw.dispatch import (
     CORRECTABLE_INVALID_REASONS,
     DEFAULT_CONCURRENCY,
     DEFAULT_DEADLINE_SECONDS,
+    DispatchOutcome,
     PlannedRun,
     dispatch_outcome,
 )
@@ -212,11 +213,16 @@ def _coverage_attempts(
     key = (result.lane_id, result.replica, result.chunk)
     initial = initial_by_key.get((result.lane_id, result.replica, result.chunk))
     prior_results = list(prior_attempts.get(key, ()))
-    attempt_results = (
-        prior_results
-        if initial is None and any(result is prior for prior in prior_results)
-        else [*prior_results, *([result] if initial is None else [initial, result])]
-    )
+    if initial is None:
+        attempt_results = (
+            prior_results
+            if any(result is prior for prior in prior_results)
+            else [*prior_results, result]
+        )
+    elif prior_results and initial is prior_results[-1]:
+        attempt_results = [*prior_results, result]
+    else:
+        attempt_results = [*prior_results, initial, result]
     return [
         RunAttempt(
             attempt=attempt,
@@ -340,58 +346,102 @@ async def discover(
         valid_attempts = [attempt for attempt in attempts if attempt.status is RunStatus.VALID]
         if valid_attempts:
             reusable[key] = valid_attempts[-1]
-    pending_plan = remaining_discovery_plan(plan, reusable)
-    prior_retry = set(prior_retry_lane_chunks or ())
-    prior_invalid_lane_chunks = {
-        (lane_id, chunk)
-        for (lane_id, _replica, chunk), attempts in attempt_history.items()
-        if attempts and attempts[-1].status is RunStatus.INVALID
+    prior_final = {
+        key: attempts[-1]
+        for key, attempts in attempt_history.items()
+        if attempts and key not in reusable
     }
-    pending_by_lane_chunk: dict[tuple[str, int], list[PlannedRun]] = {}
-    for run in pending_plan.runs:
-        pending_by_lane_chunk.setdefault((run.lane.id, run.chunk), []).append(run)
-    resume_retry_feedback: dict[tuple[str, int], str] = {}
-    for lane_chunk, runs in pending_by_lane_chunk.items():
-        prior_results = [
-            attempt_history.get((run.lane.id, run.replica, run.chunk), [])[-1:] for run in runs
-        ]
-        if (
-            lane_chunk not in prior_retry
-            and len(prior_results) == len(runs)
-            and all(prior_results)
-            and all(
-                result.invalid_reason in CORRECTABLE_INVALID_REASONS
-                for result_list in prior_results
-                for result in result_list
-            )
-        ):
-            resume_retry_feedback[lane_chunk] = build_retry_feedback(
-                [
-                    f"replica {run.replica}: {attempt_history[(run.lane.id, run.replica, run.chunk)][-1].invalid_reason}"
-                    for run in runs
-                ]
-            )
-    attempt_numbers_by_key = {
-        (run.lane.id, run.replica, run.chunk): len(
-            attempt_history.get((run.lane.id, run.replica, run.chunk), ())
-        )
-        + 1
-        for run in pending_plan.runs
-    }
-    dispatched = await dispatch_outcome(
-        pending_plan.runs,
+    initial_pending_runs = [
+        run
+        for run in plan.runs
+        if (run.lane.id, run.replica, run.chunk) not in reusable
+        and (run.lane.id, run.replica, run.chunk) not in prior_final
+    ]
+    all_lane_chunks = {(run.lane.id, run.chunk) for run in plan.runs}
+    initial_dispatched = await dispatch_outcome(
+        initial_pending_runs,
         runtime,
         out_root=out_root,
         concurrency=concurrency,
         deadline_seconds=deadline_seconds,
         host_gate=host_gate,
         on_progress=on_progress,
-        prior_valid_lane_chunks={(lane_id, chunk) for lane_id, _replica, chunk in reusable},
-        prior_retry_lane_chunks=prior_retry | prior_invalid_lane_chunks,
-        attempt_numbers_by_key=attempt_numbers_by_key,
-        resume_retry_feedback_by_lane_chunk=resume_retry_feedback,
+        prior_retry_lane_chunks=all_lane_chunks,
     )
-    raw_results = [*reusable.values(), *dispatched.results]
+    initial_by_key = dict(initial_dispatched.initial_by_key)
+    initial_result_keys = {
+        (result.lane_id, result.replica, result.chunk) for result in initial_dispatched.results
+    }
+    final_by_key = {**prior_final, **reusable}
+    final_by_key.update(
+        {
+            (result.lane_id, result.replica, result.chunk): result
+            for result in initial_dispatched.results
+        }
+    )
+    runs_by_lane_chunk: dict[tuple[str, int], list[PlannedRun]] = {}
+    for run in plan.runs:
+        runs_by_lane_chunk.setdefault((run.lane.id, run.chunk), []).append(run)
+    prior_retry = set(prior_retry_lane_chunks or ())
+    retry_lane_chunks = {
+        lane_chunk
+        for lane_chunk, runs in runs_by_lane_chunk.items()
+        if lane_chunk not in prior_retry
+        and all((run.lane.id, run.replica, run.chunk) in final_by_key for run in runs)
+        and all(
+            final_by_key[(run.lane.id, run.replica, run.chunk)].status is RunStatus.INVALID
+            and final_by_key[(run.lane.id, run.replica, run.chunk)].invalid_reason
+            in CORRECTABLE_INVALID_REASONS
+            for run in runs
+        )
+    }
+    retry_runs = [run for run in plan.runs if (run.lane.id, run.chunk) in retry_lane_chunks]
+    retry_feedback = {
+        lane_chunk: build_retry_feedback(
+            [
+                f"replica {run.replica}: {final_by_key[(run.lane.id, run.replica, run.chunk)].invalid_reason}"
+                for run in runs_by_lane_chunk[lane_chunk]
+            ]
+        )
+        for lane_chunk in retry_lane_chunks
+    }
+    retry_attempt_numbers = {
+        (run.lane.id, run.replica, run.chunk): len(
+            attempt_history.get((run.lane.id, run.replica, run.chunk), ())
+        )
+        + (1 if (run.lane.id, run.replica, run.chunk) in initial_result_keys else 0)
+        + 1
+        for run in retry_runs
+    }
+    retry_dispatched = (
+        await dispatch_outcome(
+            retry_runs,
+            runtime,
+            out_root=out_root,
+            concurrency=concurrency,
+            deadline_seconds=deadline_seconds,
+            host_gate=host_gate,
+            on_progress=on_progress,
+            prior_retry_lane_chunks=all_lane_chunks,
+            attempt_numbers_by_key=retry_attempt_numbers,
+            resume_retry_feedback_by_lane_chunk=retry_feedback,
+        )
+        if retry_runs
+        else DispatchOutcome(results=[], initial_by_key={})
+    )
+    for run in retry_runs:
+        key = (run.lane.id, run.replica, run.chunk)
+        initial_by_key[key] = final_by_key[key]
+    final_by_key.update(
+        {
+            (result.lane_id, result.replica, result.chunk): result
+            for result in retry_dispatched.results
+        }
+    )
+    raw_results = sorted(
+        final_by_key.values(),
+        key=lambda result: (result.lane_id, result.chunk, result.replica),
+    )
 
     results_by_lane_chunk: dict[tuple[str, int], list[RunResult]] = {}
     for result in raw_results:
@@ -454,7 +504,7 @@ async def discover(
                 valid=result.status is RunStatus.VALID,
                 findings=finding_counts.get((result.lane_id, result.replica, result.chunk), 0),
                 invalid_reason=result.invalid_reason,
-                attempts=_coverage_attempts(result, dispatched.initial_by_key, attempt_history),
+                attempts=_coverage_attempts(result, initial_by_key, attempt_history),
                 diagnostic=result.diagnostic,
             )
             for result in results
