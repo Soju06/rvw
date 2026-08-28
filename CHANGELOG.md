@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/Soju06/rvw/compare/v0.6.0...v0.6.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **build:** keep the sdist-stamped commit when building the wheel ([#33](https://github.com/Soju06/rvw/issues/33)) ([55eccae](https://github.com/Soju06/rvw/commit/55eccaefa1ed661768b707f91ce630cc41241cd4))
+
 ## [0.6.0](https://github.com/Soju06/rvw/compare/v0.5.0...v0.6.0) (2026-08-28)
 
 
