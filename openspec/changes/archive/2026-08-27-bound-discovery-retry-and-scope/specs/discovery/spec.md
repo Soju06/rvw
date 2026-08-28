@@ -47,18 +47,13 @@ and legacy discovery artifacts continue to load with empty attempt history.
 
 #### Scenario: Retried coverage keeps the initial failure reason
 
-- **WHEN** a lane-chunk retried after an initial `exit_nonzero` failure succeeds in the replacement wave
-- **THEN** its persisted coverage row is valid, and its attempt records list the initial INVALID attempt with reason `exit_nonzero` followed by the valid retry attempt
+- **WHEN** a lane-chunk retried after an initial `schema_validation_error` succeeds in the replacement wave
+- **THEN** its persisted coverage row is valid, and its attempt records list the initial INVALID attempt with reason `schema_validation_error` followed by the valid retry attempt
 
 #### Scenario: Legacy discovery artifact loads
 
 - **WHEN** a `discover.json` persisted before attempt records is loaded
 - **THEN** loading succeeds and each coverage run reports empty attempt history
-
-#### Scenario: Exact-match resume reuses a valid result
-
-- **WHEN** an interrupted run's target, prompt, lane document, schema, policy, and RVW version match a rebuilt discovery plan
-- **THEN** resume reuses its VALID result and dispatches only identities without one
 
 ### Requirement: Dynamic brief falls back to PR claims
 

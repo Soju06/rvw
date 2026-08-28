@@ -281,6 +281,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
         prior_valid_lane_chunks: set[tuple[str, int]] | None = None,
         prior_retry_lane_chunks: set[tuple[str, int]] | None = None,
         attempt_numbers_by_key: dict[tuple[str, int, int], int] | None = None,
+        resume_retry_feedback_by_lane_chunk: dict[tuple[str, int], str] | None = None,
     ) -> DispatchOutcome:
         nonlocal dispatch_calls
         dispatch_calls += 1
@@ -296,6 +297,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
             prior_valid_lane_chunks=prior_valid_lane_chunks,
             prior_retry_lane_chunks=prior_retry_lane_chunks,
             attempt_numbers_by_key=attempt_numbers_by_key,
+            resume_retry_feedback_by_lane_chunk=resume_retry_feedback_by_lane_chunk,
         )
 
     monkeypatch.setattr(discover_module, "dispatch_outcome", counting_dispatch)
@@ -352,9 +354,12 @@ async def test_discover_reuses_manifest_bound_valid_results_without_dispatching_
 
     assert runtime.calls == []
     assert result.coverage[0].valid == 1
+    assert [attempt.model_dump() for attempt in result.coverage[0].runs[0].attempts] == [
+        {"attempt": 1, "valid": True, "invalid_reason": None}
+    ]
 
 
-async def test_discover_resume_preserves_prior_invalid_attempt_and_uses_new_path(
+async def test_discover_resume_restores_a_correctable_failure_as_the_replacement_wave(
     tmp_path: Path,
 ) -> None:
     lanes_root = tmp_path / "lanes"
@@ -371,7 +376,7 @@ async def test_discover_resume_preserves_prior_invalid_attempt_and_uses_new_path
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="exit_nonzero:124",
+        invalid_reason="schema_validation_error",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r1",
     )
@@ -398,11 +403,52 @@ async def test_discover_resume_preserves_prior_invalid_attempt_and_uses_new_path
         prior_attempts={("slop-hygiene", 1, 1): [prior]},
     )
 
-    assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "resume" / "a2" / "r1"]
+    assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "retry" / "r1"]
+    assert "schema_validation_error" in runtime.prompts[0][1]
     assert [attempt.model_dump() for attempt in result.coverage[0].runs[0].attempts] == [
-        {"attempt": 1, "valid": False, "invalid_reason": "exit_nonzero:124"},
+        {"attempt": 1, "valid": False, "invalid_reason": "schema_validation_error"},
         {"attempt": 2, "valid": True, "invalid_reason": None},
     ]
+
+
+async def test_discover_resume_does_not_start_a_third_attempt_after_replacement(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=1,
+    )
+    prior = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason="schema_validation_error",
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "r1",
+    )
+    runtime = FakeRuntime(
+        statuses={"slop-hygiene": [RunStatus.INVALID]},
+        invalid_reasons={"slop-hygiene": ["schema_validation_error"]},
+    )
+
+    with pytest.raises(IncompleteDiscoveryError, match="slop-hygiene"):
+        await discover(
+            registry=reg,
+            lanes_root=lanes_root,
+            target=target(),
+            runtime=runtime,
+            out_root=tmp_path / "out",
+            planned=plan,
+            prior_attempts={("slop-hygiene", 1, 1): [prior]},
+        )
+
+    assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "retry" / "r1"]
 
 
 async def test_pr_brief_fallback_and_operator_brief_wins(tmp_path: Path) -> None:

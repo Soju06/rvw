@@ -13,7 +13,7 @@ from rvw.prompts import build_retry_feedback
 from rvw.runtimes import RunResult, RunStatus, Runtime
 
 _COST_ORDER = {"heavy": 0, "normal": 1, "light": 2}
-_CORRECTABLE_INVALID_REASONS = {"json_parse_error", "schema_validation_error"}
+CORRECTABLE_INVALID_REASONS = {"json_parse_error", "schema_validation_error"}
 DEFAULT_CONCURRENCY = 8
 DEFAULT_DEADLINE_SECONDS = 600
 MAX_DEADLINE_SECONDS = 1800
@@ -62,6 +62,7 @@ async def dispatch_outcome(
     prior_valid_lane_chunks: set[tuple[str, int]] | None = None,
     prior_retry_lane_chunks: set[tuple[str, int]] | None = None,
     attempt_numbers_by_key: Mapping[tuple[str, int, int], int] | None = None,
+    resume_retry_feedback_by_lane_chunk: Mapping[tuple[str, int], str] | None = None,
 ) -> DispatchOutcome:
     """Dispatch runs and retain initial results shadowed by the retry wave."""
 
@@ -111,6 +112,7 @@ async def dispatch_outcome(
         wave_runs: Sequence[PlannedRun],
         *,
         retry_feedback_by_lane_chunk: Mapping[tuple[str, int], str] | None = None,
+        increment_retry_attempt: bool = True,
     ) -> list[RunResult]:
         ordered = sorted(wave_runs, key=lambda run: lpt_sort_key(run.lane.cost))
         tasks = [
@@ -124,7 +126,11 @@ async def dispatch_outcome(
                     ),
                     attempt_number=(
                         (attempt_numbers_by_key or {}).get((run.lane.id, run.replica, run.chunk), 1)
-                        + (1 if retry_feedback_by_lane_chunk is not None else 0)
+                        + (
+                            1
+                            if retry_feedback_by_lane_chunk is not None and increment_retry_attempt
+                            else 0
+                        )
                     ),
                 )
             )
@@ -132,20 +138,31 @@ async def dispatch_outcome(
         ]
         return list(await asyncio.gather(*tasks))
 
-    main_results = await execute_wave(runs)
+    resume_retry_feedback = resume_retry_feedback_by_lane_chunk or {}
+    resume_retry_lane_chunks = set(resume_retry_feedback)
+    main_runs = [run for run in runs if (run.lane.id, run.chunk) not in resume_retry_lane_chunks]
+    resume_retry_runs = [
+        run for run in runs if (run.lane.id, run.chunk) in resume_retry_lane_chunks
+    ]
+    main_results = await execute_wave(main_runs)
+    resumed_retry_results = await execute_wave(
+        resume_retry_runs,
+        retry_feedback_by_lane_chunk=resume_retry_feedback,
+        increment_retry_attempt=False,
+    )
     results_by_lane_chunk: dict[tuple[str, int], list[RunResult]] = {}
     for result in main_results:
         results_by_lane_chunk.setdefault((result.lane_id, result.chunk), []).append(result)
 
     prior_valid = prior_valid_lane_chunks or set()
-    prior_retry = prior_retry_lane_chunks or set()
+    prior_retry = (prior_retry_lane_chunks or set()) | resume_retry_lane_chunks
     retry_lane_chunks = {
         lane_chunk
         for lane_chunk, lane_results in results_by_lane_chunk.items()
         if lane_chunk not in prior_valid
         and lane_chunk not in prior_retry
         and all(result.status is RunStatus.INVALID for result in lane_results)
-        and all(result.invalid_reason in _CORRECTABLE_INVALID_REASONS for result in lane_results)
+        and all(result.invalid_reason in CORRECTABLE_INVALID_REASONS for result in lane_results)
     }
     retry_runs = [run for run in runs if (run.lane.id, run.chunk) in retry_lane_chunks]
     retry_feedback_by_lane_chunk = {
@@ -166,7 +183,7 @@ async def dispatch_outcome(
 
     final_by_key = {
         (result.lane_id, result.replica, result.chunk): result
-        for result in [*main_results, *retry_results]
+        for result in [*main_results, *resumed_retry_results, *retry_results]
     }
     final_results = sorted(
         final_by_key.values(), key=lambda result: (result.lane_id, result.chunk, result.replica)
@@ -204,6 +221,7 @@ async def dispatch(
 
 
 __all__: list[str] = [
+    "CORRECTABLE_INVALID_REASONS",
     "DEFAULT_CONCURRENCY",
     "DEFAULT_DEADLINE_SECONDS",
     "MAX_DEADLINE_SECONDS",

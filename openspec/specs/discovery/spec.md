@@ -158,42 +158,13 @@ and legacy discovery artifacts continue to load with empty attempt history.
 
 #### Scenario: Retried coverage keeps the initial failure reason
 
-- **WHEN** a lane-chunk retried after an initial `exit_nonzero` failure succeeds in the replacement wave
-- **THEN** its persisted coverage row is valid, and its attempt records list the initial INVALID attempt with reason `exit_nonzero` followed by the valid retry attempt
+- **WHEN** a lane-chunk retried after an initial `schema_validation_error` succeeds in the replacement wave
+- **THEN** its persisted coverage row is valid, and its attempt records list the initial INVALID attempt with reason `schema_validation_error` followed by the valid retry attempt
 
 #### Scenario: Legacy discovery artifact loads
 
 - **WHEN** a `discover.json` persisted before attempt records is loaded
 - **THEN** loading succeeds and each coverage run reports empty attempt history
-
-#### Scenario: Exact-match resume reuses a valid result
-
-- **WHEN** an interrupted run's target, prompt, lane document, schema, policy,
-  and RVW version match a rebuilt discovery plan
-- **THEN** resume reuses its VALID result and dispatches only identities without one
-
-### Requirement: Discovery attempt evidence survives resume
-
-DISCOVER MUST persist every completed initial, replacement, and resumed attempt
-in chronological per-identity order without overwriting earlier artifacts or
-usage. It MUST reuse only the latest compatible VALID identity, retain earlier
-attempt validity and reasons in coverage, and use all compatible prior attempt
-state when deciding whether a lane-chunk may receive its single replacement
-wave. Manifests persisted before attempt history MUST remain readable as one
-initial attempt per recorded result.
-
-#### Scenario: Resume follows an invalid then valid replacement
-
-- **WHEN** a run resumes after an initial INVALID result and a replacement VALID
-  result was already persisted
-- **THEN** it reuses the VALID result, preserves both ordered attempts and their
-  artifacts, and does not dispatch another replacement wave
-
-#### Scenario: Reusable valid result shares a lane-chunk with pending work
-
-- **WHEN** a lane-chunk has one persisted compatible VALID replica and its
-  pending replicas all return correctable INVALID results
-- **THEN** no replacement wave is dispatched for that lane-chunk
 
 ### Requirement: Dynamic brief falls back to PR claims
 

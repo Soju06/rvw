@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rvw.diffbudget import DiffBudgetReport, DiffChunk, apply_diff_budget, require_reviewable_diff
 from rvw.dispatch import (
+    CORRECTABLE_INVALID_REASONS,
     DEFAULT_CONCURRENCY,
     DEFAULT_DEADLINE_SECONDS,
     PlannedRun,
@@ -19,7 +20,7 @@ from rvw.dispatch import (
 from rvw.hostslots import HostSlotGate
 from rvw.hunks import hunk_for_line, is_anchorable, parse_hunks
 from rvw.lane import Lane, load_lane
-from rvw.prompts import build_chunk_context, build_lane_prompt
+from rvw.prompts import build_chunk_context, build_lane_prompt, build_retry_feedback
 from rvw.registry import Registry
 from rvw.runtimes import RunDiagnostic, RunResult, RunStatus, Runtime
 from rvw.schema import Finding, Tier
@@ -210,10 +211,12 @@ def _coverage_attempts(
 ) -> list[RunAttempt]:
     key = (result.lane_id, result.replica, result.chunk)
     initial = initial_by_key.get((result.lane_id, result.replica, result.chunk))
-    attempt_results = [
-        *prior_attempts.get(key, ()),
-        *([result] if initial is None else [initial, result]),
-    ]
+    prior_results = list(prior_attempts.get(key, ()))
+    attempt_results = (
+        prior_results
+        if initial is None and any(result is prior for prior in prior_results)
+        else [*prior_results, *([result] if initial is None else [initial, result])]
+    )
     return [
         RunAttempt(
             attempt=attempt,
@@ -338,6 +341,36 @@ async def discover(
         if valid_attempts:
             reusable[key] = valid_attempts[-1]
     pending_plan = remaining_discovery_plan(plan, reusable)
+    prior_retry = set(prior_retry_lane_chunks or ())
+    prior_invalid_lane_chunks = {
+        (lane_id, chunk)
+        for (lane_id, _replica, chunk), attempts in attempt_history.items()
+        if attempts and attempts[-1].status is RunStatus.INVALID
+    }
+    pending_by_lane_chunk: dict[tuple[str, int], list[PlannedRun]] = {}
+    for run in pending_plan.runs:
+        pending_by_lane_chunk.setdefault((run.lane.id, run.chunk), []).append(run)
+    resume_retry_feedback: dict[tuple[str, int], str] = {}
+    for lane_chunk, runs in pending_by_lane_chunk.items():
+        prior_results = [
+            attempt_history.get((run.lane.id, run.replica, run.chunk), [])[-1:] for run in runs
+        ]
+        if (
+            lane_chunk not in prior_retry
+            and len(prior_results) == len(runs)
+            and all(prior_results)
+            and all(
+                result.invalid_reason in CORRECTABLE_INVALID_REASONS
+                for result_list in prior_results
+                for result in result_list
+            )
+        ):
+            resume_retry_feedback[lane_chunk] = build_retry_feedback(
+                [
+                    f"replica {run.replica}: {attempt_history[(run.lane.id, run.replica, run.chunk)][-1].invalid_reason}"
+                    for run in runs
+                ]
+            )
     attempt_numbers_by_key = {
         (run.lane.id, run.replica, run.chunk): len(
             attempt_history.get((run.lane.id, run.replica, run.chunk), ())
@@ -354,8 +387,9 @@ async def discover(
         host_gate=host_gate,
         on_progress=on_progress,
         prior_valid_lane_chunks={(lane_id, chunk) for lane_id, _replica, chunk in reusable},
-        prior_retry_lane_chunks=prior_retry_lane_chunks,
+        prior_retry_lane_chunks=prior_retry | prior_invalid_lane_chunks,
         attempt_numbers_by_key=attempt_numbers_by_key,
+        resume_retry_feedback_by_lane_chunk=resume_retry_feedback,
     )
     raw_results = [*reusable.values(), *dispatched.results]
 
