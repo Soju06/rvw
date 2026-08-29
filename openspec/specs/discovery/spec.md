@@ -129,8 +129,9 @@ INVALID and every invalid reason is `json_parse_error` or
 `schema_validation_error`; an initial wave MUST NOT contain retry feedback. A
 timeout, cancellation, budget, spawn, completion-marker, missing-artifact, or
 other invalid reason MUST NOT cause an identical full-wave retry. Any lane-chunk
-group with no valid result after its permitted retry decision MUST make
-DISCOVER fail closed as incomplete rather than contributing a zero-finding PASS.
+group with no valid result after its permitted retry decision MUST retain its
+final INVALID executions for run-level failure evaluation rather than
+contributing a zero-finding PASS.
 Replacement artifacts and ordered attempt coverage retain the existing contract,
 and legacy discovery artifacts continue to load with empty attempt history.
 

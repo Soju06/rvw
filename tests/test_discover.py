@@ -9,7 +9,6 @@ import pytest
 import rvw.discover as discover_module
 from rvw.diffbudget import EmptyReviewDiffError
 from rvw.discover import (
-    IncompleteDiscoveryError,
     RunCoverage,
     discover,
     plan_discovery,
@@ -437,18 +436,18 @@ async def test_discover_resume_does_not_start_a_third_attempt_after_replacement(
         invalid_reasons={"slop-hygiene": ["schema_validation_error"]},
     )
 
-    with pytest.raises(IncompleteDiscoveryError, match="slop-hygiene"):
-        await discover(
-            registry=reg,
-            lanes_root=lanes_root,
-            target=target(),
-            runtime=runtime,
-            out_root=tmp_path / "out",
-            planned=plan,
-            prior_attempts={("slop-hygiene", 1, 1): [prior]},
-        )
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={("slop-hygiene", 1, 1): [prior]},
+    )
 
     assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "retry" / "r1"]
+    assert [attempt.valid for attempt in result.coverage[0].runs[0].attempts] == [False, False]
 
 
 async def test_discover_resume_completes_partial_initial_wave_before_one_replacement(
@@ -705,18 +704,18 @@ async def test_discover_does_not_start_a_third_attempt_without_retry_metadata(
     )
     runtime = FakeRuntime()
 
-    with pytest.raises(IncompleteDiscoveryError, match="slop-hygiene"):
-        await discover(
-            registry=reg,
-            lanes_root=lanes_root,
-            target=target(),
-            runtime=runtime,
-            out_root=tmp_path / "out",
-            planned=plan,
-            prior_attempts={("slop-hygiene", 1, 1): [initial, replacement]},
-        )
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={("slop-hygiene", 1, 1): [initial, replacement]},
+    )
 
     assert runtime.calls == []
+    assert [attempt.valid for attempt in result.coverage[0].runs[0].attempts] == [False, False]
 
 
 async def test_discover_accepts_legacy_retry_lane_chunk_state(tmp_path: Path) -> None:
@@ -740,19 +739,19 @@ async def test_discover_accepts_legacy_retry_lane_chunk_state(tmp_path: Path) ->
     )
     runtime = FakeRuntime()
 
-    with pytest.raises(IncompleteDiscoveryError, match="slop-hygiene"):
-        await discover(
-            registry=reg,
-            lanes_root=lanes_root,
-            target=target(),
-            runtime=runtime,
-            out_root=tmp_path / "out",
-            planned=plan,
-            prior_attempts={("slop-hygiene", 1, 1): [prior]},
-            prior_retry_lane_chunks={("slop-hygiene", 1)},
-        )
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={("slop-hygiene", 1, 1): [prior]},
+        prior_retry_lane_chunks={("slop-hygiene", 1)},
+    )
 
     assert runtime.calls == []
+    assert [attempt.valid for attempt in result.coverage[0].runs[0].attempts] == [False]
 
 
 async def test_discover_resume_ignores_history_outside_the_rebuilt_plan(tmp_path: Path) -> None:
@@ -904,23 +903,29 @@ async def test_enrichment_computes_hunks_anchors_and_off_diff_fallback(tmp_path:
     assert off_diff.line == 99
 
 
-async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
+async def test_coverage_keeps_final_invalid_lane_for_run_level_status(tmp_path: Path) -> None:
     lanes_root = tmp_path / "lanes"
     write_lane(lanes_root, "good", Tier.BASE)
     write_lane(lanes_root, "bad", Tier.BASE)
     runtime = FakeRuntime(invalid_lanes={"bad"})
 
-    with pytest.raises(IncompleteDiscoveryError, match="bad"):
-        await discover(
-            registry=registry(("good", Tier.BASE), ("bad", Tier.BASE)),
-            lanes_root=lanes_root,
-            target=target(),
-            runtime=runtime,
-            out_root=tmp_path / "out",
-            replicas=2,
-        )
+    result = await discover(
+        registry=registry(("good", Tier.BASE), ("bad", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        replicas=2,
+    )
 
     assert len(runtime.calls) == 4  # two good + two non-correctable invalid bad
+    coverage_by_lane = {coverage.lane_id: coverage for coverage in result.coverage}
+    assert coverage_by_lane["good"].valid == 2
+    assert coverage_by_lane["bad"].valid == 0
+    assert [run.invalid_reason for run in coverage_by_lane["bad"].runs] == [
+        "scripted invalid",
+        "scripted invalid",
+    ]
 
 
 async def test_retried_coverage_preserves_ordered_attempt_status_and_reason(

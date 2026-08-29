@@ -7,7 +7,8 @@ The retry unit remains one lane/chunk group and at most one replacement wave.
 reasons that a corrective retry can plausibly fix. Timeout, cancellation,
 budget, spawn, completion-marker, missing-artifact, and other failures do not
 repeat their full prompt wave. After the retry decision, a no-valid-output
-group raises `IncompleteDiscoveryError` rather than producing zero findings.
+group retains its final INVALID executions so run-level finalization marks the
+review degraded or failed rather than treating it as a zero-finding PASS.
 
 ### Metadata expands compatibly; registry adoption stays external
 

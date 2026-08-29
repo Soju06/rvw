@@ -3,8 +3,8 @@
 The current dispatcher repeats every all-INVALID lane/chunk group once,
 including timeout and cancellation-shaped failures where repeating the same
 full replica wave spends more without correcting an output contract. It also
-lets a no-valid-output group flow into merge as zero findings, which can be
-mistaken for an empty review rather than incomplete coverage. Finally, lane
+does not carry a no-valid-output group into the run-level incomplete-coverage
+status, allowing it to be mistaken for an empty review. Finally, lane
 documents cannot declare their intended code-search scope or require an
 operator/PR brief before calling a dynamic lane.
 

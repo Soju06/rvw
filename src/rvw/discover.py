@@ -152,15 +152,6 @@ class DiscoveryPlan:
         return sum(len(run.prompt) for run in self.runs)
 
 
-class IncompleteDiscoveryError(RuntimeError):
-    """DISCOVER finished without any valid output for at least one lane/chunk."""
-
-    def __init__(self, lane_chunks: set[tuple[str, int]]) -> None:
-        self.lane_chunks = lane_chunks
-        labels = ", ".join(f"{lane}:chunk-{chunk}" for lane, chunk in sorted(lane_chunks))
-        super().__init__(f"incomplete discovery: no valid output for {labels}")
-
-
 def resolve_lane_path(lanes_root: Path, lane_id: str, tier: Tier) -> Path:
     """Resolve a lane ID beneath the directory owned by its registry layer tier."""
 
@@ -484,17 +475,6 @@ async def discover(
         key=lambda result: (result.lane_id, result.chunk, result.replica),
     )
 
-    results_by_lane_chunk: dict[tuple[str, int], list[RunResult]] = {}
-    for result in raw_results:
-        results_by_lane_chunk.setdefault((result.lane_id, result.chunk), []).append(result)
-    incomplete_lane_chunks = {
-        lane_chunk
-        for lane_chunk, lane_results in results_by_lane_chunk.items()
-        if lane_results and all(result.status is RunStatus.INVALID for result in lane_results)
-    }
-    if incomplete_lane_chunks:
-        raise IncompleteDiscoveryError(incomplete_lane_chunks)
-
     lane_results: dict[str, list[RunResult]] = {lane.id: [] for lane in plan.lanes}
     for result in raw_results:
         lane_results[result.lane_id].append(result)
@@ -572,7 +552,6 @@ __all__: list[str] = [
     "DiscoverResult",
     "DiscoveryPlan",
     "EnrichedFinding",
-    "IncompleteDiscoveryError",
     "LaneCoverage",
     "RunAttempt",
     "RunCoverage",
