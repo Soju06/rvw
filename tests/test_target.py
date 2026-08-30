@@ -77,6 +77,7 @@ def test_resolve_uncommitted_expands_untracked_directory_without_following_symli
         ("git", "ls-files", "--others", "--exclude-standard", "-z"): (
             "openspec/changes/archive/example/proposal.md\0"
             "openspec/changes/archive/example/specs/discovery/spec.md\0"
+            "openspec/changes/archive/example/outside-link.md\0"
         ),
         ("git", "diff", "HEAD"): "",
     }
