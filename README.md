@@ -46,25 +46,30 @@ Requires Python 3.12+ and a working [Codex CLI](https://github.com/openai/codex)
 
 ```bash
 # One command: resolve PR → discover → merge → adjudicate → report
-rvw review --target 1119 --repo-dir /path/to/pr-head-checkout
+rvw review --target 1119 --repo-dir /path/to/pr-head-checkout --allow-heavy-discovery
 
 # Plan only (no execution): which lanes activate, how many runs
 rvw plan --target 1119 --json
 
 # Deterministic gate for CI: exit 0 PASS / 1 BLOCK
-rvw auto --target 1119 --repo-dir /path/to/checkout
+rvw auto --target 1119 --repo-dir /path/to/checkout --allow-heavy-discovery
 
 # Anchored PR gate: disposable checkout, exact coverage, keyed dispositions
-rvw gate --target 1119
+rvw gate --target 1119 --allow-heavy-discovery
 
 # Publish the report as a GitHub review (dry-run by default)
 rvw publish --run <run-id> --execute
 
 # Explicit stacked PR chain: plan → review → inspect tip COMMENT payload
 rvw stack plan --prs 1119,1120,1121
-rvw stack review --prs 1119,1120,1121
+rvw stack review --prs 1119,1120,1121 --allow-heavy-discovery
 rvw stack publish --run <stack-run-id>
 ```
+
+`--allow-heavy-discovery` acknowledges plans that use multiple discovery
+replicas or whose one-retry upper bound exceeds the configured run ceiling. A
+one-replica plan within that ceiling does not need the flag; the quickstart
+commands include it so they remain runnable for larger activated lane sets.
 
 ## Concepts
 

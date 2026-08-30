@@ -44,7 +44,7 @@ Do not edit `CHANGELOG.md` manually. release-please owns changelog and version u
 A pull request is ready to merge only when:
 
 - required CI checks are green;
-- `rvw gate --target <pr>` reports a clean rvw review result;
+- `rvw gate --target <pr> --allow-heavy-discovery` reports a clean rvw review result;
 - GitHub reports the pull request as mergeable with state `CLEAN`;
 - behavioral changes include and implement an OpenSpec change; and
 - the pull request title follows Conventional Commits.

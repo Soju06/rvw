@@ -15,7 +15,7 @@ from rvw.adjudicate import (
     AdjudicationInfrastructureError,
     AdjudicationOutcome,
 )
-from rvw.discover import DiscoverResult
+from rvw.discover import DiscoverResult, DiscoveryPlan
 from rvw.discovery_cost import DiscoveryCostError, DiscoveryPreflight
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
@@ -34,14 +34,14 @@ def heavy_discovery_error() -> DiscoveryCostError:
     return DiscoveryCostError(
         DiscoveryPreflight(
             lanes=1,
-            replicas=1,
+            replicas=2,
             chunks=1,
-            initial_runs=1,
-            retry_upper_bound=2,
+            initial_runs=2,
+            retry_upper_bound=4,
             initial_prompt_characters=42,
             max_discovery_runs=12,
             runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
-            heavy_discovery_reasons=("reasoning_effort=max",),
+            heavy_discovery_reasons=("discovery_replicas=2",),
         )
     )
 
@@ -82,8 +82,8 @@ def test_review_reports_discovery_cost_failure_as_structured_json(
     assert result.exit_code == cli_module.EXIT_USER_ERROR
     payload = json.loads(result.stdout)
     assert payload["error"] == "heavy-discovery-acknowledgement-required"
-    assert payload["preflight"]["initial_runs"] == 1
-    assert payload["preflight"]["heavy_discovery_reasons"] == ["reasoning_effort=max"]
+    assert payload["preflight"]["initial_runs"] == 2
+    assert payload["preflight"]["heavy_discovery_reasons"] == ["discovery_replicas=2"]
 
 
 def pr_target() -> ResolvedTarget:
@@ -323,6 +323,36 @@ def test_run_cli_resumes_with_persisted_plan_and_settings(
     assert call["max_discovery_runs"] == 12
     assert call["allow_heavy_discovery"] is False
     assert call["resume_run"] is resume_run
+
+
+async def test_review_pipeline_forwards_a_persisted_discovery_plan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    plan = cast(DiscoveryPlan, object())
+
+    async def fake_execute_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_execute_pipeline", fake_execute_pipeline)
+
+    await cli_module._review_pipeline(
+        target_spec=None,
+        repo_dir=None,
+        registry_root=tmp_path / "missing-registry",
+        discover_replicas=1,
+        adjudicate_replicas=1,
+        concurrency=1,
+        deadline_seconds=600,
+        out_root=tmp_path / "runs",
+        json_output=False,
+        pause=False,
+        publish=False,
+        dynamic_brief=None,
+        planned_discovery=plan,
+    )
+
+    assert calls[0]["planned_discovery"] is plan
 
 
 def test_review_cli_passes_command_host_gate_to_execute_pipeline(
@@ -598,6 +628,31 @@ def test_review_end_to_end_writes_all_stages_and_json_shape(
     assert payload["build"] == summary["build"]
     assert str(summary["build"]["build_id"]) in (run_dir / "report.md").read_text()
     assert "## 확정 발견 (CONFIRMED)" in (run_dir / "report.md").read_text()
+
+
+def test_review_default_max_policy_does_not_require_heavy_acknowledgement(
+    tmp_path: Path, registry_root: Path, patched_pipeline: None
+) -> None:
+    del patched_pipeline
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "review",
+            "--target",
+            "42",
+            "--registry",
+            str(registry_root),
+            "--repo-dir",
+            str(checkout),
+            "--out",
+            str(tmp_path / "runs"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
 
 
 def test_review_json_and_report_expose_degraded_failed_lane(

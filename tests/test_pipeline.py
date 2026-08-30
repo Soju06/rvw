@@ -13,8 +13,9 @@ from rvw.dispatch import DEFAULT_DEADLINE_SECONDS
 from rvw.lane import load_lane
 from rvw.pipeline import execute_pipeline
 from rvw.registry import Registry
-from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY, CodexRuntimePolicy
 from rvw.runtimes import RunResult, RunStatus
+from rvw.runtimes.codex import CodexRuntime
 from rvw.schema import RuntimeLaneOutput, Tier
 from rvw.target import ResolvedTarget
 
@@ -110,11 +111,11 @@ Review the diff.
             registry=registry,
             lanes_root=lanes_root,
             target=target(),
-            active_lanes=[],
+            active_lanes=[load_lane(lane_path)],
             runtime=unused,
             adjudicator=unused,
             repo_dir=None,
-            discover_replicas=1,
+            discover_replicas=2,
             adjudicate_replicas=1,
             concurrency=1,
             out_root=tmp_path / "runs",
@@ -204,7 +205,7 @@ Review the diff.
         {"layers": [{"id": "base", "tier": "base", "lanes": ["selected", "outside-scope"]}]}
     )
     observed_lanes: list[str] = []
-    unused: Any = None
+    policy = CodexRuntimePolicy(model="gpt-test", reasoning_effort="high")
 
     async def fake_discover(**kwargs: object) -> DiscoverResult:
         plan = cast(DiscoveryPlan, kwargs["planned"])
@@ -219,8 +220,8 @@ Review the diff.
         lanes_root=lanes_root,
         target=target(),
         active_lanes=[selected],
-        runtime=unused,
-        adjudicator=unused,
+        runtime=CodexRuntime(policy=policy),
+        adjudicator=cast(Any, None),
         repo_dir=None,
         discover_replicas=1,
         adjudicate_replicas=1,
@@ -235,6 +236,7 @@ Review the diff.
     assert artifacts is not None
     assert artifacts.preflight is not None
     assert artifacts.preflight["initial_runs"] == 1
+    assert artifacts.preflight["runtime"] == policy.payload()
     assert artifacts.run.load_preflight() == artifacts.preflight
 
 

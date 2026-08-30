@@ -136,20 +136,21 @@ runtime model/reasoning effort. The default ceiling MUST be 12 positive runs;
 commands MAY accept a positive `--max-discovery-runs` override. Discovery MUST
 fail closed unless `--allow-heavy-discovery` is supplied when discovery replicas
 are at least two, when the one-retry upper bound exceeds the configured ceiling,
-or when the selected reasoning effort is `max`. `plan` MUST report the same
-preflight but MUST not require the acknowledgement because it starts no runtime
-work. The acknowledgement MUST not depend on interactive confirmation or TTY
-state. Each runtime execution MUST persist its acknowledged preflight as
+or when both conditions apply. The recorded runtime model and reasoning effort alone MUST NOT require
+the acknowledgement. `plan` MUST report the same preflight but MUST not require
+the acknowledgement because it starts no runtime work. The acknowledgement MUST
+not depend on interactive confirmation or TTY state. Each runtime execution MUST persist its acknowledged preflight as
 `preflight.json` before runtime dispatch, and every structured result payload
 for that execution MUST include the same preflight values. `stack review` MUST
 aggregate all member preflights and require acknowledgement before it starts
 the first member's DISCOVER dispatch.
 
-#### Scenario: Default max-effort review is not acknowledged
+#### Scenario: Default max-effort review is within the ordinary cost envelope
 
-- **WHEN** `rvw review` uses the default `max` reasoning policy without
-  `--allow-heavy-discovery`
-- **THEN** it exits before starting DISCOVER and identifies the required flag
+- **WHEN** `rvw review` uses the default `max` reasoning policy with one
+  discovery replica and a retry upper bound within the configured ceiling
+- **THEN** it starts DISCOVER without `--allow-heavy-discovery` while recording
+  the runtime policy in its preflight
 
 #### Scenario: Replica retry shape exceeds the ceiling
 
@@ -157,10 +158,11 @@ the first member's DISCOVER dispatch.
 - **THEN** its retry upper bound of 24 requires `--allow-heavy-discovery`
   before any runtime work starts
 
-#### Scenario: Informative plan has high-cost conditions
+#### Scenario: Informative plan records its runtime profile
 
 - **WHEN** `rvw plan` renders a preflight whose policy uses `max` effort
-- **THEN** it reports the acknowledgement reasons and exits successfully
+- **THEN** it reports the runtime policy and exits successfully without treating
+  the policy alone as a high-cost condition
 
 #### Scenario: Acknowledged discovery records its preflight
 

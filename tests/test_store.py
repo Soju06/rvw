@@ -13,7 +13,7 @@ import rvw.store as store_module
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport, DiffChunkPlacement
 from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage, RunCoverage
-from rvw.discovery_cost import DiscoveryPreflight
+from rvw.discovery_cost import DiscoveryPreflight, validate_discovery_preflight_payload
 from rvw.merge import merge
 from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
 from rvw.schema import Tier, Verdict
@@ -65,8 +65,28 @@ def preflight_fixture() -> dict[str, object]:
         initial_prompt_characters=100,
         max_discovery_runs=12,
         runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
-        heavy_discovery_reasons=("reasoning_effort=max",),
+        heavy_discovery_reasons=(),
     ).payload()
+
+
+def test_preflight_loading_normalizes_the_legacy_max_effort_acknowledgement() -> None:
+    payload = {
+        "lane_count": 1,
+        "replicas": 1,
+        "chunks": 1,
+        "initial_runs": 1,
+        "retry_upper_bound": 2,
+        "initial_prompt_characters": 100,
+        "max_discovery_runs": 12,
+        "runtime": DEFAULT_CODEX_RUNTIME_POLICY.payload(),
+        "requires_allow_heavy_discovery": True,
+        "heavy_discovery_reasons": ["reasoning_effort=max"],
+    }
+
+    normalized = validate_discovery_preflight_payload(payload)
+
+    assert normalized["requires_allow_heavy_discovery"] is False
+    assert normalized["heavy_discovery_reasons"] == []
 
 
 def test_round_trips_every_stage(tmp_path: Path) -> None:

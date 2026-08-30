@@ -132,7 +132,6 @@ def preflight_payload(
         reasons.append(f"discovery_replicas={replicas}")
     if retry_upper_bound > 12:
         reasons.append(f"retry_upper_bound={retry_upper_bound} exceeds max_discovery_runs=12")
-    reasons.append("reasoning_effort=max")
     return DiscoveryPreflight(
         lanes=lanes,
         replicas=replicas,
@@ -631,14 +630,14 @@ def test_stack_review_rejection_does_not_create_a_partial_stack_run(
     members = valid_members()[:2]
     preflight = DiscoveryPreflight(
         lanes=2,
-        replicas=1,
+        replicas=2,
         chunks=1,
-        initial_runs=2,
-        retry_upper_bound=4,
-        initial_prompt_characters=2,
+        initial_runs=4,
+        retry_upper_bound=8,
+        initial_prompt_characters=4,
         max_discovery_runs=12,
         runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
-        heavy_discovery_reasons=("reasoning_effort=max",),
+        heavy_discovery_reasons=("discovery_replicas=2",),
     )
 
     def reject_for_cost(**kwargs: object) -> cli_module._StackDiscoveryPlan:

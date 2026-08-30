@@ -240,7 +240,6 @@ def test_discovery_preflight_identifies_every_explicit_heavy_condition(tmp_path:
     assert preflight.heavy_discovery_reasons == (
         "discovery_replicas=2",
         "retry_upper_bound=8 exceeds max_discovery_runs=7",
-        "reasoning_effort=max",
     )
     assert preflight.requires_allow_heavy_discovery is True
 
@@ -293,7 +292,6 @@ def test_stack_preflight_aggregates_all_member_plans(tmp_path: Path) -> None:
     assert preflight.heavy_discovery_reasons == (
         "discovery_replicas=2",
         "retry_upper_bound=8 exceeds max_discovery_runs=7",
-        "reasoning_effort=max",
     )
 
 

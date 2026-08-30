@@ -17,7 +17,7 @@
 
 - [ ] The PR title follows Conventional Commits.
 - [ ] CI is green.
-- [ ] `rvw gate --target <pr>` is clean.
+- [ ] `rvw gate --target <pr> --allow-heavy-discovery` is clean.
 - [ ] GitHub reports mergeable state `CLEAN`.
 - [ ] `openspec validate --specs` passes when OpenSpec files changed.
 - [ ] Tests cover behavioral changes.

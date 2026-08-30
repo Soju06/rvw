@@ -286,7 +286,7 @@ def test_plan_reports_chunk_expanded_total_runs(
     assert payload["total_runs"] == 6
 
 
-def test_plan_human_output_includes_runtime_ceiling_and_acknowledgement_reasons(
+def test_plan_human_output_records_runtime_without_treating_max_effort_as_heavy(
     monkeypatch: pytest.MonkeyPatch, registry_root: Path
 ) -> None:
     monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda spec: canned_target())
@@ -300,8 +300,8 @@ def test_plan_human_output_includes_runtime_ceiling_and_acknowledgement_reasons(
     assert "Retry upper bound: 6" in result.stdout
     assert "Max discovery runs: 12" in result.stdout
     assert "Discovery runtime: gpt-5.6-sol (reasoning effort: max)" in result.stdout
-    assert "Requires --allow-heavy-discovery before runtime execution" in result.stdout
-    assert "reasoning_effort=max" in result.stdout
+    assert "Requires --allow-heavy-discovery before runtime execution" not in result.stdout
+    assert "reasoning_effort=max" not in result.stdout
 
 
 def test_plan_converts_empty_review_diff_to_a_user_error(

@@ -35,6 +35,26 @@ Adjudicator = Callable[
 MessageSink = Callable[[str], None]
 
 
+def _preflight_runtime_policy(
+    runtime: Runtime,
+    supplied_policy: CodexRuntimePolicy | None,
+) -> CodexRuntimePolicy:
+    """Use the dispatched runtime's policy when it exposes one.
+
+    Generic test and integration runtimes need not expose Codex configuration,
+    so they may still supply an explicit policy (or use the stable default).
+    A Codex runtime must never persist preflight accounting for a different
+    policy than it will execute.
+    """
+
+    runtime_policy = getattr(runtime, "policy", None)
+    if isinstance(runtime_policy, CodexRuntimePolicy):
+        if supplied_policy is not None and supplied_policy != runtime_policy:
+            raise ValueError("runtime_policy must match the dispatched runtime policy")
+        return runtime_policy
+    return supplied_policy or DEFAULT_CODEX_RUNTIME_POLICY
+
+
 @dataclass(frozen=True)
 class PipelineArtifacts:
     """Completed, persisted outputs from one ordinary review."""
@@ -106,7 +126,7 @@ async def execute_pipeline(
     planned_discovery: DiscoveryPlan | None = None,
     max_discovery_runs: int = DEFAULT_MAX_DISCOVERY_RUNS,
     allow_heavy_discovery: bool = False,
-    runtime_policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
+    runtime_policy: CodexRuntimePolicy | None = None,
     adjudication_runtime: Runtime | None = None,
     expanded_adjudication_runtime: Runtime | None = None,
     host_gate: HostSlotGate | None = None,
@@ -139,7 +159,7 @@ async def execute_pipeline(
         plan,
         replicas=discover_replicas,
         max_discovery_runs=max_discovery_runs,
-        runtime_policy=runtime_policy,
+        runtime_policy=_preflight_runtime_policy(runtime, runtime_policy),
     )
     preflight_payload = preflight.payload()
     adjudication_runtime = adjudication_runtime or runtime

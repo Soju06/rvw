@@ -72,9 +72,14 @@ class _DiscoveryPreflightPayload(BaseModel):
                 "retry_upper_bound="
                 f"{self.retry_upper_bound} exceeds max_discovery_runs={self.max_discovery_runs}"
             )
-        if self.runtime.reasoning_effort == "max":
-            expected_reasons.append("reasoning_effort=max")
-        if self.heavy_discovery_reasons != expected_reasons:
+        legacy_reasons = [*expected_reasons, "reasoning_effort=max"]
+        if self.heavy_discovery_reasons == legacy_reasons:
+            # Runs persisted before max effort became an informational profile
+            # recorded this obsolete acknowledgement reason. Normalize it while
+            # loading so their resume preflight can still match the new policy.
+            self.heavy_discovery_reasons = expected_reasons
+            self.requires_allow_heavy_discovery = bool(expected_reasons)
+        elif self.heavy_discovery_reasons != expected_reasons:
             raise ValueError("heavy_discovery_reasons do not match preflight totals and runtime")
         if self.requires_allow_heavy_discovery != bool(expected_reasons):
             raise ValueError(
@@ -166,8 +171,6 @@ def _build_discovery_preflight(
         reasons.append(
             f"retry_upper_bound={retry_upper_bound} exceeds max_discovery_runs={max_discovery_runs}"
         )
-    if runtime_policy.reasoning_effort == "max":
-        reasons.append("reasoning_effort=max")
     return DiscoveryPreflight(
         lanes=lanes,
         replicas=replicas,
