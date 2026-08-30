@@ -264,6 +264,67 @@ def test_review_split_replica_defaults_and_explicit_overrides(
     assert calls[0]["deadline_seconds"] == expected_deadline
 
 
+def test_run_cli_resumes_with_persisted_plan_and_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    plan = object()
+
+    class ResumeRun:
+        def load_discovery_plan(self) -> object:
+            return plan
+
+        def load_execution_config(self) -> dict[str, int]:
+            return {
+                "discover_replicas": 2,
+                "adjudicate_replicas": 3,
+                "concurrency": 4,
+                "deadline_seconds": 900,
+                "max_discovery_runs": 12,
+            }
+
+    resume_run = ResumeRun()
+
+    class Store:
+        def __init__(self, root: Path) -> None:
+            assert root == tmp_path / "runs"
+
+        def open(self, run_id: str) -> object:
+            assert run_id == "interrupted-run"
+            return resume_run
+
+    async def fake_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "RunStore", Store)
+    monkeypatch.setattr(cli_module, "_review_pipeline", fake_review_pipeline)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["run", "--run", "interrupted-run", "--out", str(tmp_path / "runs")],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["target_spec"] is None
+    assert call["repo_dir"] is None
+    assert call["registry_root"] == cli_module.DEFAULT_REGISTRY_ROOT
+    assert call["discover_replicas"] == 2
+    assert call["adjudicate_replicas"] == 3
+    assert call["concurrency"] == 4
+    assert call["deadline_seconds"] == 900
+    assert call["out_root"] == tmp_path / "runs"
+    assert call["json_output"] is False
+    assert call["pause"] is False
+    assert call["publish"] is False
+    assert call["dynamic_brief"] is None
+    assert call["planned_discovery"] is plan
+    assert call["max_discovery_runs"] == 12
+    assert call["allow_heavy_discovery"] is False
+    assert call["resume_run"] is resume_run
+
+
 def test_review_cli_passes_command_host_gate_to_execute_pipeline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, registry_root: Path
 ) -> None:

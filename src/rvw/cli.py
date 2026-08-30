@@ -135,6 +135,7 @@ _EXAMPLES: dict[str, list[str]] = {
         "rvw review --target 123 --pause --dynamic-brief /tmp/brief.md",
         "rvw review --target HEAD --json",
     ],
+    "run": ["rvw run --run <run-id>"],
     "plan": ["rvw plan --target 123 --json"],
     "gate": [
         "rvw gate --target 123",
@@ -660,7 +661,7 @@ def _review_payload(artifacts: PipelineArtifacts) -> dict[str, object]:
 
 async def _review_pipeline(
     *,
-    target_spec: str,
+    target_spec: str | None,
     repo_dir: Path | None,
     registry_root: Path,
     discover_replicas: int,
@@ -675,11 +676,15 @@ async def _review_pipeline(
     planned_discovery: DiscoveryPlan | None = None,
     max_discovery_runs: int = DEFAULT_MAX_DISCOVERY_RUNS,
     allow_heavy_discovery: bool = False,
+    resume_run: RunHandle | None = None,
     host_gate: HostSlotGate | None = None,
 ) -> None:
-    resolved_target: ResolvedTarget | None = None
+    resolved_target = resume_run.load_target() if resume_run is not None else None
     if publish:
-        resolved_target = _resolve_cli_target(target_spec)
+        if resolved_target is None:
+            if target_spec is None:
+                raise ValueError("target_spec is required to publish a new review run")
+            resolved_target = _resolve_cli_target(target_spec)
         if resolved_target.kind != "pr":
             _error_console.print("--publish requires a PR target", markup=False)
             raise typer.Exit(EXIT_USER_ERROR)
@@ -698,6 +703,7 @@ async def _review_pipeline(
             max_discovery_runs=max_discovery_runs,
             allow_heavy_discovery=allow_heavy_discovery,
             resolved_target=resolved_target,
+            resume_run=resume_run,
             host_gate=host_gate,
         )
     except PipelineInfrastructureError as exc:
@@ -751,7 +757,7 @@ async def _review_pipeline(
 
 async def _execute_pipeline(
     *,
-    target_spec: str,
+    target_spec: str | None,
     repo_dir: Path | None,
     registry_root: Path,
     discover_replicas: int,
@@ -765,17 +771,28 @@ async def _execute_pipeline(
     max_discovery_runs: int = DEFAULT_MAX_DISCOVERY_RUNS,
     allow_heavy_discovery: bool = False,
     resolved_target: ResolvedTarget | None = None,
+    resume_run: RunHandle | None = None,
     host_gate: HostSlotGate | None = None,
 ) -> _PipelineArtifacts | None:
     """Execute and persist common review stages without publishing or rendering CLI output."""
 
-    registry, lanes_root = _load_registry_root(registry_root)
-    target = resolved_target or _resolve_cli_target(target_spec)
-    active_lanes = (
-        planned_discovery.lanes
-        if planned_discovery is not None
-        else _load_active_lanes(registry, lanes_root, target)
-    )
+    if planned_discovery is None:
+        registry, lanes_root = _load_registry_root(registry_root)
+    else:
+        registry = None
+        lanes_root = None
+    if resolved_target is None:
+        if target_spec is None:
+            raise ValueError("target_spec is required for a new review run")
+        target = _resolve_cli_target(target_spec)
+    else:
+        target = resolved_target
+    if planned_discovery is None:
+        if registry is None or lanes_root is None:
+            raise AssertionError("new review requires a loaded registry")
+        active_lanes = _load_active_lanes(registry, lanes_root, target)
+    else:
+        active_lanes = planned_discovery.lanes
     return await execute_pipeline(
         registry=registry,
         lanes_root=lanes_root,
@@ -799,6 +816,7 @@ async def _execute_pipeline(
         runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
         on_pause=lambda message: _console.print(message, markup=False),
         on_warning=lambda message: _error_console.print(message, markup=False),
+        resume_run=resume_run,
         host_gate=host_gate,
     )
 
@@ -1851,8 +1869,60 @@ def plan(
 
 
 @app.command()
-def run(run_id: Annotated[str | None, Option("--run")] = None) -> None:
-    _stub(1)
+def run(
+    run_id: Annotated[str, Option("--run")],
+    repo_dir: Annotated[
+        Path | None,
+        Option(
+            "--repo-dir",
+            help="Provisioned checkout used for adjudication after discovery resumes.",
+        ),
+    ] = None,
+    registry_root: Annotated[
+        Path, Option("--registry", help="Registry root retained for runtime configuration.")
+    ] = DEFAULT_REGISTRY_ROOT,
+    out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
+    json_output: Annotated[bool, Option("--json")] = False,
+    pause: Annotated[bool, Option("--pause")] = False,
+    publish: Annotated[bool, Option("--publish")] = False,
+) -> None:
+    """Resume a run using its persisted discovery plan and completed attempts."""
+
+    try:
+        resume_run = RunStore(out_root).open(run_id)
+        plan = resume_run.load_discovery_plan()
+        config = resume_run.load_execution_config()
+    except (InvalidRunId, RunNotFound, StageMissing, ValueError) as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_USER_ERROR) from exc
+
+    host_gate = _command_host_gate()
+    try:
+        asyncio.run(
+            _review_pipeline(
+                target_spec=None,
+                repo_dir=repo_dir,
+                registry_root=registry_root,
+                discover_replicas=config["discover_replicas"],
+                adjudicate_replicas=config["adjudicate_replicas"],
+                concurrency=config["concurrency"],
+                deadline_seconds=config["deadline_seconds"],
+                out_root=out_root,
+                json_output=json_output,
+                pause=pause,
+                publish=publish,
+                dynamic_brief=None,
+                planned_discovery=plan,
+                max_discovery_runs=config["max_discovery_runs"],
+                allow_heavy_discovery=False,
+                resume_run=resume_run,
+                host_gate=host_gate,
+            )
+        )
+    except EmptyReviewDiffError as exc:
+        _empty_review_failure(exc, json_output=json_output)
+    except DiscoveryCostError as exc:
+        _discovery_cost_failure(exc, json_output=json_output)
 
 
 @app.command("adjudicate")

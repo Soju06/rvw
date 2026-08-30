@@ -15,6 +15,8 @@
   incomplete coverage.
 - [x] 2.3 Add strict compatible lane and coverage metadata, including plan
   output for declarative scope and explicit brief-unavailable skip.
+- [x] 2.4 Persist the exact discovery plan and each completed attempt, then
+  expose `rvw run --run <id>` to resume only that plan.
 
 ## 3. Specification and Verification
 

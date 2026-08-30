@@ -164,15 +164,21 @@ and legacy discovery artifacts continue to load with empty attempt history.
 
 ### Requirement: Compatible discovery resume preserves attempts
 
-Discovery resume MUST reuse completed work only for a lane, replica, and chunk
-identity present in the rebuilt discovery plan. It MUST retain each identity's
+Discovery resume MUST persist the exact discovery plan, execution settings, and
+each completed result before continuing. `rvw run --run <id>` MUST reuse only
+the persisted plan's lane, replica, and chunk identities, retain each identity's
 ordered attempt history, must not dispatch a third attempt, and MUST write any
 new resumed execution to an artifact directory distinct from prior attempts.
 
-#### Scenario: Resume reuses compatible valid work
+#### Scenario: Interrupted review reuses persisted valid work
 
-- **WHEN** a rebuilt plan contains a previously valid lane-replica-chunk result
-- **THEN** discovery retains that result without dispatching it again
+- **WHEN** a review is interrupted after a valid lane-replica-chunk completes
+- **THEN** `rvw run --run <id>` retains that result without dispatching it again
+
+#### Scenario: Resume keeps the original planned prompt
+
+- **WHEN** a review is interrupted and the lane registry or operator brief later changes
+- **THEN** `rvw run --run <id>` continues with the persisted plan rather than mixing results from a newly built prompt
 
 #### Scenario: Resume preserves a partially completed replacement wave
 

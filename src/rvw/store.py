@@ -13,11 +13,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 from rvw.adjudicate import AdjudicationOutcome
-from rvw.diffbudget import DiffBudgetReport
-from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage
+from rvw.diffbudget import DiffBudgetReport, DiffChunk
+from rvw.discover import DiscoverResult, DiscoveryPlan, EnrichedFinding, LaneCoverage
 from rvw.discovery_cost import validate_discovery_preflight_payload
+from rvw.dispatch import PlannedRun
+from rvw.lane import Lane
 from rvw.merge import MergeResult
+from rvw.runtimes import RunDiagnostic, RunResult, RunStatus
+from rvw.schema import RuntimeLaneOutput
 from rvw.summary import ReviewStatus, RunSummary, running_summary, summarize_run
 from rvw.target import ResolvedTarget
 
@@ -90,6 +96,142 @@ class StageMissing(FileNotFoundError):
         super().__init__(
             f"{stage.upper()} stage is missing required artifact {stage}{suffix} from {run_dir}"
         )
+
+
+class _StoredPlannedRun(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lane_id: str
+    prompt: str
+    replica: int = Field(ge=1)
+    chunk: int = Field(ge=1)
+    chunk_count: int = Field(ge=1)
+
+
+class _StoredDiscoveryPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lanes: list[Lane]
+    chunks: list[DiffChunk]
+    budget: DiffBudgetReport
+    runs: list[_StoredPlannedRun]
+    skipped_lane_ids: list[str]
+    replicas: int = Field(ge=1)
+
+    @classmethod
+    def from_plan(cls, plan: DiscoveryPlan) -> _StoredDiscoveryPlan:
+        return cls(
+            lanes=plan.lanes,
+            chunks=plan.chunks,
+            budget=plan.budget,
+            runs=[
+                _StoredPlannedRun(
+                    lane_id=run.lane.id,
+                    prompt=run.prompt,
+                    replica=run.replica,
+                    chunk=run.chunk,
+                    chunk_count=run.chunk_count,
+                )
+                for run in plan.runs
+            ],
+            skipped_lane_ids=sorted(plan.skipped_lane_ids),
+            replicas=plan.replicas,
+        )
+
+    def to_plan(self) -> DiscoveryPlan:
+        lanes_by_id = {lane.id: lane for lane in self.lanes}
+        if len(lanes_by_id) != len(self.lanes):
+            raise ValueError("discovery plan contains duplicate lane IDs")
+        try:
+            runs = [
+                PlannedRun(
+                    lane=lanes_by_id[run.lane_id],
+                    prompt=run.prompt,
+                    replica=run.replica,
+                    chunk=run.chunk,
+                    chunk_count=run.chunk_count,
+                )
+                for run in self.runs
+            ]
+        except KeyError as exc:
+            raise ValueError("discovery plan run references an unknown lane") from exc
+        return DiscoveryPlan(
+            lanes=self.lanes,
+            chunks=self.chunks,
+            budget=self.budget,
+            runs=runs,
+            skipped_lane_ids=set(self.skipped_lane_ids),
+            replicas=self.replicas,
+        )
+
+
+class _StoredDiscoveryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lane_id: str
+    replica: int = Field(ge=1)
+    chunk: int = Field(ge=1)
+    status: RunStatus
+    output: RuntimeLaneOutput | None
+    invalid_reason: str | None
+    wall_seconds: float = Field(ge=0)
+    artifact_dir: Path
+    diagnostic: RunDiagnostic | None = None
+
+    @classmethod
+    def from_result(cls, result: RunResult[RuntimeLaneOutput]) -> _StoredDiscoveryResult:
+        return cls(
+            lane_id=result.lane_id,
+            replica=result.replica,
+            chunk=result.chunk,
+            status=result.status,
+            output=result.output,
+            invalid_reason=result.invalid_reason,
+            wall_seconds=result.wall_seconds,
+            artifact_dir=result.artifact_dir,
+            diagnostic=result.diagnostic,
+        )
+
+    def to_result(self) -> RunResult[RuntimeLaneOutput]:
+        return RunResult(
+            lane_id=self.lane_id,
+            replica=self.replica,
+            chunk=self.chunk,
+            status=self.status,
+            output=self.output,
+            invalid_reason=self.invalid_reason,
+            wall_seconds=self.wall_seconds,
+            artifact_dir=self.artifact_dir,
+            diagnostic=self.diagnostic,
+        )
+
+
+class _DiscoveryProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[_StoredDiscoveryResult] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _attempts_are_bounded_and_ordered(self) -> _DiscoveryProgress:
+        histories: dict[tuple[str, int, int], list[_StoredDiscoveryResult]] = {}
+        for result in self.results:
+            histories.setdefault((result.lane_id, result.replica, result.chunk), []).append(result)
+        for history in histories.values():
+            if len(history) > 2:
+                raise ValueError("discovery progress cannot contain more than two attempts")
+            if len(history) == 2 and history[0].status is RunStatus.VALID:
+                raise ValueError("valid discovery results cannot have a replacement attempt")
+        return self
+
+
+class _ExecutionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    discover_replicas: int = Field(ge=1)
+    adjudicate_replicas: int = Field(ge=1)
+    concurrency: int = Field(ge=1)
+    deadline_seconds: int = Field(ge=1)
+    max_discovery_runs: int = Field(ge=1)
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -243,6 +385,61 @@ class RunHandle:
     def load_preflight(self) -> dict[str, object]:
         raw = self._load_contained_json("preflight.json", "preflight")
         return validate_discovery_preflight_payload(raw)
+
+    def save_discovery_plan(self, plan: DiscoveryPlan) -> None:
+        _write_json(
+            self.dir / "discovery-plan.json",
+            _StoredDiscoveryPlan.from_plan(plan).model_dump(mode="json", by_alias=True),
+        )
+
+    def load_discovery_plan(self) -> DiscoveryPlan:
+        raw = self._load_contained_json("discovery-plan.json", "discovery-plan")
+        return _StoredDiscoveryPlan.model_validate(raw).to_plan()
+
+    def save_execution_config(
+        self,
+        *,
+        discover_replicas: int,
+        adjudicate_replicas: int,
+        concurrency: int,
+        deadline_seconds: int,
+        max_discovery_runs: int,
+    ) -> None:
+        config = _ExecutionConfig(
+            discover_replicas=discover_replicas,
+            adjudicate_replicas=adjudicate_replicas,
+            concurrency=concurrency,
+            deadline_seconds=deadline_seconds,
+            max_discovery_runs=max_discovery_runs,
+        )
+        _write_json(self.dir / "execution.json", config.model_dump(mode="json"))
+
+    def load_execution_config(self) -> dict[str, int]:
+        raw = self._load_contained_json("execution.json", "execution")
+        return _ExecutionConfig.model_validate(raw).model_dump()
+
+    def append_discovery_progress(self, result: RunResult[RuntimeLaneOutput]) -> None:
+        try:
+            raw = self._load_contained_json("discovery-progress.json", "discovery-progress")
+        except StageMissing:
+            progress = _DiscoveryProgress()
+        else:
+            progress = _DiscoveryProgress.model_validate(raw)
+        updated = _DiscoveryProgress(
+            results=[*progress.results, _StoredDiscoveryResult.from_result(result)]
+        )
+        _write_json(self.dir / "discovery-progress.json", updated.model_dump(mode="json"))
+
+    def load_discovery_progress(
+        self,
+    ) -> dict[tuple[str, int, int], list[RunResult[RuntimeLaneOutput]]]:
+        raw = self._load_contained_json("discovery-progress.json", "discovery-progress")
+        progress = _DiscoveryProgress.model_validate(raw)
+        histories: dict[tuple[str, int, int], list[RunResult[RuntimeLaneOutput]]] = {}
+        for stored in progress.results:
+            result = stored.to_result()
+            histories.setdefault((result.lane_id, result.replica, result.chunk), []).append(result)
+        return histories
 
     def save_discover(self, discovered: DiscoverResult) -> None:
         _write_json(

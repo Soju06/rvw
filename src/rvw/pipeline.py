@@ -89,8 +89,8 @@ def verdict_counts(outcome: AdjudicationOutcome | None) -> dict[str, int]:
 
 async def execute_pipeline(
     *,
-    registry: Registry,
-    lanes_root: Path,
+    registry: Registry | None,
+    lanes_root: Path | None,
     target: ResolvedTarget,
     active_lanes: Sequence[Lane],
     runtime: Runtime,
@@ -112,6 +112,7 @@ async def execute_pipeline(
     host_gate: HostSlotGate | None = None,
     on_pause: MessageSink | None = None,
     on_warning: MessageSink | None = None,
+    resume_run: RunHandle | None = None,
 ) -> PipelineArtifacts | None:
     """Execute and persist DISCOVER, MERGE, ADJUDICATE, and REPORT."""
 
@@ -120,32 +121,68 @@ async def execute_pipeline(
     if adjudicate_replicas < 1:
         raise ValueError("adjudicate_replicas must be at least 1")
     brief = dynamic_brief.read_text(encoding="utf-8") if dynamic_brief is not None else None
-    plan = planned_discovery or plan_discovery(
-        registry=registry,
-        lanes_root=lanes_root,
-        target=target,
-        brief=brief,
-        brief_source="operator" if dynamic_brief is not None else None,
-        replicas=discover_replicas,
-        lane_filter=[lane.id for lane in active_lanes],
-    )
+    if planned_discovery is None:
+        if registry is None or lanes_root is None:
+            raise ValueError("registry and lanes_root are required without a discovery plan")
+        plan = plan_discovery(
+            registry=registry,
+            lanes_root=lanes_root,
+            target=target,
+            brief=brief,
+            brief_source="operator" if dynamic_brief is not None else None,
+            replicas=discover_replicas,
+            lane_filter=[lane.id for lane in active_lanes],
+        )
+    else:
+        plan = planned_discovery
     preflight = build_discovery_preflight(
         plan,
         replicas=discover_replicas,
         max_discovery_runs=max_discovery_runs,
         runtime_policy=runtime_policy,
     )
-    require_heavy_discovery_acknowledgement(
-        preflight,
-        allow_heavy_discovery=allow_heavy_discovery,
-    )
     preflight_payload = preflight.payload()
     adjudication_runtime = adjudication_runtime or runtime
-    run = RunStore(out_root).create(target)
-    run.save_preflight(preflight_payload)
+    if resume_run is None:
+        require_heavy_discovery_acknowledgement(
+            preflight,
+            allow_heavy_discovery=allow_heavy_discovery,
+        )
+        run = RunStore(out_root).create(target)
+        run.save_target(target)
+        run.save_discovery_plan(plan)
+        run.save_preflight(preflight_payload)
+        run.save_execution_config(
+            discover_replicas=discover_replicas,
+            adjudicate_replicas=adjudicate_replicas,
+            concurrency=concurrency,
+            deadline_seconds=deadline_seconds,
+            max_discovery_runs=max_discovery_runs,
+        )
+    else:
+        run = resume_run
+        if run.load_target() != target:
+            raise ValueError("resume run target does not match the requested target")
+        if run.load_discovery_plan() != plan:
+            raise ValueError("resume discovery plan does not match the persisted plan")
+        if run.load_preflight() != preflight_payload:
+            raise ValueError("resume preflight does not match the persisted preflight")
+        saved_config = run.load_execution_config()
+        requested_config = {
+            "discover_replicas": discover_replicas,
+            "adjudicate_replicas": adjudicate_replicas,
+            "concurrency": concurrency,
+            "deadline_seconds": deadline_seconds,
+            "max_discovery_runs": max_discovery_runs,
+        }
+        if saved_config != requested_config:
+            raise ValueError("resume execution settings do not match the persisted settings")
     if on_warning is not None and (warning := stale_install_warning()) is not None:
         on_warning(warning)
-    run.save_target(target)
+    try:
+        prior_attempts = run.load_discovery_progress()
+    except StageMissing:
+        prior_attempts = {}
     discovered = await discover(
         registry=registry,
         lanes_root=lanes_root,
@@ -159,6 +196,8 @@ async def execute_pipeline(
         deadline_seconds=deadline_seconds,
         host_gate=host_gate,
         planned=plan,
+        prior_attempts=prior_attempts,
+        on_progress=run.append_discovery_progress,
     )
     run.save_discover(discovered)
     build = run.load_summary().build

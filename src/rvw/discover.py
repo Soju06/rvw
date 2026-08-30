@@ -313,8 +313,8 @@ def plan_discovery(
 
 async def discover(
     *,
-    registry: Registry,
-    lanes_root: Path,
+    registry: Registry | None,
+    lanes_root: Path | None,
     target: ResolvedTarget,
     runtime: Runtime,
     out_root: Path,
@@ -334,15 +334,20 @@ async def discover(
 ) -> DiscoverResult:
     """Run all activated lanes in one dispatch call and enrich valid findings."""
 
-    plan = planned or plan_discovery(
-        registry=registry,
-        lanes_root=lanes_root,
-        target=target,
-        brief=brief,
-        brief_source=brief_source,
-        replicas=replicas,
-        lane_filter=lane_filter,
-    )
+    if planned is None:
+        if registry is None or lanes_root is None:
+            raise ValueError("registry and lanes_root are required without a discovery plan")
+        plan = plan_discovery(
+            registry=registry,
+            lanes_root=lanes_root,
+            target=target,
+            brief=brief,
+            brief_source=brief_source,
+            replicas=replicas,
+            lane_filter=lane_filter,
+        )
+    else:
+        plan = planned
     planned_keys = {(run.lane.id, run.replica, run.chunk) for run in plan.runs}
     attempt_history = {
         key: list(attempts)

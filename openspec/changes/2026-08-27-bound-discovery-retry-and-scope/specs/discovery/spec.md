@@ -1,3 +1,22 @@
+## ADDED Requirements
+
+### Requirement: Interrupted discovery resumes from persisted progress
+
+DISCOVER MUST persist its exact plan, execution settings, and each completed
+lane-replica-chunk result before proceeding. `rvw run --run <id>` MUST resume
+only from that persisted plan, retain ordered attempt history, and never issue a
+third attempt for one identity.
+
+#### Scenario: Interruption follows a completed initial replica
+
+- **WHEN** a review process stops after one initial replica completes
+- **THEN** `rvw run --run <id>` reuses that result and dispatches only the remaining work
+
+#### Scenario: Registry changes after interruption
+
+- **WHEN** a lane document changes after a review process stops
+- **THEN** `rvw run --run <id>` uses the persisted original prompt rather than mixing plan versions
+
 ## MODIFIED Requirements
 
 ### Requirement: Invalid replicas use one all-lane retry
