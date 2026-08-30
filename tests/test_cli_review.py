@@ -16,9 +16,11 @@ from rvw.adjudicate import (
     AdjudicationOutcome,
 )
 from rvw.discover import DiscoverResult
+from rvw.discovery_cost import DiscoveryCostError, DiscoveryPreflight
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import MergeResult
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Verdict
@@ -26,6 +28,22 @@ from rvw.store import RunStore
 from rvw.target import ResolvedTarget
 
 runner = CliRunner()
+
+
+def heavy_discovery_error() -> DiscoveryCostError:
+    return DiscoveryCostError(
+        DiscoveryPreflight(
+            lanes=1,
+            replicas=1,
+            chunks=1,
+            initial_runs=1,
+            retry_upper_bound=2,
+            initial_prompt_characters=42,
+            max_discovery_runs=12,
+            runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+            heavy_discovery_reasons=("reasoning_effort=max",),
+        )
+    )
 
 
 def test_review_rejects_invalid_host_concurrency_before_pipeline(
@@ -48,6 +66,24 @@ def test_review_rejects_invalid_host_concurrency_before_pipeline(
     assert result.exit_code == cli_module.EXIT_USER_ERROR
     assert "RVW_HOST_CONCURRENCY" in result.stderr
     assert called is False
+
+
+def test_review_reports_discovery_cost_failure_as_structured_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_for_cost(**kwargs: object) -> None:
+        del kwargs
+        raise heavy_discovery_error()
+
+    monkeypatch.setattr(cli_module, "_review_pipeline", fail_for_cost)
+
+    result = runner.invoke(cli_module.app, ["review", "--target", "HEAD", "--json"])
+
+    assert result.exit_code == cli_module.EXIT_USER_ERROR
+    payload = json.loads(result.stdout)
+    assert payload["error"] == "heavy-discovery-acknowledgement-required"
+    assert payload["preflight"]["initial_runs"] == 1
+    assert payload["preflight"]["heavy_discovery_reasons"] == ["reasoning_effort=max"]
 
 
 def pr_target() -> ResolvedTarget:
@@ -175,6 +211,7 @@ def invoke_review(
             str(registry_root),
             "--out",
             str(out_root),
+            "--allow-heavy-discovery",
             *extra,
         ],
     )
@@ -361,6 +398,7 @@ async def test_shared_pipeline_propagates_split_replicas_concurrency_and_deadlin
         out_root=tmp_path / "runs",
         pause=False,
         dynamic_brief=None,
+        allow_heavy_discovery=True,
         host_gate=gate,
     )
 
@@ -432,6 +470,7 @@ async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
         out_root=tmp_path / "runs",
         pause=False,
         dynamic_brief=None,
+        allow_heavy_discovery=True,
     )
 
     assert received_runtime is runtime
@@ -453,10 +492,12 @@ def test_review_end_to_end_writes_all_stages_and_json_shape(
         "report_path",
         "status",
         "failed_lanes",
+        "skipped_lanes",
         "verdict_counts",
         "coverage_totals",
         "error",
         "build",
+        "preflight",
     }
     run_dir = out_root / str(payload["run_id"])
     assert {path.name for path in run_dir.iterdir()} >= {
@@ -467,6 +508,7 @@ def test_review_end_to_end_writes_all_stages_and_json_shape(
         "outcome.json",
         "report.md",
         "publish-payload.json",
+        "preflight.json",
     }
     assert payload["verdict_counts"] == {
         "CONFIRMED": 1,
@@ -476,13 +518,18 @@ def test_review_end_to_end_writes_all_stages_and_json_shape(
     assert payload["coverage_totals"] == {"dispatched": 1, "valid": 1, "findings": 1}
     assert payload["status"] == "complete"
     assert payload["failed_lanes"] == []
+    assert payload["skipped_lanes"] == []
     assert payload["error"] is None
+    assert payload["preflight"] == json.loads(
+        (run_dir / "preflight.json").read_text(encoding="utf-8")
+    )
     summary = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert set(summary) == {
         "schema_version",
         "run_id",
         "status",
         "failed_lanes",
+        "skipped_lanes",
         "coverage_totals",
         "error",
         "build",
@@ -620,6 +667,7 @@ def test_review_with_every_lane_invalid_exits_failed(
             "--out",
             str(out_root),
             "--json",
+            "--allow-heavy-discovery",
         ],
     )
 
@@ -673,6 +721,7 @@ def test_review_adjudication_infrastructure_failure_persists_failed_partial_repo
             "--out",
             str(out_root),
             "--json",
+            "--allow-heavy-discovery",
         ],
     )
 

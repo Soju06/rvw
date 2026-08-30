@@ -19,6 +19,27 @@ class RunStatus(StrEnum):
     INVALID = "invalid"
 
 
+class InvalidReason(StrEnum):
+    """Stable output-artifact invalidity vocabulary emitted by runtimes."""
+
+    MISSING = "missing"
+    EMPTY = "empty"
+    UNPARSEABLE = "unparseable"
+    SCHEMA_INVALID = "schema-invalid"
+    NO_COMPLETION_MARKER = "no_completion_marker"
+
+
+_CORRECTABLE_INVALID_REASONS = frozenset(
+    {InvalidReason.UNPARSEABLE.value, InvalidReason.SCHEMA_INVALID.value}
+)
+
+
+def is_correctable_invalid_reason(reason: str | None) -> bool:
+    """Return whether one runtime-produced reason merits one replacement attempt."""
+
+    return reason in _CORRECTABLE_INVALID_REASONS
+
+
 class RunDiagnostic(BaseModel):
     """Inspectable process and artifact facts retained for an invalid execution."""
 
@@ -119,10 +140,12 @@ class Runtime(Protocol):
 
 
 __all__: list[str] = [
+    "InvalidReason",
     "RunDiagnostic",
     "RunResult",
     "RunStatus",
     "RunUsage",
     "RunUsageStatus",
     "Runtime",
+    "is_correctable_invalid_reason",
 ]

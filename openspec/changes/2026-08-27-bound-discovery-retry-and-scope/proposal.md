@@ -11,7 +11,7 @@ operator/PR brief before calling a dynamic lane.
 ## What Changes
 
 - Retry only all-INVALID groups whose every reason is a correctable
-  schema/format failure (`json_parse_error` or `schema_validation_error`).
+  schema/format failure (`unparseable` or `schema-invalid`).
 - Fail DISCOVER closed as incomplete when any lane/chunk finishes with no valid
   output, retaining its artifacts and machine-readable reasons.
 - Add `scope: diff | direct-deps | repository` and `requires_brief` lane

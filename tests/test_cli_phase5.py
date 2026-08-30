@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -16,6 +17,7 @@ from rvw.merge import merge
 from rvw.sample import SampleReport, SampleSiteVariance
 from rvw.schema import Tier, Verdict
 from rvw.store import RunStore
+from rvw.summary import CoverageTotals, FailedLane, LaneFailure, ReviewStatus, RunError, RunSummary
 from rvw.target import ResolvedTarget
 
 runner = CliRunner()
@@ -133,6 +135,7 @@ def test_auto_json_verdict_and_exit_mapping(
         "promoted",
         "considered",
         "report_path",
+        "preflight",
     }
 
 
@@ -148,6 +151,75 @@ def test_auto_policy_none_skips_publish(tmp_path: Path, monkeypatch: pytest.Monk
         ["auto", "--target", "42", "--policy", str(policy_file(tmp_path, "none"))],
     )
     assert result.exit_code == 0, result.stdout
+
+
+def test_auto_stops_before_policy_evaluation_for_degraded_discovery_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = fixture_artifacts(tmp_path, adjudicated=False)
+    incomplete_summary = RunSummary(
+        run_id=artifacts.run.run_id,
+        status=ReviewStatus.DEGRADED,
+        failed_lanes=[
+            FailedLane(
+                lane_id="correctness",
+                failures=[LaneFailure(replica=1, chunk=1, reason="missing")],
+            )
+        ],
+        coverage_totals=CoverageTotals(dispatched=2, valid=1, findings=0),
+        error=None,
+    )
+    patch_pipeline(monkeypatch, replace(artifacts, summary=incomplete_summary))
+
+    def forbidden_evaluate(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("policy evaluated despite incomplete discovery coverage")
+
+    monkeypatch.setattr(cli_module, "evaluate", forbidden_evaluate)
+    result = runner.invoke(
+        cli_module.app,
+        ["auto", "--target", "42", "--policy", str(policy_file(tmp_path, "none"))],
+    )
+
+    assert result.exit_code == cli_module.EXIT_SYSTEM_ERROR
+    assert "discovery coverage is incomplete" in result.stderr
+
+
+def test_auto_reports_adjudication_error_as_json_without_calling_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = fixture_artifacts(tmp_path, adjudicated=False)
+    failed_summary = RunSummary(
+        run_id=artifacts.run.run_id,
+        status=ReviewStatus.FAILED,
+        failed_lanes=[],
+        coverage_totals=CoverageTotals(dispatched=1, valid=1, findings=0),
+        error=RunError(
+            stage="adjudication",
+            reason="no-valid-output",
+            message="adjudication did not return valid output",
+        ),
+    )
+    patch_pipeline(monkeypatch, replace(artifacts, summary=failed_summary))
+
+    def forbidden_evaluate(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("policy evaluated after an adjudication error")
+
+    monkeypatch.setattr(cli_module, "evaluate", forbidden_evaluate)
+    result = runner.invoke(
+        cli_module.app,
+        ["auto", "--target", "42", "--policy", str(policy_file(tmp_path, "none")), "--json"],
+    )
+
+    assert result.exit_code == cli_module.EXIT_SYSTEM_ERROR
+    payload = json.loads(result.stdout)
+    assert payload["error"] == {
+        "stage": "adjudication",
+        "reason": "no-valid-output",
+        "message": "adjudication did not return valid output",
+        "attempts": [],
+    }
 
 
 def test_auto_forwards_split_replica_defaults_overrides_and_concurrency(

@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rvw.adjudicate import AdjudicationInfrastructureError, AdjudicationOutcome
-from rvw.discover import DiscoverResult, discover
+from rvw.discover import DiscoverResult, DiscoveryPlan, discover, plan_discovery
+from rvw.discovery_cost import (
+    DEFAULT_MAX_DISCOVERY_RUNS,
+    build_discovery_preflight,
+    require_heavy_discovery_acknowledgement,
+)
 from rvw.dispatch import DEFAULT_DEADLINE_SECONDS
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
@@ -16,6 +21,7 @@ from rvw.merge import MergeResult, merge
 from rvw.provenance import stale_install_warning
 from rvw.registry import Registry
 from rvw.report import render_report
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY, CodexRuntimePolicy
 from rvw.runtimes import Runtime
 from rvw.schema import Verdict
 from rvw.store import RunHandle, RunStore, StageMissing
@@ -41,6 +47,7 @@ class PipelineArtifacts:
     report_md: str
     report_path: Path
     summary: RunSummary | None = None
+    preflight: dict[str, object] | None = None
 
 
 class PipelineInfrastructureError(RuntimeError):
@@ -96,6 +103,10 @@ async def execute_pipeline(
     out_root: Path,
     pause: bool,
     dynamic_brief: Path | None,
+    planned_discovery: DiscoveryPlan | None = None,
+    max_discovery_runs: int = DEFAULT_MAX_DISCOVERY_RUNS,
+    allow_heavy_discovery: bool = False,
+    runtime_policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
     adjudication_runtime: Runtime | None = None,
     expanded_adjudication_runtime: Runtime | None = None,
     host_gate: HostSlotGate | None = None,
@@ -108,12 +119,33 @@ async def execute_pipeline(
         raise ValueError("discover_replicas must be at least 1")
     if adjudicate_replicas < 1:
         raise ValueError("adjudicate_replicas must be at least 1")
+    brief = dynamic_brief.read_text(encoding="utf-8") if dynamic_brief is not None else None
+    plan = planned_discovery or plan_discovery(
+        registry=registry,
+        lanes_root=lanes_root,
+        target=target,
+        brief=brief,
+        brief_source="operator" if dynamic_brief is not None else None,
+        replicas=discover_replicas,
+        lane_filter=[lane.id for lane in active_lanes],
+    )
+    preflight = build_discovery_preflight(
+        plan,
+        replicas=discover_replicas,
+        max_discovery_runs=max_discovery_runs,
+        runtime_policy=runtime_policy,
+    )
+    require_heavy_discovery_acknowledgement(
+        preflight,
+        allow_heavy_discovery=allow_heavy_discovery,
+    )
+    preflight_payload = preflight.payload()
     adjudication_runtime = adjudication_runtime or runtime
     run = RunStore(out_root).create(target)
+    run.save_preflight(preflight_payload)
     if on_warning is not None and (warning := stale_install_warning()) is not None:
         on_warning(warning)
     run.save_target(target)
-    brief = dynamic_brief.read_text(encoding="utf-8") if dynamic_brief is not None else None
     discovered = await discover(
         registry=registry,
         lanes_root=lanes_root,
@@ -126,12 +158,13 @@ async def execute_pipeline(
         concurrency=concurrency,
         deadline_seconds=deadline_seconds,
         host_gate=host_gate,
+        planned=plan,
     )
     run.save_discover(discovered)
     build = run.load_summary().build
     summary = summarize_run(run.run_id, discovered, build=build)
 
-    lane_tiers = {lane.id: lane.tier for lane in active_lanes}
+    lane_tiers = {lane.id: lane.tier for lane in plan.lanes}
     merged = merge(discovered.findings, lane_tiers=lane_tiers)
     run.save_merge(merged)
 
@@ -193,6 +226,7 @@ async def execute_pipeline(
                 report_md=report_md,
                 report_path=run.dir / "report.md",
                 summary=failed_summary,
+                preflight=preflight_payload,
             )
             raise PipelineInfrastructureError(artifacts) from exc
         run.save_outcome(outcome)
@@ -218,6 +252,7 @@ async def execute_pipeline(
         report_md=report_md,
         report_path=report_path,
         summary=summary,
+        preflight=preflight_payload,
     )
 
 
@@ -239,6 +274,10 @@ def load_pipeline_artifacts(
         summary = run.load_summary()
     except StageMissing:
         summary = summarize_run(run.run_id, discovered)
+    try:
+        preflight = run.load_preflight()
+    except StageMissing:
+        preflight = None
     return PipelineArtifacts(
         run=run,
         target=target,
@@ -248,6 +287,7 @@ def load_pipeline_artifacts(
         report_md=report_md,
         report_path=run.dir / "report.md",
         summary=summary,
+        preflight=preflight,
     )
 
 

@@ -112,11 +112,25 @@ def test_real_report_order_folds_regions_coverage_and_empty_sections() -> None:
     assert report.count("- `providers/") >= 4
     assert "공유 식별자: `errorCodes`" in report
     assert "(인접: providers/naver-map/index.ts L1721\N{EN DASH}1733)" in report
-    assert "| 합계 | 6 | 5 | 11 |" in report
+    assert "| slop-hygiene | complete | 3 | 3 | 7 |" in report
+    assert "| unscoped-sweep | degraded | 3 | 2 | 4 |" in report
+    assert "| 합계 | - | 6 | 5 | 11 |" in report
     assert "diff 예산: 12,345자 유지 / 6,789자 제외 (generated.ts, bun.lockb)" in report
     assert "1청크" in report
     assert "## 기각 (REJECTED)" not in report
     assert "## 검증 미확정" not in report
+
+
+def test_coverage_labels_all_invalid_execution_as_failed() -> None:
+    report = render_report(
+        target=target_fixture(),
+        merged=MergeResult(groups=[], sites=[], pattern_folds=[], region_folds=[]),
+        outcome=None,
+        coverage=[coverage_fixture("broken", valid=0, findings=0)],
+        budget=None,
+    )
+
+    assert "| broken | failed | 3 | 0 | 0 |" in report
 
 
 def test_synthesis_placeholder_and_verbatim_injection() -> None:

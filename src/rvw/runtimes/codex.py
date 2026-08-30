@@ -20,7 +20,14 @@ from pydantic import BaseModel, ValidationError
 
 from rvw.lane import Lane
 from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY, CodexRuntimePolicy
-from rvw.runtimes import RunDiagnostic, RunResult, RunStatus, RunUsage, RunUsageStatus
+from rvw.runtimes import (
+    InvalidReason,
+    RunDiagnostic,
+    RunResult,
+    RunStatus,
+    RunUsage,
+    RunUsageStatus,
+)
 from rvw.schema import RuntimeLaneOutput
 
 _REPLICA_DIRECTORY = re.compile(r"r([1-9][0-9]*)")
@@ -407,7 +414,7 @@ class CodexRuntime:
             return self._invalid_result(
                 run_id=run_id,
                 replica=replica,
-                reason="missing",
+                reason=InvalidReason.MISSING.value,
                 exit_code=exit_code,
                 started=started,
                 run_dir=run_dir,
@@ -417,7 +424,7 @@ class CodexRuntime:
             return self._invalid_result(
                 run_id=run_id,
                 replica=replica,
-                reason="empty",
+                reason=InvalidReason.EMPTY.value,
                 exit_code=exit_code,
                 started=started,
                 run_dir=run_dir,
@@ -430,7 +437,7 @@ class CodexRuntime:
             return self._invalid_result(
                 run_id=run_id,
                 replica=replica,
-                reason="unparseable",
+                reason=InvalidReason.UNPARSEABLE.value,
                 exit_code=exit_code,
                 started=started,
                 run_dir=run_dir,
@@ -443,7 +450,7 @@ class CodexRuntime:
             return self._invalid_result(
                 run_id=run_id,
                 replica=replica,
-                reason="schema-invalid",
+                reason=InvalidReason.SCHEMA_INVALID.value,
                 exit_code=exit_code,
                 started=started,
                 run_dir=run_dir,
@@ -458,7 +465,7 @@ class CodexRuntime:
             return self._invalid_result(
                 run_id=run_id,
                 replica=replica,
-                reason="no_completion_marker",
+                reason=InvalidReason.NO_COMPLETION_MARKER.value,
                 exit_code=exit_code,
                 started=started,
                 run_dir=run_dir,

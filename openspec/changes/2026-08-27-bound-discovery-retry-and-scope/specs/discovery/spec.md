@@ -4,8 +4,8 @@
 
 An invalid replica MUST be excluded from finding enrichment. A lane/chunk group
 MUST receive exactly one replacement wave only when every initial replica is
-INVALID and every invalid reason is `json_parse_error` or
-`schema_validation_error`; an initial wave MUST NOT contain retry feedback. A
+INVALID and every invalid reason is `unparseable` or
+`schema-invalid`; an initial wave MUST NOT contain retry feedback. A
 timeout, cancellation, budget, spawn, completion-marker, missing-artifact, or
 other invalid reason MUST NOT cause an identical full-wave retry. Any lane/chunk
 group with no valid result after its permitted retry decision MUST retain its
@@ -21,7 +21,7 @@ and legacy discovery artifacts continue to load with empty attempt history.
 
 #### Scenario: All replicas have schema failures
 
-- **WHEN** every initial replica for one lane/chunk has `schema_validation_error`
+- **WHEN** every initial replica for one lane/chunk has `schema-invalid`
 - **THEN** it receives one replacement wave with those reasons in feedback
 
 #### Scenario: All replicas are invalid
@@ -36,10 +36,12 @@ and legacy discovery artifacts continue to load with empty attempt history.
 - **WHEN** every initial replica for one lane/chunk has `exit_nonzero:124`
 - **THEN** no replacement wave starts and DISCOVER fails closed as incomplete
 
-#### Scenario: Replacement prompt names prior failures
+#### Scenario: Replacement prompt names correctable prior failures
 
-- **WHEN** every initial replica of one lane-chunk is INVALID with machine-readable reasons
-- **THEN** that lane-chunk's replacement prompt lists each prior replica's invalid reason while another lane's unretried prompt contains none
+- **WHEN** every initial replica of one lane-chunk is INVALID with an
+  `unparseable` or `schema-invalid` reason
+- **THEN** that lane-chunk's replacement prompt lists each prior replica's
+  invalid reason while another lane's unretried prompt contains none
 
 #### Scenario: Retry preserves initial artifacts
 
@@ -48,8 +50,8 @@ and legacy discovery artifacts continue to load with empty attempt history.
 
 #### Scenario: Retried coverage keeps the initial failure reason
 
-- **WHEN** a lane-chunk retried after an initial `schema_validation_error` succeeds in the replacement wave
-- **THEN** its persisted coverage row is valid, and its attempt records list the initial INVALID attempt with reason `schema_validation_error` followed by the valid retry attempt
+- **WHEN** a lane-chunk retried after an initial `schema-invalid` result succeeds in the replacement wave
+- **THEN** its persisted coverage row is valid, and its attempt records list the initial INVALID attempt with reason `schema-invalid` followed by the valid retry attempt
 
 #### Scenario: Legacy discovery artifact loads
 

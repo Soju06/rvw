@@ -15,7 +15,7 @@ from rvw.discover import (
     remaining_discovery_plan,
     resolve_lane_path,
 )
-from rvw.discovery_cost import build_discovery_preflight
+from rvw.discovery_cost import build_discovery_preflight, build_stack_discovery_preflight
 from rvw.dispatch import DEFAULT_DEADLINE_SECONDS, DispatchOutcome, PlannedRun
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
@@ -194,6 +194,31 @@ def test_plan_discovery_builds_the_exact_initial_prompts_for_dispatch(tmp_path: 
     assert "UNVERIFIED claim of intent" in plan.runs[2].prompt
 
 
+def test_skipped_dynamic_rules_are_not_claimed_as_covered(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    sweep = write_lane(lanes_root, "unscoped-sweep", Tier.BASE)
+    sweep.write_text(
+        sweep.read_text(encoding="utf-8").replace(
+            "rules:\n", "covered_by_others: inject\nrules:\n"
+        ),
+        encoding="utf-8",
+    )
+    dynamic = write_lane(lanes_root, "dynamic/goal-parity", Tier.DYNAMIC)
+    dynamic.write_text(
+        dynamic.read_text(encoding="utf-8").replace("rules:\n", "requires_brief: true\nrules:\n"),
+        encoding="utf-8",
+    )
+
+    plan = plan_discovery(
+        registry=registry(("unscoped-sweep", Tier.BASE), ("dynamic/goal-parity", Tier.DYNAMIC)),
+        lanes_root=lanes_root,
+        target=target(),
+    )
+
+    assert plan.skipped_lane_ids == {"dynamic/goal-parity"}
+    assert "dynamic/goal-parity: dynamic/rule" not in plan.runs[0].prompt
+
+
 def test_discovery_preflight_identifies_every_explicit_heavy_condition(tmp_path: Path) -> None:
     lanes_root = tmp_path / "lanes"
     write_lane(lanes_root, "slop-hygiene", Tier.BASE)
@@ -218,6 +243,58 @@ def test_discovery_preflight_identifies_every_explicit_heavy_condition(tmp_path:
         "reasoning_effort=max",
     )
     assert preflight.requires_allow_heavy_discovery is True
+
+
+def test_discovery_preflight_rejects_a_plan_with_mismatched_replicas(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    plan = plan_discovery(
+        registry=registry(("slop-hygiene", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=2,
+    )
+
+    with pytest.raises(ValueError, match=r"planned discovery replicas .* must match"):
+        build_discovery_preflight(
+            plan,
+            replicas=1,
+            max_discovery_runs=12,
+            runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+        )
+
+
+def test_stack_preflight_aggregates_all_member_plans(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "first", Tier.BASE)
+    write_lane(lanes_root, "second", Tier.BASE)
+    first = plan_discovery(
+        registry=registry(("first", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=2,
+    )
+    second = plan_discovery(
+        registry=registry(("second", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=2,
+    )
+
+    preflight = build_stack_discovery_preflight(
+        [first, second],
+        replicas=2,
+        max_discovery_runs=7,
+        runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+    )
+
+    assert (preflight.lanes, preflight.chunks, preflight.initial_runs) == (2, 2, 4)
+    assert preflight.retry_upper_bound == 8
+    assert preflight.heavy_discovery_reasons == (
+        "discovery_replicas=2",
+        "retry_upper_bound=8 exceeds max_discovery_runs=7",
+        "reasoning_effort=max",
+    )
 
 
 def test_remaining_preflight_counts_only_remaining_lane_chunks(tmp_path: Path) -> None:
@@ -318,6 +395,30 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
     assert runtime.calls == [("slop-hygiene", 1), ("slop-hygiene", 2)]
 
 
+async def test_runtime_schema_invalid_triggers_one_replacement_wave(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "recovers", Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={"recovers": [RunStatus.INVALID, RunStatus.VALID]},
+        invalid_reasons={"recovers": ["schema-invalid"]},
+    )
+
+    result = await discover(
+        registry=registry(("recovers", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+    )
+
+    assert runtime.calls == [("recovers", 1), ("recovers", 1)]
+    assert runtime.run_dirs[1] == tmp_path / "out" / "recovers" / "retry" / "r1"
+    assert [attempt.model_dump() for attempt in result.coverage[0].runs[0].attempts] == [
+        {"attempt": 1, "valid": False, "invalid_reason": "schema-invalid"},
+        {"attempt": 2, "valid": True, "invalid_reason": None},
+    ]
+
+
 async def test_discover_reuses_manifest_bound_valid_results_without_dispatching_them(
     tmp_path: Path,
 ) -> None:
@@ -375,7 +476,7 @@ async def test_discover_resume_restores_a_correctable_failure_as_the_replacement
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r1",
     )
@@ -403,9 +504,9 @@ async def test_discover_resume_restores_a_correctable_failure_as_the_replacement
     )
 
     assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "retry" / "r1"]
-    assert "schema_validation_error" in runtime.prompts[0][1]
+    assert "schema-invalid" in runtime.prompts[0][1]
     assert [attempt.model_dump() for attempt in result.coverage[0].runs[0].attempts] == [
-        {"attempt": 1, "valid": False, "invalid_reason": "schema_validation_error"},
+        {"attempt": 1, "valid": False, "invalid_reason": "schema-invalid"},
         {"attempt": 2, "valid": True, "invalid_reason": None},
     ]
 
@@ -427,13 +528,13 @@ async def test_discover_resume_does_not_start_a_third_attempt_after_replacement(
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r1",
     )
     runtime = FakeRuntime(
         statuses={"slop-hygiene": [RunStatus.INVALID]},
-        invalid_reasons={"slop-hygiene": ["schema_validation_error"]},
+        invalid_reasons={"slop-hygiene": ["schema-invalid"]},
     )
 
     result = await discover(
@@ -467,7 +568,7 @@ async def test_discover_resume_completes_partial_initial_wave_before_one_replace
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r1",
     )
@@ -475,7 +576,7 @@ async def test_discover_resume_completes_partial_initial_wave_before_one_replace
         statuses={
             "slop-hygiene": [RunStatus.INVALID, RunStatus.VALID, RunStatus.VALID],
         },
-        invalid_reasons={"slop-hygiene": ["schema_validation_error"]},
+        invalid_reasons={"slop-hygiene": ["schema-invalid"]},
     )
 
     result = await discover(
@@ -527,7 +628,7 @@ async def test_discover_resume_does_not_replace_when_a_sibling_is_already_valid(
         replica=2,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r2",
     )
@@ -568,7 +669,7 @@ async def test_discover_resume_completes_only_missing_replacement_replicas(
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r1",
     )
@@ -577,7 +678,7 @@ async def test_discover_resume_completes_only_missing_replacement_replicas(
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "retry" / "r1",
     )
@@ -586,7 +687,7 @@ async def test_discover_resume_completes_only_missing_replacement_replicas(
         replica=2,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r2",
     )
@@ -648,7 +749,7 @@ async def test_discover_resume_does_not_complete_partial_retry_without_all_inval
         replica=2,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r2",
     )
@@ -689,7 +790,7 @@ async def test_discover_does_not_start_a_third_attempt_without_retry_metadata(
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r1",
     )
@@ -698,7 +799,7 @@ async def test_discover_does_not_start_a_third_attempt_without_retry_metadata(
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "retry" / "r1",
     )
@@ -733,7 +834,7 @@ async def test_discover_accepts_legacy_retry_lane_chunk_state(tmp_path: Path) ->
         replica=1,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r1",
     )
@@ -778,7 +879,7 @@ async def test_discover_resume_ignores_history_outside_the_rebuilt_plan(tmp_path
         replica=2,
         status=RunStatus.INVALID,
         output=None,
-        invalid_reason="schema_validation_error",
+        invalid_reason="schema-invalid",
         wall_seconds=0,
         artifact_dir=tmp_path / "prior" / "r2",
     )
@@ -935,7 +1036,7 @@ async def test_retried_coverage_preserves_ordered_attempt_status_and_reason(
     write_lane(lanes_root, "recovers", Tier.BASE)
     runtime = FakeRuntime(
         statuses={"recovers": [RunStatus.INVALID, RunStatus.VALID]},
-        invalid_reasons={"recovers": ["schema_validation_error"]},
+        invalid_reasons={"recovers": ["schema-invalid"]},
     )
 
     result = await discover(
@@ -950,7 +1051,7 @@ async def test_retried_coverage_preserves_ordered_attempt_status_and_reason(
     assert run.valid is True
     assert run.invalid_reason is None
     assert [attempt.model_dump() for attempt in run.attempts] == [
-        {"attempt": 1, "valid": False, "invalid_reason": "schema_validation_error"},
+        {"attempt": 1, "valid": False, "invalid_reason": "schema-invalid"},
         {"attempt": 2, "valid": True, "invalid_reason": None},
     ]
 

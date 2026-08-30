@@ -7,12 +7,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import rvw.store as store_module
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport, DiffChunkPlacement
 from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage, RunCoverage
+from rvw.discovery_cost import DiscoveryPreflight
 from rvw.merge import merge
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
 from rvw.schema import Tier, Verdict
 from rvw.store import _SAFE_RUN_ID, InvalidRunId, RunHandle, RunNotFound, RunStore, StageMissing
 from rvw.target import ResolvedTarget
@@ -50,6 +53,20 @@ def outcome_fixture() -> AdjudicationOutcome:
         unresolved=raw["unresolved"],
         coerced_rejections=raw["coerced_rejections"],
     )
+
+
+def preflight_fixture() -> dict[str, object]:
+    return DiscoveryPreflight(
+        lanes=1,
+        replicas=1,
+        chunks=1,
+        initial_runs=1,
+        retry_upper_bound=2,
+        initial_prompt_characters=100,
+        max_discovery_runs=12,
+        runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+        heavy_discovery_reasons=("reasoning_effort=max",),
+    ).payload()
 
 
 def test_round_trips_every_stage(tmp_path: Path) -> None:
@@ -149,6 +166,28 @@ def test_load_discover_without_attempts_uses_empty_legacy_history(tmp_path: Path
     discovered = RunHandle(run_id="legacy-run", dir=run_dir).load_discover()
 
     assert discovered.coverage[0].runs[0].attempts == []
+
+
+def test_preflight_round_trip_rejects_malformed_or_inconsistent_payloads(tmp_path: Path) -> None:
+    run = RunStore(tmp_path).create(target_fixture())
+    preflight = preflight_fixture()
+
+    run.save_preflight(preflight)
+
+    assert run.load_preflight() == preflight
+    (run.dir / "preflight.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        run.load_preflight()
+
+    malformed = preflight | {"retry_upper_bound": 3}
+    (run.dir / "preflight.json").write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(ValidationError, match="retry_upper_bound"):
+        run.load_preflight()
+
+    malformed = preflight | {"initial_runs": "1"}
+    (run.dir / "preflight.json").write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        run.load_preflight()
 
 
 def test_create_retries_same_target_same_timestamp_collision(

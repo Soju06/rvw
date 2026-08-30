@@ -1,4 +1,4 @@
-"""Single-wave, longest-processing-time-first run dispatcher."""
+"""Bounded retry, longest-processing-time-first run dispatcher."""
 
 from __future__ import annotations
 
@@ -10,10 +10,9 @@ from pathlib import Path
 from rvw.hostslots import HostSlotGate, host_slot
 from rvw.lane import Lane
 from rvw.prompts import build_retry_feedback
-from rvw.runtimes import RunResult, RunStatus, Runtime
+from rvw.runtimes import RunResult, RunStatus, Runtime, is_correctable_invalid_reason
 
 _COST_ORDER = {"heavy": 0, "normal": 1, "light": 2}
-CORRECTABLE_INVALID_REASONS = {"json_parse_error", "schema_validation_error"}
 DEFAULT_CONCURRENCY = 8
 DEFAULT_DEADLINE_SECONDS = 600
 MAX_DEADLINE_SECONDS = 1800
@@ -162,7 +161,7 @@ async def dispatch_outcome(
         if lane_chunk not in prior_valid
         and lane_chunk not in prior_retry
         and all(result.status is RunStatus.INVALID for result in lane_results)
-        and all(result.invalid_reason in CORRECTABLE_INVALID_REASONS for result in lane_results)
+        and all(is_correctable_invalid_reason(result.invalid_reason) for result in lane_results)
     }
     retry_runs = [run for run in runs if (run.lane.id, run.chunk) in retry_lane_chunks]
     retry_feedback_by_lane_chunk = {
@@ -221,7 +220,6 @@ async def dispatch(
 
 
 __all__: list[str] = [
-    "CORRECTABLE_INVALID_REASONS",
     "DEFAULT_CONCURRENCY",
     "DEFAULT_DEADLINE_SECONDS",
     "MAX_DEADLINE_SECONDS",

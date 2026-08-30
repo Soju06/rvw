@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rvw.diffbudget import DiffBudgetReport, DiffChunk, apply_diff_budget, require_reviewable_diff
 from rvw.dispatch import (
-    CORRECTABLE_INVALID_REASONS,
     DEFAULT_CONCURRENCY,
     DEFAULT_DEADLINE_SECONDS,
     DispatchOutcome,
@@ -23,7 +22,13 @@ from rvw.hunks import hunk_for_line, is_anchorable, parse_hunks
 from rvw.lane import Lane, load_lane
 from rvw.prompts import build_chunk_context, build_lane_prompt, build_retry_feedback
 from rvw.registry import Registry
-from rvw.runtimes import RunDiagnostic, RunResult, RunStatus, Runtime
+from rvw.runtimes import (
+    RunDiagnostic,
+    RunResult,
+    RunStatus,
+    Runtime,
+    is_correctable_invalid_reason,
+)
 from rvw.schema import Finding, Tier
 from rvw.target import ResolvedTarget
 
@@ -138,6 +143,11 @@ class DiscoveryPlan:
     budget: DiffBudgetReport
     runs: list[PlannedRun]
     skipped_lane_ids: set[str] = field(default_factory=set)
+    replicas: int = 1
+
+    def __post_init__(self) -> None:
+        if self.replicas < 1:
+            raise ValueError("discovery plan replicas must be at least 1")
 
     @property
     def initial_runs(self) -> int:
@@ -189,7 +199,7 @@ def _effective_brief(
     brief_source: str | None,
 ) -> tuple[str | None, str | None]:
     del brief_source
-    if brief is not None:
+    if brief is not None and brief.strip():
         return brief, "operator"
     if target.pr_title is not None or target.pr_body is not None:
         return f"{target.pr_title or ''}\n\n{target.pr_body or ''}", "pr_body"
@@ -202,7 +212,7 @@ def _coverage_attempts(
     prior_attempts: Mapping[tuple[str, int, int], Sequence[RunResult]],
 ) -> list[RunAttempt]:
     key = (result.lane_id, result.replica, result.chunk)
-    initial = initial_by_key.get((result.lane_id, result.replica, result.chunk))
+    initial = initial_by_key.get(key)
     prior_results = list(prior_attempts.get(key, ()))
     if initial is None:
         attempt_results = (
@@ -260,12 +270,12 @@ def plan_discovery(
     effective_brief, effective_brief_source = _effective_brief(target, brief, brief_source)
     chunks, budget = apply_diff_budget(target.diff)
     require_reviewable_diff(budget, source="target")
-    covered_rules = {lane.id: lane.rules for lane in lanes}
     skipped_lane_ids = {
         lane.id
         for lane in lanes
         if lane.tier is Tier.DYNAMIC and lane.requires_brief and effective_brief is None
     }
+    covered_rules = {lane.id: lane.rules for lane in lanes if lane.id not in skipped_lane_ids}
     runs = [
         PlannedRun(
             lane=lane,
@@ -297,6 +307,7 @@ def plan_discovery(
         budget=budget,
         runs=runs,
         skipped_lane_ids=skipped_lane_ids,
+        replicas=replicas,
     )
 
 
@@ -402,7 +413,7 @@ async def discover(
         all_initial_results_are_correctable = all(
             result is not None
             and result.status is RunStatus.INVALID
-            and result.invalid_reason in CORRECTABLE_INVALID_REASONS
+            and is_correctable_invalid_reason(result.invalid_reason)
             for result in initial_results
         )
         if (
@@ -415,7 +426,7 @@ async def discover(
                 if (run.lane.id, run.replica, run.chunk) not in retries_already_run
                 and (result := final_by_key.get((run.lane.id, run.replica, run.chunk))) is not None
                 and result.status is RunStatus.INVALID
-                and result.invalid_reason in CORRECTABLE_INVALID_REASONS
+                and is_correctable_invalid_reason(result.invalid_reason)
             ]
         elif lane_chunk not in legacy_retry_lane_chunks and all_initial_results_are_correctable:
             retry_runs_by_lane_chunk[lane_chunk] = list(runs)

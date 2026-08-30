@@ -20,10 +20,8 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
   both the exact initial prompts sent to dispatch and preflight accounting, so
   prompt-character totals cannot drift from execution.
 - 2026-08-27: cancellation left individual runtime artifacts but no safe
-  run-level reuse record. DISCOVER now persists a manifest before dispatch and
-  each completed result through its existing progress seam; resume reuses only
-  a VALID identity whose target, prompt, lane document, schema, policy, and
-  RVW version all still match.
+  run-level reuse record. Discovery resume now reuses only compatible planned
+  identities with retained ordered attempt history and distinct artifact paths.
 - Concurrency tests on a 22-core host found N=4, 8, and 16 completed in 49.1, 50.0, and 50.6 seconds. After concurrent rvw processes saturated the shared account pool on 2026-08-06, the default cap was reduced to 8 while retaining an explicit positive override, one wave, and heavy-first LPT ordering.
 - The runtime deadline remains 600 seconds by default. Operators can select a 1-through-1800-second base deadline through runtime-executing CLI commands; the ceiling is three times the established default and prevents one dispatched runtime from pinning a host-global slot for hours.
 - 2026-08-12: Process-local semaphores multiply across concurrent rvw processes. Six processes at the per-process default of 8 implied 48 theoretical runtime streams, following the 2026-08-06 account-pool saturation incident that produced selection retries and 503 degraded-mode lane failures. A host-global default cap of 12 now bounds aggregate runtime streams; the effective bound is the smaller of the process and host caps, and `RVW_HOST_CONCURRENCY=0` disables only the host gate.
@@ -36,13 +34,14 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 - 2026-08-21: the all-invalid replacement wave was found re-sending a byte-identical prompt, so it now carries that lane-chunk's prior invalid reasons in the same form stack presence recheck already used.
 - Final planned execution loss is evaluated separately from retry history. Ordered attempts remain the audit trail, while the final diagnostic and normalized reason drive strict coverage status: mixed valid/invalid execution is degraded and all-invalid planned execution is failed.
 - 2026-08-27: unfinished sessions dominated observed token usage. Only output
-  contract failures (`json_parse_error` and `schema_validation_error`) now get
+  contract failures (`unparseable` and `schema-invalid`) now get
   one corrective replacement; timeout and other non-correctable all-invalid
   groups fail closed instead of repeating a full wave.
-- 2026-08-27: a self-review showed that replacing one manifest row per identity
-  erased retry evidence and reused artifact paths under resume. New manifests
-  retain append-only v2 attempt records; v1 rows remain readable as one initial
-  attempt, and later resume work receives a distinct artifact path.
+- 2026-08-27: a self-review showed that replacing one result per identity would
+  erase retry evidence and reuse artifact paths under resume. Persisted
+  discovery coverage therefore keeps ordered attempt records; compatible resume
+  reuses only manifest-bound identities and keeps each resumed attempt in a
+  distinct artifact directory.
 - 2026-08-27: filesystem expansion of Git's abbreviated untracked directories
   could include ignored files. Uncommitted target resolution now uses Git's
   `--others --exclude-standard` inventory as the review-input boundary.
@@ -62,9 +61,10 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 - Initial prompt characters are exact before execution. Retry-feedback
   characters depend on observed invalid reasons, so preflight represents retry
   cost as a run upper bound rather than fabricating an exact retry prompt total.
-- Resume is discovery-only in this transition. Incomplete adjudication remains
-  non-reusable until its different grouping and expanded-pass identities have a
-  similarly proven manifest contract.
+- Discovery resume reuses only compatible planned lane-replica-chunk identities
+  with retained ordered attempts. Incomplete adjudication remains non-reusable
+  until its different grouping and expanded-pass identities have a similarly
+  proven contract.
 - Lane scope and brief requirement are declarative code metadata only until an
   explicitly approved external registry update assigns them to real lanes.
 - PR fallback uses title and body; linked issues from ADR-010 are not resolved by the current target model.
@@ -82,7 +82,7 @@ DISCOVER resolves active lanes into bounded runtime work, supplies each lane the
 
 ## Concrete example
 
-Given active lanes `security-exposure`, `dynamic/edge-cases`, and `unscoped-sweep`, default discovery builds three planned runs with one chunk and six with two chunks. Explicit `--replicas 3` heavy verification builds nine and 18 respectively. The sweep prompt lists both other lanes' closed rule IDs as already covered. In the explicit three-replica mode, if one security replica on one chunk times out, its two valid outputs are still enriched with hunk IDs and that lane-chunk is not retried. If all three dynamic replicas on one chunk are invalid, only that lane-chunk gets one replacement wave.
+Given active lanes `security-exposure`, `dynamic/edge-cases`, and `unscoped-sweep`, default discovery builds three planned runs with one chunk and six with two chunks. Explicit `--discovery-replicas 3` heavy verification builds nine and 18 respectively. The sweep prompt lists both other lanes' closed rule IDs as already covered. In the explicit three-replica mode, if one security replica on one chunk times out, its two valid outputs are still enriched with hunk IDs and that lane-chunk is not retried. If all three dynamic replicas on one chunk are invalid, only that lane-chunk gets one replacement wave.
 
 For a diff containing `runtime-snapshots/contract-graph.json` plus `src/client.ts`, the generated segment is excluded and the prompt begins with a line such as:
 

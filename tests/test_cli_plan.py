@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 import rvw.cli as cli_module
-from rvw.cli import EXIT_NOT_FOUND, app
+from rvw.cli import EXIT_NOT_FOUND, EXIT_USER_ERROR, app
 from rvw.target import ResolvedTarget, TargetResolutionError
 
 runner = CliRunner()
@@ -148,6 +148,72 @@ def test_plan_json_shape_tier_zero_predicates_and_lpt_order(
     ]
 
 
+def test_plan_renders_brief_required_lane_as_zero_work(
+    monkeypatch: pytest.MonkeyPatch, registry_root: Path
+) -> None:
+    dynamic = registry_root / "lanes" / "dynamic" / "goal-parity.md"
+    dynamic.parent.mkdir()
+    dynamic.write_text(
+        """---
+lane: dynamic/goal-parity
+tier: dynamic
+cost: light
+requires_brief: true
+rules:
+  - dynamic/goal-parity
+---
+
+# goal parity
+""",
+        encoding="utf-8",
+    )
+    layers = registry_root / "layers.yaml"
+    layers.write_text(
+        layers.read_text(encoding="utf-8")
+        + """  - id: dynamic
+    tier: dynamic
+    lanes: [dynamic/goal-parity]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda spec: canned_target())
+
+    result = runner.invoke(
+        app,
+        ["plan", "--target", "HEAD", "--json", "--registry", str(registry_root)],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    lanes = {lane["lane"]: lane for lane in payload["lanes"]}
+    assert lanes["dynamic/goal-parity"] == {
+        "lane": "dynamic/goal-parity",
+        "tier": "dynamic",
+        "cost": "light",
+        "rules_count": 1,
+        "replicas": 0,
+        "planned_runs": 0,
+        "skipped_reason": "brief_unavailable",
+    }
+    assert payload["skipped_lanes"] == [
+        {
+            "lane": "dynamic/goal-parity",
+            "reason": "brief_unavailable",
+            "planned_runs": 0,
+        }
+    ]
+
+    human_result = runner.invoke(
+        app,
+        ["plan", "--target", "HEAD", "--registry", str(registry_root)],
+    )
+
+    assert human_result.exit_code == 0, human_result.stdout
+    assert "Skipped lane: dynamic/goal-parity — brief_unavailable (planned runs: 0)" in (
+        human_result.stdout
+    )
+
+
 def test_plan_preserves_split_replica_overrides(
     monkeypatch: pytest.MonkeyPatch, registry_root: Path
 ) -> None:
@@ -177,6 +243,29 @@ def test_plan_preserves_split_replica_overrides(
     assert {lane["replicas"] for lane in payload["lanes"]} == {2}
 
 
+def test_plan_json_reports_conflicting_replica_options_structurally() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "plan",
+            "--target",
+            "HEAD",
+            "--discovery-replicas",
+            "1",
+            "--replicas",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == EXIT_USER_ERROR
+    assert json.loads(result.stdout) == {
+        "error": "mutually-exclusive-options",
+        "message": "--discovery-replicas cannot be combined with deprecated --replicas",
+        "options": ["--discovery-replicas", "--replicas"],
+    }
+
+
 def test_plan_reports_chunk_expanded_total_runs(
     monkeypatch: pytest.MonkeyPatch, registry_root: Path
 ) -> None:
@@ -195,6 +284,46 @@ def test_plan_reports_chunk_expanded_total_runs(
     payload = json.loads(result.stdout)
     assert payload["chunk_count"] == 2
     assert payload["total_runs"] == 6
+
+
+def test_plan_human_output_includes_runtime_ceiling_and_acknowledgement_reasons(
+    monkeypatch: pytest.MonkeyPatch, registry_root: Path
+) -> None:
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda spec: canned_target())
+
+    result = runner.invoke(
+        app,
+        ["plan", "--target", "HEAD", "--registry", str(registry_root)],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Retry upper bound: 6" in result.stdout
+    assert "Max discovery runs: 12" in result.stdout
+    assert "Discovery runtime: gpt-5.6-sol (reasoning effort: max)" in result.stdout
+    assert "Requires --allow-heavy-discovery before runtime execution" in result.stdout
+    assert "reasoning_effort=max" in result.stdout
+
+
+def test_plan_converts_empty_review_diff_to_a_user_error(
+    monkeypatch: pytest.MonkeyPatch, registry_root: Path
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_cli_target",
+        lambda spec: canned_target().model_copy(update={"diff": ""}),
+    )
+
+    result = runner.invoke(
+        app,
+        ["plan", "--target", "HEAD", "--json", "--registry", str(registry_root)],
+    )
+
+    assert result.exit_code == EXIT_USER_ERROR
+    assert json.loads(result.stdout) == {
+        "error": "empty-review-diff",
+        "message": "target produced an empty review diff; excluded: []",
+        "excluded_reason": {},
+    }
 
 
 def test_head_falls_back_to_local_git_when_no_remote(

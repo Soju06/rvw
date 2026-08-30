@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,12 +26,18 @@ from rvw.adjudicate import (
     adjudicate,
 )
 from rvw.diffbudget import EmptyReviewDiffError, apply_diff_budget
-from rvw.discover import DiscoverResult, resolve_lane_path
+from rvw.discover import DiscoverResult, DiscoveryPlan, plan_discovery, resolve_lane_path
+from rvw.discovery_cost import (
+    DEFAULT_MAX_DISCOVERY_RUNS,
+    DiscoveryCostError,
+    build_discovery_preflight,
+    build_stack_discovery_preflight,
+    require_heavy_discovery_acknowledgement,
+)
 from rvw.dispatch import (
     DEFAULT_CONCURRENCY,
     DEFAULT_DEADLINE_SECONDS,
     MAX_DEADLINE_SECONDS,
-    PlannedRun,
     lpt_sort_key,
 )
 from rvw.doctor import DoctorReport, diagnose
@@ -80,6 +86,7 @@ from rvw.provenance import current_build_provenance, version_label
 from rvw.publish import PublishError, publish_body_review, publish_review
 from rvw.registry import Registry, load_registry
 from rvw.report import render_report
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.sample import SampleReport, sample_lane
 from rvw.schema import Severity, Tier, Verdict, finding_schema, lane_output_schema
@@ -88,6 +95,7 @@ from rvw.stack import (
     MemberRunRef,
     StackInvariantError,
     StackManifest,
+    StackMember,
     StackResolutionError,
     append_observation,
     origin_lineages,
@@ -182,6 +190,14 @@ def _command_host_gate() -> HostSlotGate | None:
 
 
 def _empty_review_failure(exc: EmptyReviewDiffError, *, json_output: bool) -> Never:
+    if json_output:
+        _write_json(exc.payload())
+    else:
+        _error_console.print(str(exc), markup=False)
+    raise typer.Exit(EXIT_USER_ERROR) from exc
+
+
+def _discovery_cost_failure(exc: DiscoveryCostError, *, json_output: bool) -> Never:
     if json_output:
         _write_json(exc.payload())
     else:
@@ -312,11 +328,42 @@ def _gate_plan(
 
 
 def _brief_source(target: ResolvedTarget, dynamic_brief: Path | None) -> str | None:
-    if dynamic_brief is not None:
+    if dynamic_brief is not None and dynamic_brief.read_text(encoding="utf-8").strip():
         return "operator"
     if target.pr_title is not None or target.pr_body is not None:
         return "pr_body"
     return None
+
+
+def _resolve_discovery_replicas(
+    discovery_replicas: int | None,
+    replicas: int | None,
+    *,
+    default: int,
+    json_output: bool,
+) -> int:
+    """Choose the formal option while keeping the legacy spelling explicit."""
+
+    if discovery_replicas is not None and replicas is not None:
+        message = "--discovery-replicas cannot be combined with deprecated --replicas"
+        if json_output:
+            _write_json(
+                {
+                    "error": "mutually-exclusive-options",
+                    "message": message,
+                    "options": ["--discovery-replicas", "--replicas"],
+                }
+            )
+        else:
+            _error_console.print(message, markup=False)
+        raise typer.Exit(EXIT_USER_ERROR)
+    if replicas is not None:
+        _error_console.print(
+            "warning: --replicas is deprecated; use --discovery-replicas",
+            markup=False,
+        )
+        return replicas
+    return discovery_replicas if discovery_replicas is not None else default
 
 
 def _plan_payload(
@@ -326,23 +373,51 @@ def _plan_payload(
     dynamic_brief: Path | None,
     replicas: int,
     adjudicate_replicas: int,
+    max_discovery_runs: int,
 ) -> dict[str, Any]:
     active_layers = registry.activate(target.repo, target.changed_paths)
-    lanes = _load_active_lanes(registry, lanes_root, target)
-    chunks, _budget = apply_diff_budget(target.diff)
-    runs = [
-        PlannedRun(
-            lane=lane,
-            prompt="",
-            replica=replica,
-            chunk=chunk.index,
-            chunk_count=len(chunks),
-        )
-        for lane in lanes
-        for chunk in chunks
-        for replica in range(1, replicas + 1)
-    ]
-    ordered_runs = sorted(runs, key=lambda run: lpt_sort_key(run.lane.cost))
+    brief = dynamic_brief.read_text(encoding="utf-8") if dynamic_brief is not None else None
+    plan = plan_discovery(
+        registry=registry,
+        lanes_root=lanes_root,
+        target=target,
+        brief=brief,
+        brief_source=_brief_source(target, dynamic_brief),
+        replicas=replicas,
+    )
+    preflight = build_discovery_preflight(
+        plan,
+        replicas=replicas,
+        max_discovery_runs=max_discovery_runs,
+        runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+    )
+    ordered_runs = sorted(plan.runs, key=lambda run: lpt_sort_key(run.lane.cost))
+    lanes: list[dict[str, object]] = []
+    skipped_lanes: list[dict[str, object]] = []
+    for lane in plan.lanes:
+        lane_payload: dict[str, object] = {
+            "lane": lane.id,
+            "tier": lane.tier.value,
+            "cost": lane.cost,
+            "rules_count": len(lane.rules),
+            "replicas": replicas,
+        }
+        if lane.id in plan.skipped_lane_ids:
+            lane_payload.update(
+                {
+                    "replicas": 0,
+                    "planned_runs": 0,
+                    "skipped_reason": "brief_unavailable",
+                }
+            )
+            skipped_lanes.append(
+                {
+                    "lane": lane.id,
+                    "reason": "brief_unavailable",
+                    "planned_runs": 0,
+                }
+            )
+        lanes.append(lane_payload)
     return {
         "target": {
             "kind": target.kind,
@@ -360,22 +435,16 @@ def _plan_payload(
             }
             for layer in active_layers
         ],
-        "lanes": [
-            {
-                "lane": lane.id,
-                "tier": lane.tier.value,
-                "cost": lane.cost,
-                "rules_count": len(lane.rules),
-                "replicas": replicas,
-            }
-            for lane in lanes
-        ],
+        "lanes": lanes,
         "dispatch_order": [run.lane.id for run in ordered_runs],
         "replicas": replicas,
         "adjudicate_replicas": adjudicate_replicas,
-        "chunk_count": len(chunks),
-        "total_runs": len(runs),
+        "chunk_count": len(plan.chunks),
+        "total_runs": plan.initial_runs,
         "brief_source": _brief_source(target, dynamic_brief),
+        "skipped_lane_ids": sorted(plan.skipped_lane_ids),
+        "skipped_lanes": skipped_lanes,
+        "preflight": preflight.payload(),
     }
 
 
@@ -414,6 +483,23 @@ def _print_plan(payload: dict[str, Any]) -> None:
     _console.print(f"Adjudication replicas: {payload['adjudicate_replicas']}")
     _console.print(f"Chunks: {payload['chunk_count']}")
     _console.print(f"Total runs: {payload['total_runs']}")
+    preflight = cast(dict[str, object], payload["preflight"])
+    _console.print(f"Retry upper bound: {preflight['retry_upper_bound']}")
+    _console.print(f"Max discovery runs: {preflight['max_discovery_runs']}")
+    _console.print(f"Initial prompt characters: {preflight['initial_prompt_characters']}")
+    runtime = cast(dict[str, object], preflight["runtime"])
+    _console.print(
+        f"Discovery runtime: {runtime['model']} (reasoning effort: {runtime['reasoning_effort']})"
+    )
+    if bool(preflight["requires_allow_heavy_discovery"]):
+        _console.print("Requires --allow-heavy-discovery before runtime execution")
+        for reason in cast(list[str], preflight["heavy_discovery_reasons"]):
+            _console.print(f"- {reason}")
+    for lane in cast(list[dict[str, object]], payload["skipped_lanes"]):
+        _console.print(
+            f"Skipped lane: {lane['lane']} — {lane['reason']} "
+            f"(planned runs: {lane['planned_runs']})"
+        )
 
 
 def _version_callback(value: bool) -> bool:
@@ -490,7 +576,8 @@ def review(
     registry_root: Annotated[
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
-    replicas: Annotated[int, Option("--replicas", min=1)] = 1,
+    discovery_replicas: Annotated[int | None, Option("--discovery-replicas", min=1)] = None,
+    replicas: Annotated[int | None, Option("--replicas", min=1)] = None,
     adjudicate_replicas: Annotated[int, Option("--adjudicate-replicas", min=1)] = 3,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     deadline: Annotated[
@@ -501,7 +588,17 @@ def review(
     pause: Annotated[bool, Option("--pause")] = False,
     publish: Annotated[bool, Option("--publish")] = False,
     dynamic_brief: Annotated[Path | None, Option("--dynamic-brief")] = None,
+    max_discovery_runs: Annotated[
+        int, Option("--max-discovery-runs", min=1)
+    ] = DEFAULT_MAX_DISCOVERY_RUNS,
+    allow_heavy_discovery: Annotated[bool, Option("--allow-heavy-discovery")] = False,
 ) -> None:
+    resolved_replicas = _resolve_discovery_replicas(
+        discovery_replicas,
+        replicas,
+        default=_PLAN_REPLICAS,
+        json_output=json_output,
+    )
     host_gate = _command_host_gate()
     try:
         asyncio.run(
@@ -509,7 +606,7 @@ def review(
                 target_spec=target,
                 repo_dir=repo_dir,
                 registry_root=registry_root,
-                discover_replicas=replicas,
+                discover_replicas=resolved_replicas,
                 adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
                 deadline_seconds=deadline,
@@ -518,11 +615,15 @@ def review(
                 pause=pause,
                 publish=publish,
                 dynamic_brief=dynamic_brief,
+                max_discovery_runs=max_discovery_runs,
+                allow_heavy_discovery=allow_heavy_discovery,
                 host_gate=host_gate,
             )
         )
     except EmptyReviewDiffError as exc:
         _empty_review_failure(exc, json_output=json_output)
+    except DiscoveryCostError as exc:
+        _discovery_cost_failure(exc, json_output=json_output)
 
 
 def _optional_outcome(run: RunHandle) -> AdjudicationOutcome | None:
@@ -548,10 +649,12 @@ def _review_payload(artifacts: PipelineArtifacts) -> dict[str, object]:
         "report_path": str(artifacts.report_path),
         "status": summary.status.value,
         "failed_lanes": [lane.model_dump(mode="json") for lane in summary.failed_lanes],
+        "skipped_lanes": [lane.model_dump(mode="json") for lane in summary.skipped_lanes],
         "verdict_counts": _verdict_counts(artifacts.outcome),
         "coverage_totals": summary.coverage_totals.model_dump(mode="json"),
         "error": summary.error.model_dump(mode="json") if summary.error is not None else None,
         "build": summary.build.model_dump(mode="json"),
+        "preflight": artifacts.preflight,
     }
 
 
@@ -569,6 +672,9 @@ async def _review_pipeline(
     pause: bool,
     publish: bool,
     dynamic_brief: Path | None,
+    planned_discovery: DiscoveryPlan | None = None,
+    max_discovery_runs: int = DEFAULT_MAX_DISCOVERY_RUNS,
+    allow_heavy_discovery: bool = False,
     host_gate: HostSlotGate | None = None,
 ) -> None:
     resolved_target: ResolvedTarget | None = None
@@ -589,6 +695,8 @@ async def _review_pipeline(
             out_root=out_root,
             pause=pause,
             dynamic_brief=dynamic_brief,
+            max_discovery_runs=max_discovery_runs,
+            allow_heavy_discovery=allow_heavy_discovery,
             resolved_target=resolved_target,
             host_gate=host_gate,
         )
@@ -653,6 +761,9 @@ async def _execute_pipeline(
     out_root: Path,
     pause: bool,
     dynamic_brief: Path | None,
+    planned_discovery: DiscoveryPlan | None = None,
+    max_discovery_runs: int = DEFAULT_MAX_DISCOVERY_RUNS,
+    allow_heavy_discovery: bool = False,
     resolved_target: ResolvedTarget | None = None,
     host_gate: HostSlotGate | None = None,
 ) -> _PipelineArtifacts | None:
@@ -660,7 +771,11 @@ async def _execute_pipeline(
 
     registry, lanes_root = _load_registry_root(registry_root)
     target = resolved_target or _resolve_cli_target(target_spec)
-    active_lanes = _load_active_lanes(registry, lanes_root, target)
+    active_lanes = (
+        planned_discovery.lanes
+        if planned_discovery is not None
+        else _load_active_lanes(registry, lanes_root, target)
+    )
     return await execute_pipeline(
         registry=registry,
         lanes_root=lanes_root,
@@ -678,6 +793,10 @@ async def _execute_pipeline(
         out_root=out_root,
         pause=pause,
         dynamic_brief=dynamic_brief,
+        planned_discovery=planned_discovery,
+        max_discovery_runs=max_discovery_runs,
+        allow_heavy_discovery=allow_heavy_discovery,
+        runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
         on_pause=lambda message: _console.print(message, markup=False),
         on_warning=lambda message: _error_console.print(message, markup=False),
         host_gate=host_gate,
@@ -941,7 +1060,8 @@ def gate(
     registry_root: Annotated[
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
-    replicas: Annotated[int, Option("--replicas", min=1)] = _PLAN_REPLICAS,
+    discovery_replicas: Annotated[int | None, Option("--discovery-replicas", min=1)] = None,
+    replicas: Annotated[int | None, Option("--replicas", min=1)] = None,
     adjudicate_replicas: Annotated[
         int, Option("--adjudicate-replicas", min=1)
     ] = _PLAN_ADJUDICATE_REPLICAS,
@@ -952,6 +1072,10 @@ def gate(
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     execute: Annotated[bool, Option("--execute")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
+    max_discovery_runs: Annotated[
+        int, Option("--max-discovery-runs", min=1)
+    ] = DEFAULT_MAX_DISCOVERY_RUNS,
+    allow_heavy_discovery: Annotated[bool, Option("--allow-heavy-discovery")] = False,
 ) -> None:
     """Run or resume a fail-closed, artifact-backed pull-request gate."""
 
@@ -970,6 +1094,12 @@ def gate(
             markup=False,
         )
         raise typer.Exit(EXIT_USER_ERROR)
+    resolved_replicas = _resolve_discovery_replicas(
+        discovery_replicas,
+        replicas,
+        default=_PLAN_REPLICAS,
+        json_output=json_output,
+    )
     host_gate = _command_host_gate()
     asyncio.run(
         _gate_pipeline(
@@ -979,13 +1109,15 @@ def gate(
             inherit_run_id=inherit_run_id,
             no_inherit=no_inherit,
             registry_root=registry_root,
-            discover_replicas=replicas,
+            discover_replicas=resolved_replicas,
             adjudicate_replicas=adjudicate_replicas,
             concurrency=concurrency,
             deadline_seconds=deadline,
             out_root=out_root,
             execute=execute,
             json_output=json_output,
+            max_discovery_runs=max_discovery_runs,
+            allow_heavy_discovery=allow_heavy_discovery,
             host_gate=host_gate,
         )
     )
@@ -1006,6 +1138,8 @@ async def _gate_pipeline(
     out_root: Path,
     execute: bool,
     json_output: bool,
+    max_discovery_runs: int,
+    allow_heavy_discovery: bool,
     host_gate: HostSlotGate | None = None,
 ) -> None:
     artifacts: _PipelineArtifacts
@@ -1056,6 +1190,8 @@ async def _gate_pipeline(
                     out_root=out_root,
                     pause=False,
                     dynamic_brief=None,
+                    max_discovery_runs=max_discovery_runs,
+                    allow_heavy_discovery=allow_heavy_discovery,
                     resolved_target=resolved,
                     host_gate=host_gate,
                 )
@@ -1097,6 +1233,8 @@ async def _gate_pipeline(
         except GateInvariantError as exc:
             _error_console.print(str(exc), markup=False)
             raise typer.Exit(EXIT_NOT_FOUND) from exc
+        except DiscoveryCostError as exc:
+            _discovery_cost_failure(exc, json_output=json_output)
         except (OSError, subprocess.CalledProcessError, RuntimeError, ValueError) as exc:
             _error_console.print(str(exc), markup=False)
             raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
@@ -1494,6 +1632,7 @@ def _publish_gate_verdict(
         "verdict_path": str(verdict_path),
         "publish_payload_path": str(artifacts.run.dir / "publish-payload.json"),
         "review_url": publication.review_url,
+        "preflight": artifacts.preflight,
     }
     if json_output:
         _write_json(payload)
@@ -1528,16 +1667,27 @@ def auto(
     publish: Annotated[bool | None, Option("--publish/--no-publish")] = None,
     allow_approve: Annotated[bool, Option("--allow-approve")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
-    replicas: Annotated[int, Option("--replicas", min=1)] = _PLAN_REPLICAS,
+    discovery_replicas: Annotated[int | None, Option("--discovery-replicas", min=1)] = None,
+    replicas: Annotated[int | None, Option("--replicas", min=1)] = None,
     adjudicate_replicas: Annotated[
         int, Option("--adjudicate-replicas", min=1)
     ] = _PLAN_ADJUDICATE_REPLICAS,
+    max_discovery_runs: Annotated[
+        int, Option("--max-discovery-runs", min=1)
+    ] = DEFAULT_MAX_DISCOVERY_RUNS,
+    allow_heavy_discovery: Annotated[bool, Option("--allow-heavy-discovery")] = False,
 ) -> None:
     if allow_approve:
         _error_console.print(
             "approve publishing is not implemented (ADR-009 Phase-5 opt-in placeholder)",
             markup=False,
         )
+    resolved_replicas = _resolve_discovery_replicas(
+        discovery_replicas,
+        replicas,
+        default=_PLAN_REPLICAS,
+        json_output=json_output,
+    )
     host_gate = _command_host_gate()
     try:
         asyncio.run(
@@ -1549,13 +1699,25 @@ def auto(
                 deadline_seconds=deadline,
                 publish=publish,
                 json_output=json_output,
-                discover_replicas=replicas,
+                discover_replicas=resolved_replicas,
                 adjudicate_replicas=adjudicate_replicas,
+                max_discovery_runs=max_discovery_runs,
+                allow_heavy_discovery=allow_heavy_discovery,
                 host_gate=host_gate,
             )
         )
+    except PipelineInfrastructureError as exc:
+        artifacts = exc.artifacts
+        if json_output:
+            _write_json(_review_payload(artifacts))
+        else:
+            _error_console.print(str(exc), markup=False)
+            _error_console.print(f"partial report: {artifacts.report_path}", markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
     except EmptyReviewDiffError as exc:
         _empty_review_failure(exc, json_output=json_output)
+    except DiscoveryCostError as exc:
+        _discovery_cost_failure(exc, json_output=json_output)
 
 
 async def _auto_pipeline(
@@ -1569,6 +1731,8 @@ async def _auto_pipeline(
     json_output: bool,
     discover_replicas: int,
     adjudicate_replicas: int,
+    max_discovery_runs: int,
+    allow_heavy_discovery: bool,
     host_gate: HostSlotGate | None = None,
 ) -> None:
     policy = load_policy(policy_path)
@@ -1583,10 +1747,30 @@ async def _auto_pipeline(
         out_root=DEFAULT_RUN_ROOT,
         pause=False,
         dynamic_brief=None,
+        max_discovery_runs=max_discovery_runs,
+        allow_heavy_discovery=allow_heavy_discovery,
         host_gate=host_gate,
     )
     if artifacts is None:
         raise RuntimeError("auto pipeline stopped before report generation")
+    summary = _artifact_summary(artifacts)
+    if summary.error is not None:
+        if json_output:
+            _write_json(_review_payload(artifacts))
+        else:
+            _error_console.print(f"auto review stopped: {summary.error.message}", markup=False)
+            _error_console.print(f"partial report: {artifacts.report_path}", markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR)
+    if summary.status is not ReviewStatus.COMPLETE:
+        if json_output:
+            _write_json(_review_payload(artifacts))
+        else:
+            _error_console.print(
+                "auto review stopped: discovery coverage is incomplete",
+                markup=False,
+            )
+            _error_console.print(f"partial report: {artifacts.report_path}", markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR)
 
     decision = evaluate(policy, artifacts.merged, artifacts.outcome)
     should_publish = policy.publish_state == "comment" if publish is None else publish
@@ -1609,6 +1793,7 @@ async def _auto_pipeline(
         "promoted": decision.promoted,
         "considered": decision.considered,
         "report_path": str(artifacts.report_path),
+        "preflight": artifacts.preflight,
     }
     if json_output:
         _write_json(payload)
@@ -1629,22 +1814,36 @@ def plan(
     registry_root: Annotated[
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
-    replicas: Annotated[int, Option("--replicas", min=1)] = _PLAN_REPLICAS,
+    discovery_replicas: Annotated[int | None, Option("--discovery-replicas", min=1)] = None,
+    replicas: Annotated[int | None, Option("--replicas", min=1)] = None,
     adjudicate_replicas: Annotated[
         int, Option("--adjudicate-replicas", min=1)
     ] = _PLAN_ADJUDICATE_REPLICAS,
+    max_discovery_runs: Annotated[
+        int, Option("--max-discovery-runs", min=1)
+    ] = DEFAULT_MAX_DISCOVERY_RUNS,
 ) -> None:
     del pause
+    resolved_replicas = _resolve_discovery_replicas(
+        discovery_replicas,
+        replicas,
+        default=_PLAN_REPLICAS,
+        json_output=json_output,
+    )
     registry, lanes_root = _load_registry_root(registry_root)
     resolved_target = _resolve_cli_target(target)
-    payload = _plan_payload(
-        registry,
-        lanes_root,
-        resolved_target,
-        dynamic_brief,
-        replicas,
-        adjudicate_replicas,
-    )
+    try:
+        payload = _plan_payload(
+            registry,
+            lanes_root,
+            resolved_target,
+            dynamic_brief,
+            resolved_replicas,
+            adjudicate_replicas,
+            max_discovery_runs,
+        )
+    except EmptyReviewDiffError as exc:
+        _empty_review_failure(exc, json_output=json_output)
     if json_output:
         _write_json(payload)
     else:
@@ -1890,7 +2089,8 @@ def stack_review(
     registry_root: Annotated[
         Path, Option("--registry", help="Registry root containing layers.yaml and lanes/.")
     ] = DEFAULT_REGISTRY_ROOT,
-    replicas: Annotated[int, Option("--replicas", min=1)] = 1,
+    discovery_replicas: Annotated[int | None, Option("--discovery-replicas", min=1)] = None,
+    replicas: Annotated[int | None, Option("--replicas", min=1)] = None,
     adjudicate_replicas: Annotated[int, Option("--adjudicate-replicas", min=1)] = 3,
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     deadline: Annotated[
@@ -1898,26 +2098,40 @@ def stack_review(
     ] = DEFAULT_DEADLINE_SECONDS,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
+    max_discovery_runs: Annotated[
+        int, Option("--max-discovery-runs", min=1)
+    ] = DEFAULT_MAX_DISCOVERY_RUNS,
+    allow_heavy_discovery: Annotated[bool, Option("--allow-heavy-discovery")] = False,
 ) -> None:
     """Review every member and recheck earlier claims at descendant heads."""
 
+    resolved_replicas = _resolve_discovery_replicas(
+        discovery_replicas,
+        replicas,
+        default=_PLAN_REPLICAS,
+        json_output=json_output,
+    )
     host_gate = _command_host_gate()
     try:
         asyncio.run(
             _stack_review_pipeline(
                 prs=prs,
                 registry_root=registry_root,
-                discover_replicas=replicas,
+                discover_replicas=resolved_replicas,
                 adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
                 deadline_seconds=deadline,
                 out_root=out_root,
                 json_output=json_output,
+                max_discovery_runs=max_discovery_runs,
+                allow_heavy_discovery=allow_heavy_discovery,
                 host_gate=host_gate,
             )
         )
     except EmptyReviewDiffError as exc:
         _empty_review_failure(exc, json_output=json_output)
+    except DiscoveryCostError as exc:
+        _discovery_cost_failure(exc, json_output=json_output)
     except StackResolutionError as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
@@ -1927,6 +2141,70 @@ def stack_review(
     except (OSError, subprocess.CalledProcessError, RuntimeError) as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
+
+
+@dataclass(frozen=True)
+class _StackMemberDiscoveryPlan:
+    member: StackMember
+    target: ResolvedTarget
+    plan: DiscoveryPlan
+
+
+@dataclass(frozen=True)
+class _StackDiscoveryPlan:
+    member_plans: tuple[_StackMemberDiscoveryPlan, ...]
+    preflight: dict[str, object]
+
+
+def _stack_discovery_preflight(
+    *,
+    members: Sequence[StackMember],
+    registry_root: Path,
+    discover_replicas: int,
+    max_discovery_runs: int,
+    allow_heavy_discovery: bool,
+) -> _StackDiscoveryPlan:
+    """Plan every immutable member before any stack runtime dispatch begins."""
+
+    registry, lanes_root = _load_registry_root(registry_root)
+    member_plans: list[_StackMemberDiscoveryPlan] = []
+    with tempfile.TemporaryDirectory(prefix="rvw-stack-preflight-") as temp_root:
+        for member in members:
+            checkout = provision_checkout(
+                repo=member.repo,
+                pr_number=member.number,
+                head_sha=member.head_sha,
+                destination=Path(temp_root) / f"checkout-{member.number}",
+            )
+            target = resolved_target_for_member(member, cwd=checkout)
+            active_lanes = _load_active_lanes(registry, lanes_root, target)
+            member_plans.append(
+                _StackMemberDiscoveryPlan(
+                    member=member,
+                    target=target,
+                    plan=plan_discovery(
+                        registry=registry,
+                        lanes_root=lanes_root,
+                        target=target,
+                        replicas=discover_replicas,
+                        lane_filter=[lane.id for lane in active_lanes],
+                    ),
+                )
+            )
+    preflight = build_stack_discovery_preflight(
+        [member_plan.plan for member_plan in member_plans],
+        replicas=discover_replicas,
+        max_discovery_runs=max_discovery_runs,
+        runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+    )
+    require_heavy_discovery_acknowledgement(
+        preflight,
+        allow_heavy_discovery=allow_heavy_discovery,
+    )
+    return _StackDiscoveryPlan(
+        member_plans=tuple(member_plans),
+        preflight=preflight.payload(),
+    )
 
 
 async def _stack_review_pipeline(
@@ -1939,10 +2217,19 @@ async def _stack_review_pipeline(
     deadline_seconds: int,
     out_root: Path,
     json_output: bool,
+    max_discovery_runs: int,
+    allow_heavy_discovery: bool,
     host_gate: HostSlotGate | None = None,
 ) -> None:
     numbers = parse_pr_numbers(prs)
     members = resolve_stack(numbers, cwd=Path.cwd())
+    stack_plan = _stack_discovery_preflight(
+        members=members,
+        registry_root=registry_root,
+        discover_replicas=discover_replicas,
+        max_discovery_runs=max_discovery_runs,
+        allow_heavy_discovery=allow_heavy_discovery,
+    )
     handle = StackStore(out_root).create(numbers)
     run_id_console = _error_console if json_output else _console
     run_id_console.print(f"stack run id: {handle.run_id}", markup=False)
@@ -1952,13 +2239,16 @@ async def _stack_review_pipeline(
         members=members,
     )
     handle.save_manifest(manifest)
+    handle.save_preflight(stack_plan.preflight)
     member_runs: list[MemberRunRef] = []
+    member_preflights: list[dict[str, object] | None] = []
     lineages: list[FindingLineage] = []
     coerced_evidence = 0
     handle.save_member_runs(member_runs)
     handle.save_lineages(lineages)
 
-    for member in manifest.members:
+    for member_plan in stack_plan.member_plans:
+        member = member_plan.member
         with tempfile.TemporaryDirectory(prefix=f"rvw-stack-pr-{member.number}-") as temp_root:
             checkout = provision_checkout(
                 repo=member.repo,
@@ -1966,7 +2256,6 @@ async def _stack_review_pipeline(
                 head_sha=member.head_sha,
                 destination=Path(temp_root) / "checkout",
             )
-            target = resolved_target_for_member(member, cwd=checkout)
             artifacts = await _execute_pipeline(
                 target_spec=str(member.number),
                 repo_dir=checkout,
@@ -1978,12 +2267,20 @@ async def _stack_review_pipeline(
                 out_root=out_root,
                 pause=False,
                 dynamic_brief=None,
-                resolved_target=target,
+                max_discovery_runs=max_discovery_runs,
+                allow_heavy_discovery=allow_heavy_discovery,
+                resolved_target=member_plan.target,
+                planned_discovery=member_plan.plan,
                 host_gate=host_gate,
             )
             if artifacts is None or artifacts.outcome is None:
                 raise RuntimeError(
                     f"stack member PR #{member.number} stopped before adjudicated report"
+                )
+            summary = _artifact_summary(artifacts)
+            if summary.status is not ReviewStatus.COMPLETE:
+                raise RuntimeError(
+                    f"stack member PR #{member.number} incomplete review status: {summary.status}"
                 )
             member_runs.append(
                 MemberRunRef(
@@ -1993,6 +2290,7 @@ async def _stack_review_pipeline(
                     verdict_counts=_verdict_counts(artifacts.outcome),
                 )
             )
+            member_preflights.append(artifacts.preflight)
             handle.save_member_runs(member_runs)
 
             if lineages:
@@ -2000,7 +2298,7 @@ async def _stack_review_pipeline(
                     lineages,
                     pr_number=member.number,
                     member_order=numbers,
-                    target=target,
+                    target=member_plan.target,
                     runtime=CodexRuntime(),
                     repo_dir=checkout,
                     out_root=handle.dir / "presence-runtime" / f"pr-{member.number}",
@@ -2043,7 +2341,9 @@ async def _stack_review_pipeline(
         "report_path": str(handle.dir / "stack-report.md"),
         "repo": manifest.repo,
         "prs": numbers,
+        "preflight": stack_plan.preflight,
         "member_runs": [member.run_id for member in member_runs],
+        "member_preflights": member_preflights,
         "lineages": len(lineages),
         "coerced_evidence": coerced_evidence,
     }

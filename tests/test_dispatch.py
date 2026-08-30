@@ -359,7 +359,7 @@ async def test_all_invalid_lane_is_redispatched_once(tmp_path: Path) -> None:
                 RunStatus.VALID,
             ]
         },
-        invalid_reasons={lane.id: ["schema_validation_error", "schema_validation_error"]},
+        invalid_reasons={lane.id: ["schema-invalid", "schema-invalid"]},
     )
 
     results = await dispatch(
@@ -389,7 +389,7 @@ async def test_prior_valid_lane_chunk_prevents_pending_invalid_retry(tmp_path: P
     lane = make_lane("resumed-valid")
     runtime = FakeRuntime(
         statuses={lane.id: [RunStatus.INVALID]},
-        invalid_reasons={lane.id: ["schema_validation_error"]},
+        invalid_reasons={lane.id: ["schema-invalid"]},
     )
 
     outcome = await dispatch_outcome(
@@ -400,14 +400,14 @@ async def test_prior_valid_lane_chunk_prevents_pending_invalid_retry(tmp_path: P
     )
 
     assert runtime.calls_for(lane.id) == 1
-    assert outcome.results[0].invalid_reason == "schema_validation_error"
+    assert outcome.results[0].invalid_reason == "schema-invalid"
 
 
 async def test_prior_retry_lane_chunk_prevents_another_replacement_wave(tmp_path: Path) -> None:
     lane = make_lane("resumed-retry")
     runtime = FakeRuntime(
         statuses={lane.id: [RunStatus.INVALID]},
-        invalid_reasons={lane.id: ["schema_validation_error"]},
+        invalid_reasons={lane.id: ["schema-invalid"]},
     )
 
     await dispatch_outcome(
@@ -446,7 +446,7 @@ async def test_dispatch_outcome_exposes_initial_results_only_for_retried_keys(
             recovers.id: [RunStatus.INVALID, RunStatus.VALID],
             steady.id: [RunStatus.VALID],
         },
-        invalid_reasons={recovers.id: ["schema_validation_error"]},
+        invalid_reasons={recovers.id: ["schema-invalid"]},
     )
     outcome = await dispatch_module.dispatch_outcome(
         [planned(recovers), planned(steady)],
@@ -466,7 +466,7 @@ async def test_all_invalid_retry_preserves_initial_wave_artifacts(tmp_path: Path
     lane = make_lane("preserve-invalid")
     runtime = ArtifactRuntime(
         statuses={lane.id: [RunStatus.INVALID, RunStatus.VALID]},
-        invalid_reasons={lane.id: ["schema_validation_error"]},
+        invalid_reasons={lane.id: ["schema-invalid"]},
     )
 
     await dispatch([planned(lane)], runtime, out_root=tmp_path)
@@ -482,7 +482,7 @@ async def test_still_invalid_after_retry_is_returned_without_looping(tmp_path: P
     lane = make_lane("never-valid")
     runtime = FakeRuntime(
         statuses={lane.id: [RunStatus.INVALID] * 4},
-        invalid_reasons={lane.id: ["schema_validation_error", "schema_validation_error"]},
+        invalid_reasons={lane.id: ["schema-invalid", "schema-invalid"]},
     )
 
     results = await dispatch(
@@ -500,7 +500,7 @@ async def test_results_are_sorted_and_progress_includes_retries(tmp_path: Path) 
     lane_a = make_lane("a-lane")
     runtime = FakeRuntime(
         statuses={lane_z.id: [RunStatus.INVALID] * 4},
-        invalid_reasons={lane_z.id: ["schema_validation_error", "schema_validation_error"]},
+        invalid_reasons={lane_z.id: ["schema-invalid", "schema-invalid"]},
     )
     progress: list[tuple[str, int]] = []
 
@@ -555,7 +555,7 @@ async def test_all_invalid_retry_is_scoped_to_lane_chunk(tmp_path: Path) -> None
     lane = make_lane("chunk-retry")
     runtime = FakeRuntime(
         statuses={lane.id: [RunStatus.INVALID, RunStatus.VALID, RunStatus.VALID]},
-        invalid_reasons={lane.id: ["schema_validation_error"]},
+        invalid_reasons={lane.id: ["schema-invalid"]},
     )
 
     results = await dispatch(
@@ -606,7 +606,7 @@ async def test_all_invalid_lane_chunk_replacement_prompt_names_prior_invalid_rea
                 replica=replica,
                 status=RunStatus.INVALID if invalid else RunStatus.VALID,
                 output=None if invalid else RuntimeLaneOutput(verdict="PASS"),
-                invalid_reason="schema_validation_error" if invalid else None,
+                invalid_reason="schema-invalid" if invalid else None,
                 wall_seconds=0.0,
                 artifact_dir=run_dir,
             )
@@ -628,11 +628,11 @@ async def test_all_invalid_lane_chunk_replacement_prompt_names_prior_invalid_rea
     assert len(steady_prompts) == 1
     for prompt in retried_prompts[:2]:
         assert "## Retry feedback" not in prompt
-        assert "schema_validation_error" not in prompt
+        assert "schema-invalid" not in prompt
     for prompt in retried_prompts[2:]:
         assert "## Retry feedback" in prompt
-        assert "replica 1: schema_validation_error" in prompt
-        assert "replica 2: schema_validation_error" in prompt
+        assert "replica 1: schema-invalid" in prompt
+        assert "replica 2: schema-invalid" in prompt
     assert "## Retry feedback" not in steady_prompts[0]
 
 

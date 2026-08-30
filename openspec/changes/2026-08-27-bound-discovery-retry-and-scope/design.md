@@ -3,7 +3,7 @@
 ### Correct only output-contract failures
 
 The retry unit remains one lane/chunk group and at most one replacement wave.
-`json_parse_error` and `schema_validation_error` are the only machine-readable
+`unparseable` and `schema-invalid` are the only machine-readable
 reasons that a corrective retry can plausibly fix. Timeout, cancellation,
 budget, spawn, completion-marker, missing-artifact, and other failures do not
 repeat their full prompt wave. After the retry decision, a no-valid-output

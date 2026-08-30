@@ -71,8 +71,7 @@ derive the effective brief, and build every initial lane prompt used for both
 preflight accounting and dispatch. The planner MUST expose exact aggregate
 initial prompt characters and the one-retry upper bound of twice its initial
 run count; retry-feedback characters are excluded because invalid reasons do
-not exist before execution. The dispatcher MUST surface each completed initial
-or replacement result through progress before the full wave returns.
+not exist before execution.
 
 #### Scenario: Four lanes activate over two chunks
 
@@ -90,12 +89,6 @@ or replacement result through progress before the full wave returns.
   chunk
 - **THEN** preflight reports 12 initial runs, 24 retry-upper-bound runs, and
   the exact sum of the twelve prompts that dispatch will send
-
-#### Scenario: A dispatch is interrupted
-
-- **WHEN** one discovery result completes before cancellation
-- **THEN** the run manifest already contains that result and queued work does
-  not start after cancellation
 
 ### Requirement: Dispatch is bounded and heavy-first
 
@@ -125,8 +118,8 @@ The dispatcher MUST sort runs heavy, normal, then light, MUST bound concurrent r
 
 An invalid replica MUST be excluded from finding enrichment. A lane-chunk group
 MUST receive exactly one replacement wave only when every initial replica is
-INVALID and every invalid reason is `json_parse_error` or
-`schema_validation_error`; an initial wave MUST NOT contain retry feedback. A
+INVALID and every invalid reason is `unparseable` or
+`schema-invalid`; an initial wave MUST NOT contain retry feedback. A
 timeout, cancellation, budget, spawn, completion-marker, missing-artifact, or
 other invalid reason MUST NOT cause an identical full-wave retry. Any lane-chunk
 group with no valid result after its permitted retry decision MUST retain its
@@ -147,10 +140,12 @@ and legacy discovery artifacts continue to load with empty attempt history.
 - **THEN** the dispatcher executes one replacement wave for that lane-chunk and
   performs no further retry
 
-#### Scenario: Replacement prompt names prior failures
+#### Scenario: Replacement prompt names correctable prior failures
 
-- **WHEN** every initial replica of one lane-chunk is INVALID with machine-readable reasons
-- **THEN** that lane-chunk's replacement prompt lists each prior replica's invalid reason while another lane's unretried prompt contains none
+- **WHEN** every initial replica of one lane-chunk is INVALID with an
+  `unparseable` or `schema-invalid` reason
+- **THEN** that lane-chunk's replacement prompt lists each prior replica's
+  invalid reason while another lane's unretried prompt contains none
 
 #### Scenario: Retry preserves initial artifacts
 
@@ -159,13 +154,32 @@ and legacy discovery artifacts continue to load with empty attempt history.
 
 #### Scenario: Retried coverage keeps the initial failure reason
 
-- **WHEN** a lane-chunk retried after an initial `schema_validation_error` succeeds in the replacement wave
-- **THEN** its persisted coverage row is valid, and its attempt records list the initial INVALID attempt with reason `schema_validation_error` followed by the valid retry attempt
+- **WHEN** a lane-chunk retried after an initial `schema-invalid` result succeeds in the replacement wave
+- **THEN** its persisted coverage row is valid, and its attempt records list the initial INVALID attempt with reason `schema-invalid` followed by the valid retry attempt
 
 #### Scenario: Legacy discovery artifact loads
 
 - **WHEN** a `discover.json` persisted before attempt records is loaded
 - **THEN** loading succeeds and each coverage run reports empty attempt history
+
+### Requirement: Compatible discovery resume preserves attempts
+
+Discovery resume MUST reuse completed work only for a lane, replica, and chunk
+identity present in the rebuilt discovery plan. It MUST retain each identity's
+ordered attempt history, must not dispatch a third attempt, and MUST write any
+new resumed execution to an artifact directory distinct from prior attempts.
+
+#### Scenario: Resume reuses compatible valid work
+
+- **WHEN** a rebuilt plan contains a previously valid lane-replica-chunk result
+- **THEN** discovery retains that result without dispatching it again
+
+#### Scenario: Resume preserves a partially completed replacement wave
+
+- **WHEN** compatible history records correctable initial failures and a
+  replacement result for only some replicas
+- **THEN** discovery dispatches only the missing replacement replicas and keeps
+  their attempt numbering and artifacts distinct
 
 ### Requirement: Dynamic brief falls back to PR claims
 

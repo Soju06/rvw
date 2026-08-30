@@ -264,14 +264,24 @@ def _coverage_section(
     lines = [
         "## 커버리지",
         "",
-        "| 레인 | 발사 | 유효 | 발견 |",
-        "| --- | ---: | ---: | ---: |",
+        "| 레인 | 상태 | 발사 | 유효 | 발견 |",
+        "| --- | --- | ---: | ---: | ---: |",
     ]
     for item in coverage:
         lane_id = item.lane_id.replace("|", "\\|")
-        lines.append(f"| {lane_id} | {item.dispatched} | {item.valid} | {item.findings} |")
+        if item.skipped_reason is not None:
+            status = f"skipped: {item.skipped_reason}"
+        elif item.valid == item.dispatched:
+            status = "complete"
+        elif item.valid == 0:
+            status = "failed"
+        else:
+            status = "degraded"
+        lines.append(
+            f"| {lane_id} | {status} | {item.dispatched} | {item.valid} | {item.findings} |"
+        )
     lines.append(
-        "| 합계 | "
+        "| 합계 | - | "
         f"{sum(item.dispatched for item in coverage)} | "
         f"{sum(item.valid for item in coverage)} | "
         f"{sum(item.findings for item in coverage)} |"
@@ -310,6 +320,10 @@ def _status_section(summary: RunSummary | None) -> str:
                 for failure in lane.failures
             )
             lines.append(f"- `{lane.lane_id}`: {details}")
+    if summary.skipped_lanes:
+        lines.extend(["", "skipped lanes (incomplete coverage):"])
+        for lane in summary.skipped_lanes:
+            lines.append(f"- `{lane.lane_id}`: `{lane.reason}`")
     if summary.error is not None:
         lines.extend(
             [

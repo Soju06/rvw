@@ -49,6 +49,13 @@ class FailedLane(BaseModel):
     failures: list[LaneFailure]
 
 
+class SkippedLane(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    lane_id: str
+    reason: str
+
+
 class RunError(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -65,6 +72,7 @@ class RunSummary(BaseModel):
     run_id: str
     status: ReviewStatus
     failed_lanes: list[FailedLane]
+    skipped_lanes: list[SkippedLane] = Field(default_factory=list)
     coverage_totals: CoverageTotals
     error: RunError | None
     build: BuildProvenance = Field(default_factory=current_build_provenance)
@@ -96,6 +104,14 @@ def failed_lanes(discovered: DiscoverResult) -> list[FailedLane]:
     return failed
 
 
+def skipped_lanes(discovered: DiscoverResult) -> list[SkippedLane]:
+    return [
+        SkippedLane(lane_id=lane.lane_id, reason=lane.skipped_reason)
+        for lane in discovered.coverage
+        if lane.skipped_reason is not None
+    ]
+
+
 def summarize_run(
     run_id: str,
     discovered: DiscoverResult,
@@ -105,9 +121,10 @@ def summarize_run(
 ) -> RunSummary:
     totals = coverage_totals(discovered)
     failures = failed_lanes(discovered)
-    if error is not None or (failures and totals.valid == 0):
+    skipped = skipped_lanes(discovered)
+    if error is not None or ((failures or skipped) and totals.valid == 0):
         status = ReviewStatus.FAILED
-    elif failures:
+    elif failures or skipped:
         status = ReviewStatus.DEGRADED
     else:
         status = ReviewStatus.COMPLETE
@@ -115,6 +132,7 @@ def summarize_run(
         run_id=run_id,
         status=status,
         failed_lanes=failures,
+        skipped_lanes=skipped,
         coverage_totals=totals,
         error=error,
         build=build or current_build_provenance(),
@@ -126,6 +144,7 @@ def running_summary(run_id: str) -> RunSummary:
         run_id=run_id,
         status=ReviewStatus.RUNNING,
         failed_lanes=[],
+        skipped_lanes=[],
         coverage_totals=CoverageTotals(dispatched=0, valid=0, findings=0),
         error=None,
         build=current_build_provenance(),
@@ -139,8 +158,10 @@ __all__ = [
     "ReviewStatus",
     "RunError",
     "RunSummary",
+    "SkippedLane",
     "coverage_totals",
     "failed_lanes",
     "running_summary",
+    "skipped_lanes",
     "summarize_run",
 ]

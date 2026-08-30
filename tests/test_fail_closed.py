@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,84 @@ def test_every_activated_lane_invalid_is_failed() -> None:
         "security",
         "correctness",
     }
+
+
+def test_brief_unavailable_lane_is_incomplete_coverage() -> None:
+    discovered = DiscoverResult(
+        lane_results={},
+        findings=[],
+        coverage=[
+            LaneCoverage(
+                lane_id="dynamic/goal-parity",
+                dispatched=0,
+                valid=0,
+                findings=0,
+                runs=[],
+                skipped_reason="brief_unavailable",
+            )
+        ],
+    )
+
+    summary = summarize_run("run-skipped", discovered)
+
+    assert summary.status is ReviewStatus.FAILED
+    assert [lane.model_dump() for lane in summary.skipped_lanes] == [
+        {"lane_id": "dynamic/goal-parity", "reason": "brief_unavailable"}
+    ]
+
+
+def test_legacy_summary_without_skipped_lanes_recomputes_coverage(tmp_path: Path) -> None:
+    discovered = DiscoverResult(
+        lane_results={},
+        findings=[],
+        coverage=[
+            LaneCoverage(
+                lane_id="dynamic/goal-parity",
+                dispatched=0,
+                valid=0,
+                findings=0,
+                runs=[],
+                skipped_reason="brief_unavailable",
+            )
+        ],
+    )
+    run = RunStore(tmp_path).create(target_fixture())
+    run.save_discover(discovered)
+    legacy = run.load_summary().model_dump(mode="json")
+    legacy.update(
+        {
+            "status": "complete",
+            "failed_lanes": [],
+            "coverage_totals": {"dispatched": 0, "valid": 0, "findings": 0},
+            "error": None,
+        }
+    )
+    legacy.pop("skipped_lanes")
+    (run.dir / "run.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+    summary = run.load_summary()
+
+    assert summary.status is ReviewStatus.FAILED
+    assert [lane.model_dump() for lane in summary.skipped_lanes] == [
+        {"lane_id": "dynamic/goal-parity", "reason": "brief_unavailable"}
+    ]
+
+
+def test_legacy_summary_without_skipped_lanes_does_not_complete_running_run(tmp_path: Path) -> None:
+    discovered = DiscoverResult(
+        lane_results={},
+        findings=[],
+        coverage=[coverage("security", valid=True)],
+    )
+    run = RunStore(tmp_path).create(target_fixture())
+    run.save_discover(discovered)
+    legacy = run.load_summary().model_dump(mode="json")
+    legacy.pop("skipped_lanes")
+    (run.dir / "run.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+    summary = run.load_summary()
+
+    assert summary.status is ReviewStatus.RUNNING
 
 
 def test_valid_security_finding_survives_schema_invalid_lane_in_partial_report() -> None:

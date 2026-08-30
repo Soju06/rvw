@@ -16,8 +16,9 @@ from typing import TYPE_CHECKING, Any
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport
 from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage
+from rvw.discovery_cost import validate_discovery_preflight_payload
 from rvw.merge import MergeResult
-from rvw.summary import RunSummary, running_summary
+from rvw.summary import ReviewStatus, RunSummary, running_summary, summarize_run
 from rvw.target import ResolvedTarget
 
 if TYPE_CHECKING:
@@ -209,7 +210,39 @@ class RunHandle:
         _write_json(self.dir / "run.json", summary.model_dump(mode="json"))
 
     def load_summary(self) -> RunSummary:
-        return RunSummary.model_validate(self._load_contained_json("run.json", "run"))
+        raw = self._load_contained_json("run.json", "run")
+        summary = RunSummary.model_validate(raw)
+        if not isinstance(raw, dict) or "skipped_lanes" in raw:
+            return summary
+        try:
+            discovered = self.load_discover()
+        except StageMissing:
+            if summary.status is ReviewStatus.COMPLETE:
+                return summary.model_copy(update={"status": ReviewStatus.DEGRADED})
+            return summary
+        if summary.status is ReviewStatus.RUNNING:
+            return summary
+        recomputed = summarize_run(
+            summary.run_id,
+            discovered,
+            error=summary.error,
+            build=summary.build,
+        )
+        status_rank = {
+            ReviewStatus.COMPLETE: 0,
+            ReviewStatus.DEGRADED: 1,
+            ReviewStatus.FAILED: 2,
+        }
+        if status_rank[summary.status] >= status_rank[recomputed.status]:
+            return recomputed.model_copy(update={"status": summary.status})
+        return recomputed
+
+    def save_preflight(self, preflight: dict[str, object]) -> None:
+        _write_json(self.dir / "preflight.json", validate_discovery_preflight_payload(preflight))
+
+    def load_preflight(self) -> dict[str, object]:
+        raw = self._load_contained_json("preflight.json", "preflight")
+        return validate_discovery_preflight_payload(raw)
 
     def save_discover(self, discovered: DiscoverResult) -> None:
         _write_json(

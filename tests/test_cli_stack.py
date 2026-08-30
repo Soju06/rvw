@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 from typer.testing import CliRunner
@@ -9,10 +10,12 @@ from typer.testing import CliRunner
 import rvw.cli as cli_module
 import rvw.publish as publish_module
 from rvw.adjudicate import AdjudicationOutcome
-from rvw.discover import DiscoverResult, EnrichedFinding
+from rvw.discover import DiscoverResult, DiscoveryPlan, EnrichedFinding
+from rvw.discovery_cost import DiscoveryCostError, DiscoveryPreflight
 from rvw.merge import merge
 from rvw.pipeline import PipelineArtifacts
 from rvw.publish import PublishResult
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
 from rvw.schema import Severity, Tier, Verdict
 from rvw.stack import (
     FindingLineage,
@@ -24,6 +27,7 @@ from rvw.stack import (
 from rvw.stack_adjudicate import PresenceOutcome
 from rvw.stack_store import StackStore
 from rvw.store import RunStore
+from rvw.summary import CoverageTotals, ReviewStatus, RunSummary
 from rvw.target import ResolvedTarget
 
 runner = CliRunner()
@@ -115,12 +119,56 @@ def target_for(
     )
 
 
+def preflight_payload(
+    *,
+    lanes: int,
+    replicas: int,
+    chunks: int,
+    initial_runs: int,
+) -> dict[str, object]:
+    retry_upper_bound = initial_runs * 2
+    reasons: list[str] = []
+    if replicas >= 2:
+        reasons.append(f"discovery_replicas={replicas}")
+    if retry_upper_bound > 12:
+        reasons.append(f"retry_upper_bound={retry_upper_bound} exceeds max_discovery_runs=12")
+    reasons.append("reasoning_effort=max")
+    return DiscoveryPreflight(
+        lanes=lanes,
+        replicas=replicas,
+        chunks=chunks,
+        initial_runs=initial_runs,
+        retry_upper_bound=retry_upper_bound,
+        initial_prompt_characters=initial_runs,
+        max_discovery_runs=12,
+        runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+        heavy_discovery_reasons=tuple(reasons),
+    ).payload()
+
+
+def stack_discovery_plan(
+    members: list[StackMember], preflight: dict[str, object]
+) -> cli_module._StackDiscoveryPlan:
+    return cli_module._StackDiscoveryPlan(
+        member_plans=tuple(
+            cli_module._StackMemberDiscoveryPlan(
+                member=member,
+                target=target_for(member.number, members=members),
+                plan=cast(DiscoveryPlan, object()),
+            )
+            for member in members
+        ),
+        preflight=preflight,
+    )
+
+
 def pipeline_artifacts(
     out_root: Path,
     number: int,
     *,
     members: list[StackMember] | None = None,
     finding_pr: int = 1,
+    status: ReviewStatus = ReviewStatus.COMPLETE,
 ) -> PipelineArtifacts:
     target = target_for(number, members=members)
     run = RunStore(out_root).create(target)
@@ -151,6 +199,14 @@ def pipeline_artifacts(
         unresolved=[],
         coerced_rejections=0,
     )
+    summary = RunSummary(
+        run_id=run.run_id,
+        status=status,
+        failed_lanes=[],
+        skipped_lanes=[],
+        coverage_totals=CoverageTotals(dispatched=0, valid=0, findings=len(findings)),
+        error=None,
+    )
     return PipelineArtifacts(
         run=run,
         target=target,
@@ -159,6 +215,7 @@ def pipeline_artifacts(
         outcome=outcome,
         report_md=f"# report for {number}\n",
         report_path=run.dir / "report.md",
+        summary=summary,
     )
 
 
@@ -240,6 +297,7 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     pipeline_concurrency: list[int] = []
     presence_concurrency: list[int] = []
     pipeline_deadlines: list[int] = []
+    stack_preflight = preflight_payload(lanes=3, replicas=2, chunks=1, initial_runs=6)
     presence_deadlines: list[int] = []
 
     def fake_resolve(numbers: list[int], **kwargs: object) -> list[StackMember]:
@@ -258,6 +316,7 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
         target = kwargs["resolved_target"]
         assert isinstance(target, ResolvedTarget)
         assert target.pr_number is not None
+        assert "planned_discovery" in kwargs
         discover_replicas = kwargs["discover_replicas"]
         adjudicate_replicas = kwargs["adjudicate_replicas"]
         assert isinstance(discover_replicas, int)
@@ -270,6 +329,11 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
         assert isinstance(deadline_seconds, int)
         pipeline_deadlines.append(deadline_seconds)
         return pipeline_artifacts(tmp_path, target.pr_number)
+
+    def fake_stack_preflight(**kwargs: object) -> cli_module._StackDiscoveryPlan:
+        assert kwargs["members"] == valid_members()
+        assert pipeline_calls == []
+        return stack_discovery_plan(valid_members(), stack_preflight)
 
     async def fake_presence(
         lineages: list[FindingLineage], *, pr_number: int, **kwargs: object
@@ -309,6 +373,7 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     )
     monkeypatch.setattr(cli_module, "_execute_pipeline", fake_pipeline)
     monkeypatch.setattr(cli_module, "adjudicate_presence", fake_presence)
+    monkeypatch.setattr(cli_module, "_stack_discovery_preflight", fake_stack_preflight)
 
     result = runner.invoke(
         cli_module.app,
@@ -347,6 +412,10 @@ def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     assert presence_deadlines == [1800, 1800]
     payload = json.loads(result.stdout)
     handle = StackStore(tmp_path / "stack-runs").open(payload["run_id"])
+    assert payload["preflight"] == stack_preflight
+    assert (
+        json.loads((handle.dir / "preflight.json").read_text(encoding="utf-8")) == stack_preflight
+    )
     saved = handle.load_lineages()
     assert len(saved) == 1
     assert saved[0].state.value == "FIXED_IN"
@@ -408,6 +477,14 @@ def test_stack_review_accepts_non_monotonic_manifest_order(
     )
     monkeypatch.setattr(cli_module, "_execute_pipeline", fake_pipeline)
     monkeypatch.setattr(cli_module, "adjudicate_presence", fake_presence)
+    monkeypatch.setattr(
+        cli_module,
+        "_stack_discovery_preflight",
+        lambda **kwargs: stack_discovery_plan(
+            members,
+            preflight_payload(lanes=2, replicas=1, chunks=1, initial_runs=2),
+        ),
+    )
 
     result = runner.invoke(
         cli_module.app,
@@ -455,6 +532,14 @@ def test_stack_review_announces_run_id_before_member_failure(
         lambda member, **kwargs: target_for(member.number),
     )
     monkeypatch.setattr(cli_module, "_execute_pipeline", failed_pipeline)
+    monkeypatch.setattr(
+        cli_module,
+        "_stack_discovery_preflight",
+        lambda **kwargs: stack_discovery_plan(
+            members,
+            preflight_payload(lanes=2, replicas=1, chunks=1, initial_runs=2),
+        ),
+    )
 
     result = runner.invoke(
         cli_module.app,
@@ -473,6 +558,104 @@ def test_stack_review_announces_run_id_before_member_failure(
     assert result.exit_code == 3
     assert "stack run id: rvw-stack-" in result.stdout
     assert "scripted member failure" in result.stderr
+
+
+def test_stack_review_rejects_a_degraded_member_before_recording_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    members = valid_members()[:2]
+
+    def fake_checkout(**kwargs: object) -> Path:
+        destination = kwargs["destination"]
+        assert isinstance(destination, Path)
+        destination.mkdir(parents=True)
+        return destination
+
+    async def degraded_pipeline(**kwargs: object) -> PipelineArtifacts:
+        target = kwargs["resolved_target"]
+        assert isinstance(target, ResolvedTarget)
+        assert target.pr_number is not None
+        return pipeline_artifacts(
+            tmp_path,
+            target.pr_number,
+            members=members,
+            status=ReviewStatus.DEGRADED,
+        )
+
+    async def unexpected_presence(*args: object, **kwargs: object) -> PresenceOutcome:
+        del args, kwargs
+        raise AssertionError("presence recheck must not run after a degraded member")
+
+    monkeypatch.setattr(cli_module, "resolve_stack", lambda *args, **kwargs: members)
+    monkeypatch.setattr(cli_module, "provision_checkout", fake_checkout)
+    monkeypatch.setattr(
+        cli_module,
+        "resolved_target_for_member",
+        lambda member, **kwargs: target_for(member.number, members=members),
+    )
+    monkeypatch.setattr(cli_module, "_execute_pipeline", degraded_pipeline)
+    monkeypatch.setattr(cli_module, "adjudicate_presence", unexpected_presence)
+    monkeypatch.setattr(
+        cli_module,
+        "_stack_discovery_preflight",
+        lambda **kwargs: stack_discovery_plan(
+            members,
+            preflight_payload(lanes=1, replicas=1, chunks=1, initial_runs=1),
+        ),
+    )
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "stack",
+            "review",
+            "--prs",
+            "1,2",
+            "--out",
+            str(tmp_path),
+            "--allow-heavy-discovery",
+        ],
+    )
+
+    assert result.exit_code == 3
+    assert "incomplete review status: degraded" in result.stderr
+    stack_dir = next(tmp_path.glob("rvw-stack-*"))
+    handle = StackStore(tmp_path).open(stack_dir.name)
+    assert handle.load_member_runs() == []
+    assert not (stack_dir / "stack-report.md").exists()
+
+
+def test_stack_review_rejection_does_not_create_a_partial_stack_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    members = valid_members()[:2]
+    preflight = DiscoveryPreflight(
+        lanes=2,
+        replicas=1,
+        chunks=1,
+        initial_runs=2,
+        retry_upper_bound=4,
+        initial_prompt_characters=2,
+        max_discovery_runs=12,
+        runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+        heavy_discovery_reasons=("reasoning_effort=max",),
+    )
+
+    def reject_for_cost(**kwargs: object) -> cli_module._StackDiscoveryPlan:
+        del kwargs
+        raise DiscoveryCostError(preflight)
+
+    monkeypatch.setattr(cli_module, "resolve_stack", lambda *args, **kwargs: members)
+    monkeypatch.setattr(cli_module, "_stack_discovery_preflight", reject_for_cost)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["stack", "review", "--prs", "1,2", "--out", str(tmp_path), "--json"],
+    )
+
+    assert result.exit_code == cli_module.EXIT_USER_ERROR
+    assert json.loads(result.stdout)["error"] == "heavy-discovery-acknowledgement-required"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_stack_publish_dry_run_has_no_network_or_revalidation(

@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+import rvw.pipeline as pipeline_module
+from rvw.discover import DiscoverResult, DiscoveryPlan, plan_discovery
+from rvw.discovery_cost import DiscoveryCostError
 from rvw.dispatch import DEFAULT_DEADLINE_SECONDS
+from rvw.lane import load_lane
 from rvw.pipeline import execute_pipeline
+from rvw.registry import Registry
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
+from rvw.schema import Tier
 from rvw.target import ResolvedTarget
 
 
@@ -71,3 +78,160 @@ async def test_execute_pipeline_validates_both_replica_counts_before_creating_a_
         )
 
     assert not (tmp_path / "runs").exists()
+
+
+async def test_execute_pipeline_rejects_unacknowledged_heavy_discovery_before_run(
+    tmp_path: Path,
+) -> None:
+    unused: Any = None
+    lanes_root = tmp_path / "lanes"
+    lane_path = lanes_root / "base" / "quality.md"
+    lane_path.parent.mkdir(parents=True)
+    lane_path.write_text(
+        """---
+lane: quality
+tier: base
+cost: light
+rules:
+  - quality/rule
+---
+
+Review the diff.
+""",
+        encoding="utf-8",
+    )
+    registry = Registry.model_validate(
+        {"layers": [{"id": "base", "tier": "base", "lanes": ["quality"]}]}
+    )
+
+    with pytest.raises(DiscoveryCostError, match="allow-heavy-discovery"):
+        await execute_pipeline(
+            registry=registry,
+            lanes_root=lanes_root,
+            target=target(),
+            active_lanes=[],
+            runtime=unused,
+            adjudicator=unused,
+            repo_dir=None,
+            discover_replicas=1,
+            adjudicate_replicas=1,
+            concurrency=1,
+            out_root=tmp_path / "runs",
+            pause=False,
+            dynamic_brief=None,
+            max_discovery_runs=12,
+            allow_heavy_discovery=False,
+            runtime_policy=DEFAULT_CODEX_RUNTIME_POLICY,
+        )
+
+    assert not (tmp_path / "runs").exists()
+
+
+async def test_execute_pipeline_rejects_a_planned_replica_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    unused: Any = None
+    lanes_root = tmp_path / "lanes"
+    lane_path = lanes_root / "base" / "quality.md"
+    lane_path.parent.mkdir(parents=True)
+    lane_path.write_text(
+        """---
+lane: quality
+tier: base
+cost: light
+rules:
+  - quality/rule
+---
+
+Review the diff.
+""",
+        encoding="utf-8",
+    )
+    registry = Registry.model_validate(
+        {"layers": [{"id": "base", "tier": "base", "lanes": ["quality"]}]}
+    )
+    planned = plan_discovery(
+        registry=registry,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=2,
+    )
+
+    with pytest.raises(ValueError, match=r"planned discovery replicas .* must match"):
+        await execute_pipeline(
+            registry=registry,
+            lanes_root=lanes_root,
+            target=target(),
+            active_lanes=[],
+            runtime=unused,
+            adjudicator=unused,
+            repo_dir=None,
+            discover_replicas=1,
+            adjudicate_replicas=1,
+            concurrency=1,
+            out_root=tmp_path / "runs",
+            pause=False,
+            dynamic_brief=None,
+            planned_discovery=planned,
+            allow_heavy_discovery=True,
+        )
+
+    assert not (tmp_path / "runs").exists()
+
+
+async def test_execute_pipeline_plans_only_the_supplied_active_lanes_and_persists_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    for lane_id in ("selected", "outside-scope"):
+        path = lanes_root / "base" / f"{lane_id}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"""---
+lane: {lane_id}
+tier: base
+cost: light
+rules:
+  - {lane_id}/rule
+---
+
+Review the diff.
+""",
+            encoding="utf-8",
+        )
+    registry = Registry.model_validate(
+        {"layers": [{"id": "base", "tier": "base", "lanes": ["selected", "outside-scope"]}]}
+    )
+    observed_lanes: list[str] = []
+    unused: Any = None
+
+    async def fake_discover(**kwargs: object) -> DiscoverResult:
+        plan = cast(DiscoveryPlan, kwargs["planned"])
+        observed_lanes.extend(lane.id for lane in plan.lanes)
+        return DiscoverResult(lane_results={}, findings=[], coverage=[], budget=plan.budget)
+
+    monkeypatch.setattr(pipeline_module, "discover", fake_discover)
+    selected = load_lane(lanes_root / Tier.BASE.value / "selected.md")
+
+    artifacts = await execute_pipeline(
+        registry=registry,
+        lanes_root=lanes_root,
+        target=target(),
+        active_lanes=[selected],
+        runtime=unused,
+        adjudicator=unused,
+        repo_dir=None,
+        discover_replicas=1,
+        adjudicate_replicas=1,
+        concurrency=1,
+        out_root=tmp_path / "runs",
+        pause=False,
+        dynamic_brief=None,
+        allow_heavy_discovery=True,
+    )
+
+    assert observed_lanes == ["selected"]
+    assert artifacts is not None
+    assert artifacts.preflight is not None
+    assert artifacts.preflight["initial_runs"] == 1
+    assert artifacts.run.load_preflight() == artifacts.preflight

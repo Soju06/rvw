@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from rvw.discovery_cost import validate_discovery_preflight_payload
 from rvw.stack import FindingLineage, MemberRunRef, StackManifest, verify_lineages
 
 
@@ -90,6 +91,14 @@ class StackRunHandle:
     def load_manifest(self) -> StackManifest:
         return StackManifest.model_validate_json(
             _read_text(self.dir / "stack-manifest.json", "manifest")
+        )
+
+    def save_preflight(self, preflight: dict[str, object]) -> None:
+        _write_json(self.dir / "preflight.json", validate_discovery_preflight_payload(preflight))
+
+    def load_preflight(self) -> dict[str, object]:
+        return validate_discovery_preflight_payload(
+            json.loads(_read_text(self.dir / "preflight.json", "preflight"))
         )
 
     def save_member_runs(self, members: list[MemberRunRef]) -> None:
