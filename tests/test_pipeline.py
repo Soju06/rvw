@@ -353,3 +353,127 @@ Review the diff.
 
     assert artifacts is not None
     assert artifacts.run.run_id == resumed_run.run_id
+
+
+async def test_execute_pipeline_resume_consumes_interrupted_started_attempt(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    lane_path = lanes_root / "base" / "quality.md"
+    lane_path.parent.mkdir(parents=True)
+    lane_path.write_text(
+        """---
+lane: quality
+tier: base
+cost: light
+rules:
+  - quality/rule
+---
+
+Review the diff.
+""",
+        encoding="utf-8",
+    )
+    registry = Registry.model_validate(
+        {"layers": [{"id": "base", "tier": "base", "lanes": ["quality"]}]}
+    )
+    selected = load_lane(lane_path)
+    plan = plan_discovery(
+        registry=registry,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=1,
+    )
+    first_calls: list[Path] = []
+
+    class InterruptedRuntime:
+        name = "interrupted"
+
+        async def execute(
+            self,
+            *,
+            lane: object,
+            prompt: str,
+            run_dir: Path,
+            deadline_seconds: int,
+        ) -> RunResult:
+            del lane, prompt, deadline_seconds
+            first_calls.append(run_dir)
+            raise RuntimeError("interrupted after start")
+
+    with pytest.raises(RuntimeError, match="interrupted after start"):
+        await execute_pipeline(
+            registry=registry,
+            lanes_root=lanes_root,
+            target=target(),
+            active_lanes=[selected],
+            runtime=cast(Any, InterruptedRuntime()),
+            adjudicator=cast(Any, None),
+            repo_dir=None,
+            discover_replicas=1,
+            adjudicate_replicas=1,
+            concurrency=1,
+            deadline_seconds=600,
+            out_root=tmp_path / "runs",
+            pause=False,
+            dynamic_brief=None,
+            planned_discovery=plan,
+            allow_heavy_discovery=True,
+        )
+
+    run = pipeline_module.RunStore(tmp_path / "runs").open(next((tmp_path / "runs").iterdir()).name)
+    assert first_calls == [run.dir / "discover-runtime" / "quality" / "r1"]
+    assert run.load_incomplete_discovery_attempts() == {("quality", 1, 1)}
+
+    second_calls: list[Path] = []
+
+    class ResumedRuntime:
+        name = "resumed"
+
+        async def execute(
+            self,
+            *,
+            lane: object,
+            prompt: str,
+            run_dir: Path,
+            deadline_seconds: int,
+        ) -> RunResult:
+            del prompt, deadline_seconds
+            second_calls.append(run_dir)
+            lane_id = cast(Any, lane).id
+            return RunResult(
+                lane_id=lane_id,
+                replica=1,
+                status=RunStatus.VALID,
+                output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+                invalid_reason=None,
+                wall_seconds=0,
+                artifact_dir=run_dir,
+            )
+
+    artifacts = await execute_pipeline(
+        registry=registry,
+        lanes_root=lanes_root,
+        target=target(),
+        active_lanes=plan.lanes,
+        runtime=cast(Any, ResumedRuntime()),
+        adjudicator=cast(Any, None),
+        repo_dir=None,
+        discover_replicas=1,
+        adjudicate_replicas=1,
+        concurrency=1,
+        deadline_seconds=600,
+        out_root=tmp_path / "runs",
+        pause=False,
+        dynamic_brief=None,
+        planned_discovery=plan,
+        allow_heavy_discovery=True,
+        resume_run=run,
+    )
+
+    assert artifacts is not None
+    assert second_calls == [run.dir / "discover-runtime" / "quality" / "resume" / "a2" / "r1"]
+    assert [attempt.valid for attempt in artifacts.discovered.coverage[0].runs[0].attempts] == [
+        False,
+        True,
+    ]

@@ -164,11 +164,16 @@ and legacy discovery artifacts continue to load with empty attempt history.
 
 ### Requirement: Compatible discovery resume preserves attempts
 
-Discovery resume MUST persist the exact discovery plan, execution settings, and
-each completed result before continuing. `rvw run --run <id>` MUST reuse only
-the persisted plan's lane, replica, and chunk identities, retain each identity's
-ordered attempt history, must not dispatch a third attempt, and MUST write any
-new resumed execution to an artifact directory distinct from prior attempts.
+Discovery resume MUST persist the exact discovery plan and execution settings.
+Before invoking a runtime, it MUST durably record the lane, replica, chunk,
+attempt ordinal, and artifact directory; completion MUST fill that same attempt
+record with its result. `rvw run --run <id>` MUST reuse only the persisted
+plan's identities, retain each identity's ordered attempt history, count an
+interrupted started attempt against the two-attempt limit, must not dispatch a
+third attempt, and MUST write any resumed execution to an artifact directory
+distinct from prior attempts. On resume, it MUST persist every started attempt
+without a result as `interrupted_before_result` before deciding whether another
+attempt is allowed.
 
 #### Scenario: Interrupted review reuses persisted valid work
 
@@ -179,6 +184,11 @@ new resumed execution to an artifact directory distinct from prior attempts.
 
 - **WHEN** a review is interrupted and the lane registry or operator brief later changes
 - **THEN** `rvw run --run <id>` continues with the persisted plan rather than mixing results from a newly built prompt
+
+#### Scenario: Interruption follows a started attempt without a result
+
+- **WHEN** a runtime attempt starts but the review process stops before its result is persisted
+- **THEN** `rvw run --run <id>` records that attempt as interrupted, dispatches at most one distinct second attempt, and never dispatches a third attempt for that identity
 
 #### Scenario: Resume preserves a partially completed replacement wave
 

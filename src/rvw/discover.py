@@ -32,6 +32,8 @@ from rvw.runtimes import (
 from rvw.schema import Finding, Tier
 from rvw.target import ResolvedTarget
 
+INTERRUPTED_ATTEMPT_REASON = "interrupted_before_result"
+
 
 class EnrichedFinding(Finding):
     """A runtime finding attributed to its lane and replica."""
@@ -328,9 +330,11 @@ async def discover(
     planned: DiscoveryPlan | None = None,
     completed_results: Mapping[tuple[str, int, int], RunResult] | None = None,
     prior_attempts: Mapping[tuple[str, int, int], Sequence[RunResult]] | None = None,
+    prior_incomplete_keys: set[tuple[str, int, int]] | None = None,
     prior_retry_keys: set[tuple[str, int, int]] | None = None,
     prior_retry_lane_chunks: set[tuple[str, int]] | None = None,
     on_progress: Callable[[RunResult], None] | None = None,
+    on_attempt_started: Callable[[PlannedRun, int, Path], None] | None = None,
 ) -> DiscoverResult:
     """Run all activated lanes in one dispatch call and enrich valid findings."""
 
@@ -354,6 +358,7 @@ async def discover(
         for key, attempts in (prior_attempts or {}).items()
         if key in planned_keys
     }
+    incomplete_keys = set(prior_incomplete_keys or ()) & planned_keys
     reusable = {
         key: result for key, result in (completed_results or {}).items() if key in planned_keys
     }
@@ -366,11 +371,23 @@ async def discover(
         for key, attempts in attempt_history.items()
         if attempts and key not in reusable
     }
+    resumable_incomplete_keys = {
+        key
+        for key, attempts in attempt_history.items()
+        if len(attempts) < 2
+        and (
+            key in incomplete_keys
+            or (attempts and attempts[-1].invalid_reason == INTERRUPTED_ATTEMPT_REASON)
+        )
+    }
     initial_pending_runs = [
         run
         for run in plan.runs
         if (run.lane.id, run.replica, run.chunk) not in reusable
-        and (run.lane.id, run.replica, run.chunk) not in prior_final
+        and (
+            (run.lane.id, run.replica, run.chunk) not in prior_final
+            or (run.lane.id, run.replica, run.chunk) in resumable_incomplete_keys
+        )
     ]
     all_lane_chunks = {(run.lane.id, run.chunk) for run in plan.runs}
     initial_dispatched = await dispatch_outcome(
@@ -381,7 +398,15 @@ async def discover(
         deadline_seconds=deadline_seconds,
         host_gate=host_gate,
         on_progress=on_progress,
+        on_attempt_started=on_attempt_started,
         prior_retry_lane_chunks=all_lane_chunks,
+        attempt_numbers_by_key={
+            (run.lane.id, run.replica, run.chunk): len(
+                attempt_history.get((run.lane.id, run.replica, run.chunk), ())
+            )
+            + 1
+            for run in initial_pending_runs
+        },
     )
     initial_by_key = dict(initial_dispatched.initial_by_key)
     initial_result_keys = {
@@ -404,6 +429,7 @@ async def discover(
     retries_already_run = (
         set(prior_retry_keys or ())
         | {key for key, attempts in attempt_history.items() if len(attempts) > 1}
+        | {key for key in initial_result_keys if len(attempt_history.get(key, ())) > 0}
     ) & planned_keys
     legacy_retry_lane_chunks = set(prior_retry_lane_chunks or ())
     retry_runs_by_lane_chunk: dict[tuple[str, int], list[PlannedRun]] = {}
@@ -470,6 +496,7 @@ async def discover(
             deadline_seconds=deadline_seconds,
             host_gate=host_gate,
             on_progress=on_progress,
+            on_attempt_started=on_attempt_started,
             prior_retry_lane_chunks=all_lane_chunks,
             attempt_numbers_by_key=retry_attempt_numbers,
             resume_retry_feedback_by_lane_chunk=retry_feedback,
@@ -565,6 +592,7 @@ async def discover(
 
 
 __all__: list[str] = [
+    "INTERRUPTED_ATTEMPT_REASON",
     "DiscoverResult",
     "DiscoveryPlan",
     "EnrichedFinding",

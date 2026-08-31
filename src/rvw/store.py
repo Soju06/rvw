@@ -17,7 +17,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport, DiffChunk
-from rvw.discover import DiscoverResult, DiscoveryPlan, EnrichedFinding, LaneCoverage
+from rvw.discover import (
+    INTERRUPTED_ATTEMPT_REASON,
+    DiscoverResult,
+    DiscoveryPlan,
+    EnrichedFinding,
+    LaneCoverage,
+)
 from rvw.discovery_cost import validate_discovery_preflight_payload
 from rvw.dispatch import PlannedRun
 from rvw.lane import Lane
@@ -206,22 +212,96 @@ class _StoredDiscoveryResult(BaseModel):
         )
 
 
+class _StoredDiscoveryAttempt(BaseModel):
+    """Durable start marker and optional completion for one runtime call."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lane_id: str
+    replica: int = Field(ge=1)
+    chunk: int = Field(ge=1)
+    attempt: int = Field(ge=1)
+    artifact_dir: Path
+    result: _StoredDiscoveryResult | None = None
+
+    @model_validator(mode="after")
+    def _result_must_match_started_identity(self) -> _StoredDiscoveryAttempt:
+        if self.result is not None and (
+            self.result.lane_id != self.lane_id
+            or self.result.replica != self.replica
+            or self.result.chunk != self.chunk
+            or self.result.artifact_dir != self.artifact_dir
+        ):
+            raise ValueError("discovery attempt result must match its started identity")
+        return self
+
+
 class _DiscoveryProgress(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    results: list[_StoredDiscoveryResult] = Field(default_factory=list)
+    attempts: list[_StoredDiscoveryAttempt] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_completed_results(cls, value: Any) -> Any:
+        """Load the prior completed-result-only artifact as completed attempts."""
+
+        if not isinstance(value, dict) or "attempts" in value or "results" not in value:
+            return value
+        migrated = dict(value)
+        counts: dict[tuple[str, int, int], int] = {}
+        attempts: list[dict[str, Any]] = []
+        for result in migrated.pop("results"):
+            key = (result["lane_id"], result["replica"], result["chunk"])
+            attempt = counts.get(key, 0) + 1
+            counts[key] = attempt
+            attempts.append(
+                {
+                    "lane_id": key[0],
+                    "replica": key[1],
+                    "chunk": key[2],
+                    "attempt": attempt,
+                    "artifact_dir": result["artifact_dir"],
+                    "result": result,
+                }
+            )
+        migrated["attempts"] = attempts
+        return migrated
 
     @model_validator(mode="after")
     def _attempts_are_bounded_and_ordered(self) -> _DiscoveryProgress:
-        histories: dict[tuple[str, int, int], list[_StoredDiscoveryResult]] = {}
-        for result in self.results:
-            histories.setdefault((result.lane_id, result.replica, result.chunk), []).append(result)
+        histories: dict[tuple[str, int, int], list[_StoredDiscoveryAttempt]] = {}
+        for attempt in self.attempts:
+            histories.setdefault((attempt.lane_id, attempt.replica, attempt.chunk), []).append(
+                attempt
+            )
         for history in histories.values():
             if len(history) > 2:
                 raise ValueError("discovery progress cannot contain more than two attempts")
-            if len(history) == 2 and history[0].status is RunStatus.VALID:
+            if [attempt.attempt for attempt in history] != list(range(1, len(history) + 1)):
+                raise ValueError("discovery attempt numbers must be ordered from one")
+            if (
+                len(history) == 2
+                and history[0].result is not None
+                and history[0].result.status is RunStatus.VALID
+            ):
                 raise ValueError("valid discovery results cannot have a replacement attempt")
+            if any(attempt.result is None for attempt in history[:-1]):
+                raise ValueError("only the latest discovery attempt may be incomplete")
         return self
+
+
+def _interrupted_result(attempt: _StoredDiscoveryAttempt) -> _StoredDiscoveryResult:
+    return _StoredDiscoveryResult(
+        lane_id=attempt.lane_id,
+        replica=attempt.replica,
+        chunk=attempt.chunk,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason=INTERRUPTED_ATTEMPT_REASON,
+        wall_seconds=0,
+        artifact_dir=attempt.artifact_dir,
+    )
 
 
 class _ExecutionConfig(BaseModel):
@@ -418,16 +498,117 @@ class RunHandle:
         raw = self._load_contained_json("execution.json", "execution")
         return _ExecutionConfig.model_validate(raw).model_dump()
 
-    def append_discovery_progress(self, result: RunResult[RuntimeLaneOutput]) -> None:
+    def _load_discovery_progress_artifact(self) -> _DiscoveryProgress:
         try:
             raw = self._load_contained_json("discovery-progress.json", "discovery-progress")
         except StageMissing:
-            progress = _DiscoveryProgress()
-        else:
-            progress = _DiscoveryProgress.model_validate(raw)
+            return _DiscoveryProgress()
+        return _DiscoveryProgress.model_validate(raw)
+
+    def append_discovery_attempt_started(
+        self,
+        lane_id: str,
+        replica: int,
+        chunk: int,
+        attempt: int,
+        artifact_dir: Path,
+    ) -> None:
+        progress = self._load_discovery_progress_artifact()
+        key = (lane_id, replica, chunk)
+        history = [
+            item for item in progress.attempts if (item.lane_id, item.replica, item.chunk) == key
+        ]
+        if attempt != len(history) + 1:
+            raise ValueError("discovery attempt start must use the next attempt number")
+        attempts = list(progress.attempts)
+        if history and history[-1].result is None:
+            previous = history[-1]
+            previous_index = attempts.index(previous)
+            attempts[previous_index] = previous.model_copy(
+                update={"result": _interrupted_result(previous)}
+            )
         updated = _DiscoveryProgress(
-            results=[*progress.results, _StoredDiscoveryResult.from_result(result)]
+            attempts=[
+                *attempts,
+                _StoredDiscoveryAttempt(
+                    lane_id=lane_id,
+                    replica=replica,
+                    chunk=chunk,
+                    attempt=attempt,
+                    artifact_dir=artifact_dir,
+                ),
+            ]
         )
+        _write_json(self.dir / "discovery-progress.json", updated.model_dump(mode="json"))
+
+    def finalize_incomplete_discovery_attempts(self) -> set[tuple[str, int, int]]:
+        """Persist started attempts left without a runtime result as interrupted."""
+
+        progress = self._load_discovery_progress_artifact()
+        incomplete_keys = {
+            (attempt.lane_id, attempt.replica, attempt.chunk)
+            for attempt in progress.attempts
+            if attempt.result is None
+        }
+        if not incomplete_keys:
+            return set()
+        updated = _DiscoveryProgress(
+            attempts=[
+                attempt
+                if attempt.result is not None
+                else attempt.model_copy(update={"result": _interrupted_result(attempt)})
+                for attempt in progress.attempts
+            ]
+        )
+        _write_json(self.dir / "discovery-progress.json", updated.model_dump(mode="json"))
+        return incomplete_keys
+
+    def append_discovery_progress(self, result: RunResult[RuntimeLaneOutput]) -> None:
+        progress = self._load_discovery_progress_artifact()
+        stored_result = _StoredDiscoveryResult.from_result(result)
+        matching_indices = [
+            index
+            for index, attempt in enumerate(progress.attempts)
+            if (
+                attempt.lane_id,
+                attempt.replica,
+                attempt.chunk,
+                attempt.artifact_dir,
+            )
+            == (result.lane_id, result.replica, result.chunk, result.artifact_dir)
+        ]
+        if matching_indices:
+            if len(matching_indices) != 1:
+                raise ValueError("discovery attempt completion is ambiguous")
+            index = matching_indices[0]
+            existing = progress.attempts[index]
+            if existing.result is not None:
+                if existing.result == stored_result:
+                    return
+                raise ValueError("discovery attempt already has a different result")
+            attempts = list(progress.attempts)
+            attempts[index] = existing.model_copy(update={"result": stored_result})
+            updated = _DiscoveryProgress(attempts=attempts)
+        else:
+            key = (result.lane_id, result.replica, result.chunk)
+            history = [
+                attempt
+                for attempt in progress.attempts
+                if (attempt.lane_id, attempt.replica, attempt.chunk) == key
+            ]
+            updated = _DiscoveryProgress(
+                attempts=[
+                    *progress.attempts,
+                    _StoredDiscoveryAttempt(
+                        lane_id=result.lane_id,
+                        replica=result.replica,
+                        chunk=result.chunk,
+                        attempt=len(history) + 1,
+                        artifact_dir=result.artifact_dir,
+                        result=stored_result,
+                    ),
+                ]
+            )
         _write_json(self.dir / "discovery-progress.json", updated.model_dump(mode="json"))
 
     def load_discovery_progress(
@@ -436,10 +617,32 @@ class RunHandle:
         raw = self._load_contained_json("discovery-progress.json", "discovery-progress")
         progress = _DiscoveryProgress.model_validate(raw)
         histories: dict[tuple[str, int, int], list[RunResult[RuntimeLaneOutput]]] = {}
-        for stored in progress.results:
-            result = stored.to_result()
+        for attempt in progress.attempts:
+            result = (
+                attempt.result.to_result()
+                if attempt.result is not None
+                else RunResult(
+                    lane_id=attempt.lane_id,
+                    replica=attempt.replica,
+                    chunk=attempt.chunk,
+                    status=RunStatus.INVALID,
+                    output=None,
+                    invalid_reason=INTERRUPTED_ATTEMPT_REASON,
+                    wall_seconds=0,
+                    artifact_dir=attempt.artifact_dir,
+                )
+            )
             histories.setdefault((result.lane_id, result.replica, result.chunk), []).append(result)
         return histories
+
+    def load_incomplete_discovery_attempts(self) -> set[tuple[str, int, int]]:
+        raw = self._load_contained_json("discovery-progress.json", "discovery-progress")
+        progress = _DiscoveryProgress.model_validate(raw)
+        return {
+            (attempt.lane_id, attempt.replica, attempt.chunk)
+            for attempt in progress.attempts
+            if attempt.result is None
+        }
 
     def save_discover(self, discovered: DiscoverResult) -> None:
         _write_json(

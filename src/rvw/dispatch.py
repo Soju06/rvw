@@ -57,6 +57,7 @@ async def dispatch_outcome(
     concurrency: int = DEFAULT_CONCURRENCY,
     deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     on_progress: Callable[[RunResult], None] | None = None,
+    on_attempt_started: Callable[[PlannedRun, int, Path], None] | None = None,
     host_gate: HostSlotGate | None = None,
     prior_valid_lane_chunks: set[tuple[str, int]] | None = None,
     prior_retry_lane_chunks: set[tuple[str, int]] | None = None,
@@ -79,14 +80,14 @@ async def dispatch_outcome(
         attempt_number: int = 1,
     ) -> RunResult:
         async with semaphore:
+            if attempt_number > 2:
+                raise ValueError("discovery attempts must not exceed two per identity")
             lane_slug = run.lane.id.replace("/", "--")
             lane_dir = out_root / lane_slug
             if run.chunk_count > 1:
                 lane_dir /= f"c{run.chunk}"
             if retry_feedback is not None:
                 lane_dir /= "retry"
-                if attempt_number > 2:
-                    lane_dir /= f"a{attempt_number}"
             elif attempt_number > 1:
                 lane_dir /= "resume"
                 lane_dir /= f"a{attempt_number}"
@@ -94,6 +95,8 @@ async def dispatch_outcome(
             run_dir.mkdir(parents=True, exist_ok=True)
             prompt = run.prompt if retry_feedback is None else f"{run.prompt}\n\n{retry_feedback}"
             async with host_slot(host_gate):
+                if on_attempt_started is not None:
+                    on_attempt_started(run, attempt_number, run_dir)
                 result = replace(
                     await runtime.execute(
                         lane=run.lane,
@@ -203,6 +206,7 @@ async def dispatch(
     concurrency: int = DEFAULT_CONCURRENCY,
     deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     on_progress: Callable[[RunResult], None] | None = None,
+    on_attempt_started: Callable[[PlannedRun, int, Path], None] | None = None,
     host_gate: HostSlotGate | None = None,
 ) -> list[RunResult]:
     """Dispatch all planned runs and return only each identity's final result."""
@@ -214,6 +218,7 @@ async def dispatch(
         concurrency=concurrency,
         deadline_seconds=deadline_seconds,
         on_progress=on_progress,
+        on_attempt_started=on_attempt_started,
         host_gate=host_gate,
     )
     return outcome.results

@@ -201,8 +201,12 @@ async def execute_pipeline(
         on_warning(warning)
     try:
         prior_attempts = run.load_discovery_progress()
+        prior_incomplete_keys = run.load_incomplete_discovery_attempts()
+        if prior_incomplete_keys:
+            run.finalize_incomplete_discovery_attempts()
     except StageMissing:
         prior_attempts = {}
+        prior_incomplete_keys = set()
     discovered = await discover(
         registry=registry,
         lanes_root=lanes_root,
@@ -217,7 +221,17 @@ async def execute_pipeline(
         host_gate=host_gate,
         planned=plan,
         prior_attempts=prior_attempts,
+        prior_incomplete_keys=prior_incomplete_keys,
         on_progress=run.append_discovery_progress,
+        on_attempt_started=lambda planned_run, attempt, artifact_dir: (
+            run.append_discovery_attempt_started(
+                planned_run.lane.id,
+                planned_run.replica,
+                planned_run.chunk,
+                attempt,
+                artifact_dir,
+            )
+        ),
     )
     run.save_discover(discovered)
     build = run.load_summary().build

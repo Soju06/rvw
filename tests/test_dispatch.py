@@ -410,16 +410,47 @@ async def test_prior_retry_lane_chunk_prevents_another_replacement_wave(tmp_path
         invalid_reasons={lane.id: ["schema-invalid"]},
     )
 
-    await dispatch_outcome(
-        [planned(lane)],
-        runtime,
-        out_root=tmp_path,
-        prior_retry_lane_chunks={(lane.id, 1)},
-        attempt_numbers_by_key={(lane.id, 1, 1): 3},
-    )
+    with pytest.raises(ValueError, match="must not exceed two"):
+        await dispatch_outcome(
+            [planned(lane)],
+            runtime,
+            out_root=tmp_path,
+            prior_retry_lane_chunks={(lane.id, 1)},
+            attempt_numbers_by_key={(lane.id, 1, 1): 3},
+        )
 
-    assert runtime.calls_for(lane.id) == 1
-    assert runtime.run_dirs == [tmp_path / lane.id / "resume" / "a3" / "r1"]
+    assert runtime.calls_for(lane.id) == 0
+
+
+async def test_dispatch_records_attempt_before_calling_runtime(tmp_path: Path) -> None:
+    lane = make_lane("started")
+    starts: list[tuple[str, int, Path]] = []
+
+    class StartedRuntime(FakeRuntime):
+        async def execute(
+            self,
+            *,
+            lane: Lane,
+            prompt: str,
+            run_dir: Path,
+            deadline_seconds: int,
+        ) -> RunResult:
+            assert starts == [(lane.id, 1, run_dir)]
+            return await super().execute(
+                lane=lane,
+                prompt=prompt,
+                run_dir=run_dir,
+                deadline_seconds=deadline_seconds,
+            )
+
+    await dispatch(
+        [planned(lane)],
+        StartedRuntime(),
+        out_root=tmp_path,
+        on_attempt_started=lambda run, attempt, run_dir: starts.append(
+            (run.lane.id, attempt, run_dir)
+        ),
+    )
 
 
 async def test_resumed_attempt_uses_a_distinct_artifact_directory(tmp_path: Path) -> None:

@@ -12,11 +12,18 @@ from pydantic import ValidationError
 import rvw.store as store_module
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport, DiffChunkPlacement
-from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage, RunCoverage
+from rvw.discover import (
+    INTERRUPTED_ATTEMPT_REASON,
+    DiscoverResult,
+    EnrichedFinding,
+    LaneCoverage,
+    RunCoverage,
+)
 from rvw.discovery_cost import DiscoveryPreflight, validate_discovery_preflight_payload
 from rvw.merge import merge
 from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
-from rvw.schema import Tier, Verdict
+from rvw.runtimes import RunResult, RunStatus
+from rvw.schema import RuntimeLaneOutput, Tier, Verdict
 from rvw.store import _SAFE_RUN_ID, InvalidRunId, RunHandle, RunNotFound, RunStore, StageMissing
 from rvw.target import ResolvedTarget
 
@@ -186,6 +193,62 @@ def test_load_discover_without_attempts_uses_empty_legacy_history(tmp_path: Path
     discovered = RunHandle(run_id="legacy-run", dir=run_dir).load_discover()
 
     assert discovered.coverage[0].runs[0].attempts == []
+
+
+def test_discovery_progress_persists_started_attempt_before_completion(tmp_path: Path) -> None:
+    run = RunStore(tmp_path).create(target_fixture())
+    key = ("quality", 1, 1)
+    artifact_dir = run.dir / "discover-runtime" / "quality" / "r1"
+
+    run.append_discovery_attempt_started(*key, 1, artifact_dir)
+
+    interrupted = run.load_discovery_progress()
+    assert interrupted[key][0].invalid_reason == INTERRUPTED_ATTEMPT_REASON
+    assert run.load_incomplete_discovery_attempts() == {key}
+
+    completed = RunResult(
+        lane_id="quality",
+        replica=1,
+        chunk=1,
+        status=RunStatus.VALID,
+        output=RuntimeLaneOutput(verdict="PASS", findings=[]),
+        invalid_reason=None,
+        wall_seconds=1,
+        artifact_dir=artifact_dir,
+    )
+    run.append_discovery_progress(completed)
+
+    assert run.load_discovery_progress() == {key: [completed]}
+    assert run.load_incomplete_discovery_attempts() == set()
+
+
+def test_starting_second_attempt_finalizes_interrupted_first_attempt(tmp_path: Path) -> None:
+    run = RunStore(tmp_path).create(target_fixture())
+    key = ("quality", 1, 1)
+    first_dir = run.dir / "discover-runtime" / "quality" / "r1"
+    second_dir = run.dir / "discover-runtime" / "quality" / "resume" / "a2" / "r1"
+
+    run.append_discovery_attempt_started(*key, 1, first_dir)
+    run.append_discovery_attempt_started(*key, 2, second_dir)
+
+    persisted = json.loads((run.dir / "discovery-progress.json").read_text(encoding="utf-8"))
+    attempts = persisted["attempts"]
+    assert attempts[0]["result"]["invalid_reason"] == INTERRUPTED_ATTEMPT_REASON
+    assert attempts[1]["result"] is None
+    assert [item["artifact_dir"] for item in attempts] == [str(first_dir), str(second_dir)]
+    assert run.load_incomplete_discovery_attempts() == {key}
+
+
+def test_finalize_incomplete_discovery_attempts_persists_interrupted_result(tmp_path: Path) -> None:
+    run = RunStore(tmp_path).create(target_fixture())
+    key = ("quality", 1, 1)
+    artifact_dir = run.dir / "discover-runtime" / "quality" / "r1"
+    run.append_discovery_attempt_started(*key, 1, artifact_dir)
+
+    assert run.finalize_incomplete_discovery_attempts() == {key}
+
+    assert run.load_discovery_progress()[key][0].invalid_reason == INTERRUPTED_ATTEMPT_REASON
+    assert run.load_incomplete_discovery_attempts() == set()
 
 
 def test_preflight_round_trip_rejects_malformed_or_inconsistent_payloads(tmp_path: Path) -> None:

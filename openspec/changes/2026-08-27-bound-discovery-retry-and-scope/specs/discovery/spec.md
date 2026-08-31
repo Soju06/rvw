@@ -2,10 +2,14 @@
 
 ### Requirement: Interrupted discovery resumes from persisted progress
 
-DISCOVER MUST persist its exact plan, execution settings, and each completed
-lane-replica-chunk result before proceeding. `rvw run --run <id>` MUST resume
-only from that persisted plan, retain ordered attempt history, and never issue a
-third attempt for one identity.
+DISCOVER MUST persist its exact plan and execution settings. Before invoking a
+runtime, it MUST record the lane-replica-chunk identity, attempt ordinal, and
+artifact directory; completion MUST fill that same attempt record with its
+result. `rvw run --run <id>` MUST resume only from that persisted plan, retain
+ordered attempt history, count an interrupted started attempt against the
+two-attempt limit, and never issue a third attempt for one identity.
+On resume, it MUST persist every started attempt without a result as
+`interrupted_before_result` before deciding whether another attempt is allowed.
 
 #### Scenario: Interruption follows a completed initial replica
 
@@ -16,6 +20,11 @@ third attempt for one identity.
 
 - **WHEN** a lane document changes after a review process stops
 - **THEN** `rvw run --run <id>` uses the persisted original prompt rather than mixing plan versions
+
+#### Scenario: Interruption follows a started attempt without a result
+
+- **WHEN** a runtime attempt starts but the review process stops before its result is persisted
+- **THEN** the resumed run records that attempt as interrupted and may dispatch only one distinct second attempt
 
 ## MODIFIED Requirements
 

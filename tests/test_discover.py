@@ -351,6 +351,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
         concurrency: int = 8,
         deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
         on_progress: Callable[[RunResult], None] | None = None,
+        on_attempt_started: Callable[[PlannedRun, int, Path], None] | None = None,
         host_gate: HostSlotGate | None = None,
         prior_valid_lane_chunks: set[tuple[str, int]] | None = None,
         prior_retry_lane_chunks: set[tuple[str, int]] | None = None,
@@ -367,6 +368,7 @@ async def test_lane_filter_and_dispatch_are_applied_in_one_call(
             concurrency=concurrency,
             deadline_seconds=deadline_seconds,
             on_progress=on_progress,
+            on_attempt_started=on_attempt_started,
             host_gate=host_gate,
             prior_valid_lane_chunks=prior_valid_lane_chunks,
             prior_retry_lane_chunks=prior_retry_lane_chunks,
@@ -815,6 +817,49 @@ async def test_discover_does_not_start_a_third_attempt_without_retry_metadata(
 
     assert runtime.calls == []
     assert [attempt.valid for attempt in result.coverage[0].runs[0].attempts] == [False, False]
+
+
+async def test_discover_resume_replaces_interrupted_attempt_only_once(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "slop-hygiene", Tier.BASE)
+    reg = registry(("slop-hygiene", Tier.BASE))
+    plan = plan_discovery(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        replicas=1,
+    )
+    key = ("slop-hygiene", 1, 1)
+    interrupted = RunResult(
+        lane_id="slop-hygiene",
+        replica=1,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason=discover_module.INTERRUPTED_ATTEMPT_REASON,
+        wall_seconds=0,
+        artifact_dir=tmp_path / "prior" / "slop-hygiene" / "r1",
+    )
+    runtime = FakeRuntime(
+        statuses={"slop-hygiene": [RunStatus.INVALID]},
+        invalid_reasons={"slop-hygiene": ["schema-invalid"]},
+    )
+
+    result = await discover(
+        registry=reg,
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        planned=plan,
+        prior_attempts={key: [interrupted]},
+    )
+
+    assert runtime.calls == [("slop-hygiene", 1)]
+    assert runtime.run_dirs == [tmp_path / "out" / "slop-hygiene" / "resume" / "a2" / "r1"]
+    assert [attempt.invalid_reason for attempt in result.coverage[0].runs[0].attempts] == [
+        discover_module.INTERRUPTED_ATTEMPT_REASON,
+        "schema-invalid",
+    ]
 
 
 async def test_discover_accepts_legacy_retry_lane_chunk_state(tmp_path: Path) -> None:
