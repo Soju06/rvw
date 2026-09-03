@@ -1,6 +1,7 @@
 import {DurableObject} from "cloudflare:workers";
 
 import {REVIEW_ARTIFACT_NAMES, artifactKey, artifactPath} from "./artifacts";
+import {requiredConfig, type RequiredConfig} from "./config";
 import {
   clearInstallationToken,
   createCheckRun,
@@ -26,7 +27,7 @@ import {
   buildReviewProcessEnv,
   buildRvwAutoInvocation,
 } from "./sandbox-auth";
-import {configureGitHubEgress, configureOutbound, optionalFile, sandboxFor} from "./sandbox";
+import {configureOutbound, optionalFile, sandboxFor} from "./sandbox";
 import {validateReviewJobMessage, type ReviewJobMessage} from "./webhook";
 
 const JOB_STORAGE_KEY = "job";
@@ -222,11 +223,11 @@ export class RvwReviewJob extends DurableObject<Env> {
     return next;
   }
 
-  private token(record: JobRecord): Promise<string> {
+  private token(record: JobRecord, appId: string): Promise<string> {
     if (record.message === undefined) throw new Error("review job message is missing");
     return getInstallationToken({
       storage: this.ctx.storage,
-      appId: this.env.GITHUB_APP_ID,
+      appId,
       privateKey: this.env.GITHUB_APP_PRIVATE_KEY,
       installationId: record.message.installationId,
       repoId: record.message.repoId,
@@ -248,7 +249,7 @@ export class RvwReviewJob extends DurableObject<Env> {
   }
 
   async start(value: ReviewJobMessage): Promise<{started: boolean; state: JobState}> {
-    configureOutbound(this.env);
+    const config = requiredConfig(this.env);
     const message = validateReviewJobMessage(value);
     let record = await this.load();
     if (record === undefined) {
@@ -316,7 +317,7 @@ export class RvwReviewJob extends DurableObject<Env> {
     if (record.message === undefined) record = {...record, message};
     if (record.state === "queued") record = await this.transition(record, "provisioning");
 
-    const token = await this.token(record);
+    const token = await this.token(record, config.githubAppId);
     let check: CreatedCheckRun | undefined;
     if (record.checkRunId === undefined) {
       check = await createCheckRun(token, {
@@ -340,11 +341,11 @@ export class RvwReviewJob extends DurableObject<Env> {
       record = {...record, sandboxId, updatedAt: new Date().toISOString()};
       await this.save(record);
     }
-    await configureGitHubEgress(sandbox, token);
+    await configureOutbound(sandbox, config.codexProxyHost, token);
     await sandbox.writeFile("/workspace/run-review.sh", reviewScript(message));
     await sandbox.exec("chmod 0755 /workspace/run-review.sh");
     const process = await sandbox.startProcess("/workspace/run-review.sh", {
-      env: buildReviewProcessEnv(this.env.CODEX_PROXY_HOST || "codex.nekos.me"),
+      env: buildReviewProcessEnv(config.codexProxyHost),
     });
     const deadlineAtMs =
       Date.now() + deadlineMinutes(this.env.RVW_JOB_DEADLINE_MINUTES) * 60 * 1_000;
@@ -362,6 +363,7 @@ export class RvwReviewJob extends DurableObject<Env> {
   }
 
   async failStart(value: ReviewJobMessage, reason: string): Promise<void> {
+    const config = requiredConfig(this.env);
     const message = validateReviewJobMessage(value);
     let record = await this.load();
     if (record === undefined) {
@@ -399,10 +401,11 @@ export class RvwReviewJob extends DurableObject<Env> {
     await this.save(record);
     record = await this.transition(record, "failed", reason);
     record = await this.settleCleanup(record);
-    await this.settleNeutralCheck(record, reason);
+    await this.settleNeutralCheck(record, reason, config.githubAppId);
   }
 
   async supersede(jobId: string, reason: string): Promise<void> {
+    const config = requiredConfig(this.env);
     let record = await this.load();
     if (record === undefined) {
       const now = new Date().toISOString();
@@ -442,13 +445,17 @@ export class RvwReviewJob extends DurableObject<Env> {
     await this.save(record);
     record = await this.transition(record, "superseded", reason);
     record = await this.settleCleanup(record);
-    await this.settleNeutralCheck(record, reason);
+    await this.settleNeutralCheck(record, reason, config.githubAppId);
   }
 
-  private async updateNeutralBestEffort(record: JobRecord, reason: string): Promise<boolean> {
+  private async updateNeutralBestEffort(
+    record: JobRecord,
+    reason: string,
+    appId: string,
+  ): Promise<boolean> {
     if (record.message === undefined || record.checkRunId === undefined) return true;
     try {
-      const token = await this.token(record);
+      const token = await this.token(record, appId);
       await updateCheckRun(token, {
         owner: record.message.owner,
         repo: record.message.repo,
@@ -470,8 +477,12 @@ export class RvwReviewJob extends DurableObject<Env> {
     }
   }
 
-  private async settleNeutralCheck(record: JobRecord, reason: string): Promise<JobRecord> {
-    const updated = await this.updateNeutralBestEffort(record, reason);
+  private async settleNeutralCheck(
+    record: JobRecord,
+    reason: string,
+    appId: string,
+  ): Promise<JobRecord> {
+    const updated = await this.updateNeutralBestEffort(record, reason, appId);
     record = {
       ...record,
       conclusion: "neutral",
@@ -605,6 +616,7 @@ export class RvwReviewJob extends DurableObject<Env> {
     record: JobRecord,
     exitCode: number | null,
     resultOutput: string,
+    config: RequiredConfig,
     overrideReason?: string,
   ): Promise<void> {
     if (record.message === undefined || record.checkRunId === undefined) {
@@ -637,7 +649,7 @@ export class RvwReviewJob extends DurableObject<Env> {
     const artifacts = await this.persistArtifacts(record);
     record = {...record, artifacts, updatedAt: new Date().toISOString()};
     await this.save(record);
-    const token = await this.token(record);
+    const token = await this.token(record, config.githubAppId);
     await updateCheckRun(token, {
       owner: message.owner,
       repo: message.repo,
@@ -658,7 +670,7 @@ export class RvwReviewJob extends DurableObject<Env> {
     await this.clearToken(record);
   }
 
-  private async timeOut(record: JobRecord): Promise<void> {
+  private async timeOut(record: JobRecord, config: RequiredConfig): Promise<void> {
     const minutes = deadlineMinutes(this.env.RVW_JOB_DEADLINE_MINUTES);
     const reason = `rvw review exceeded the ${minutes}-minute hard deadline`;
     record = {
@@ -672,11 +684,11 @@ export class RvwReviewJob extends DurableObject<Env> {
     record = await this.transition(record, "timed_out", reason);
     record = await this.persistArtifactsBestEffort(record);
     record = await this.settleCleanup(record);
-    await this.settleNeutralCheck(record, reason);
+    await this.settleNeutralCheck(record, reason, config.githubAppId);
   }
 
   async alarm(): Promise<void> {
-    configureOutbound(this.env);
+    const config = requiredConfig(this.env);
     let record = await this.load();
     if (record === undefined) return;
     if (isTerminalState(record.state)) {
@@ -685,6 +697,7 @@ export class RvwReviewJob extends DurableObject<Env> {
         await this.settleNeutralCheck(
           record,
           record.reason ?? "rvw review ended without a publishable result",
+          config.githubAppId,
         );
       }
       return;
@@ -692,7 +705,7 @@ export class RvwReviewJob extends DurableObject<Env> {
     try {
       const deadlineAtMs = record.deadlineAt === undefined ? Number.POSITIVE_INFINITY : Date.parse(record.deadlineAt);
       if (isDeadlineReached(Date.now(), deadlineAtMs)) {
-        await this.timeOut(record);
+        await this.timeOut(record, config);
         return;
       }
       if (record.state === "publishing") {
@@ -700,19 +713,30 @@ export class RvwReviewJob extends DurableObject<Env> {
         const resultOutput = (await optionalFile(sandbox, "/workspace/result/rvw-auto.json")) ?? "";
         const exitText = await optionalFile(sandbox, "/workspace/result/process-exit-code");
         const exitCode = exitText === null ? null : Number.parseInt(exitText.trim(), 10);
-        await this.finishPublishing(record, Number.isNaN(exitCode) ? null : exitCode, resultOutput);
+        await this.finishPublishing(
+          record,
+          Number.isNaN(exitCode) ? null : exitCode,
+          resultOutput,
+          config,
+        );
         return;
       }
       if (record.state !== "running" || record.sandboxId === undefined || record.processId === undefined) {
         throw new Error("active review job is missing Sandbox process metadata");
       }
-      const token = await this.token(record);
+      const token = await this.token(record, config.githubAppId);
       const sandbox = sandboxFor(this.env, record.sandboxId);
-      await configureGitHubEgress(sandbox, token);
+      await configureOutbound(sandbox, config.codexProxyHost, token);
       const process = await sandbox.getProcess(record.processId);
       if (process === null) {
         record = await this.transition(record, "publishing", "Sandbox process record disappeared");
-        await this.finishPublishing(record, null, "", "Sandbox process record disappeared");
+        await this.finishPublishing(
+          record,
+          null,
+          "",
+          config,
+          "Sandbox process record disappeared",
+        );
         return;
       }
       if (process.status === "starting" || process.status === "running") {
@@ -721,7 +745,7 @@ export class RvwReviewJob extends DurableObject<Env> {
       }
       record = await this.transition(record, "publishing");
       const resultOutput = (await optionalFile(sandbox, "/workspace/result/rvw-auto.json")) ?? "";
-      await this.finishPublishing(record, process.exitCode ?? null, resultOutput);
+      await this.finishPublishing(record, process.exitCode ?? null, resultOutput, config);
     } catch (error) {
       console.error(
         JSON.stringify({

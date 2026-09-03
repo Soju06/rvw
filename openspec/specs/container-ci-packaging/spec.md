@@ -105,8 +105,8 @@ the check is required or configure branch protection.
 
 ### Requirement: Headless smoke records the container isolation evidence
 
-The implementation verification MUST build the local image and run a real agentic bori
-review from two detached, read-only mounted clones at commit `5d4d3cb64`. The smoke MUST
+The implementation verification MUST build the local image and run a real agentic target-repository
+review from two detached, read-only mounted clones at a pinned commit. The smoke MUST
 record whether env-only Codex authentication succeeds without `auth.json`, whether Codex
 read-only sandboxing works within the default container boundary, and whether the full
 run completes with valid lanes and covered receipts. If the read-only sandbox is not

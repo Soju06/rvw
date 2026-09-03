@@ -45,19 +45,23 @@ def test_state_bucket_bootstrap_is_explicit_and_secret_safe() -> None:
     assert "terraform init -backend=false" in infra
 
 
-def test_every_wrangler_environment_uses_registered_app_id() -> None:
+def test_wrangler_environments_have_no_deployer_identity_defaults() -> None:
     config = json.loads((ROOT / "cloud/wrangler.jsonc").read_text(encoding="utf-8"))
 
-    assert config["vars"]["GITHUB_APP_ID"] == "4813211"
+    assert "GITHUB_APP_ID" not in config["vars"]
+    assert "CODEX_PROXY_HOST" not in config["vars"]
     for environment in ("spike", "prod"):
-        assert config["env"][environment]["vars"]["GITHUB_APP_ID"] == "4813211"
+        assert "GITHUB_APP_ID" not in config["env"][environment]["vars"]
+        assert "CODEX_PROXY_HOST" not in config["env"][environment]["vars"]
 
 
-def test_cloud_runbook_names_registered_app_and_install_url() -> None:
+def test_cloud_runbook_treats_app_manifest_as_deployer_template() -> None:
     readme = (ROOT / "cloud/README.md").read_text(encoding="utf-8")
+    manifest = json.loads((ROOT / "cloud/github-app.manifest.json").read_text(encoding="utf-8"))
 
-    assert "rvw-review" in readme
-    assert "https://github.com/apps/rvw-review/installations/new" in readme
+    assert "private deployment repository or CI variables" in readme
+    assert manifest["url"] == "https://github.com/<your-org>/<your-fork>"
+    assert manifest["hook_attributes"]["url"] == "https://<worker-host>/github/webhook"
 
 
 def test_release_initializes_r2_state_from_dedicated_secrets() -> None:
@@ -72,6 +76,8 @@ def test_release_initializes_r2_state_from_dedicated_secrets() -> None:
     assert terraform["env"]["AWS_SECRET_ACCESS_KEY"] == (
         "${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}"
     )
+    assert terraform["env"]["CLOUDFLARE_API_TOKEN"] == ("${{ secrets.CLOUDFLARE_API_TOKEN }}")
+    assert "TF_VAR_cloudflare_api_token" not in terraform["env"]
 
     script = terraform["run"]
     assert "terraform init" in script

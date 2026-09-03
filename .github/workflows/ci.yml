@@ -33,6 +33,8 @@ jobs:
 
       - name: Tests (live excluded — needs codex credentials)
         run: uv run pytest -q -m "not live"
+      - name: Check deployer neutrality
+        run: python scripts/check-deployer-neutral.py
 
   cloud:
     runs-on: ubuntu-latest

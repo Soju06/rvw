@@ -1,5 +1,10 @@
 # Terraform (A1 resources)
 
+All deployer-specific values remain outside this repository. Provide
+`account_id` and `environment` as Terraform variables, `CLOUDFLARE_API_TOKEN`
+through the provider's standard environment variable, and
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` from the R2 state credentials.
+
 This directory declares the R2 artifact bucket, review Queue, and dead-letter
 Queue used by A1. Resource names are suffixed with `dev`, `spike`, or `prod` and
 match the corresponding Wrangler bindings.

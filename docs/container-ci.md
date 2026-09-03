@@ -102,7 +102,7 @@ permissions:
 
 jobs:
   review:
-    uses: Soju06/rvw/.github/workflows/rvw-review.yml@v0.4.1
+    uses: <your-org>/<your-fork>/.github/workflows/rvw-review.yml@v0.4.1
     with:
       image: ghcr.io/soju06/rvw:v0.4.1
       codex_base_url: ${{ vars.CODEX_BASE_URL }}

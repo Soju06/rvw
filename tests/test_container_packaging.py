@@ -146,7 +146,7 @@ def test_container_ci_docs_include_exact_base_controlled_caller() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "pull_request_target:" in docs
-    assert "Soju06/rvw/.github/workflows/rvw-review.yml@v0.4.1" in docs
+    assert "<your-org>/<your-fork>/.github/workflows/rvw-review.yml@v0.4.1" in docs
     assert "ghcr.io/soju06/rvw:v0.4.1" in docs
     assert "ghcr.io/soju06/rvw:latest" in docs
     assert "ghcr.io/soju06/rvw@sha256:" in docs

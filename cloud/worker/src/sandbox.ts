@@ -1,10 +1,10 @@
 import {ContainerProxy, Sandbox, getSandbox, type Process} from "@cloudflare/sandbox";
 
 import {
-  injectCodexCredential,
   injectGitHubApiCredential,
   injectGitHubCloneCredential,
 } from "./sandbox-auth";
+import {codexOutboundHandler, configureCodexEgress} from "./sandbox-config";
 
 export {ContainerProxy};
 
@@ -13,12 +13,6 @@ export class RvwSandbox extends Sandbox<Env> {
   // bypasses outboundByHost and the Codex proxy returns 401 unless it is explicit.
   interceptHttps = true;
 }
-
-const outboundHandler = (request: Request, env: Env): Promise<Response> => {
-  return injectCodexCredential(request, env.CODEX_API_KEY, fetch, ({hostname}) => {
-    console.log(JSON.stringify({event: "codex_credential_injected", hostname}));
-  });
-};
 
 function tokenFromContext(context: {params?: unknown}): string {
   if (typeof context.params !== "object" || context.params === null) {
@@ -32,25 +26,19 @@ function tokenFromContext(context: {params?: unknown}): string {
 }
 
 RvwSandbox.outboundHandlers = {
+  codex: (request: Request, env: Cloudflare.Env) => codexOutboundHandler(request, env),
   githubApi: (request: Request, _env: Env, context: {params?: unknown}) =>
     injectGitHubApiCredential(request, tokenFromContext(context)),
   githubClone: (request: Request, _env: Env, context: {params?: unknown}) =>
     injectGitHubCloneCredential(request, tokenFromContext(context)),
 };
 
-RvwSandbox.outboundByHost = {"codex.nekos.me": outboundHandler};
-
-export function configureOutbound(env: Env): void {
-  const host = env.CODEX_PROXY_HOST || "codex.nekos.me";
-  RvwSandbox.outboundByHost = {[host]: outboundHandler};
-}
-
-export async function configureGitHubEgress(
+export async function configureOutbound(
   sandbox: RvwSandbox,
-  installationToken: string,
+  proxyHost: string,
+  installationToken?: string,
 ): Promise<void> {
-  await sandbox.setOutboundByHost("api.github.com", "githubApi", {token: installationToken});
-  await sandbox.setOutboundByHost("github.com", "githubClone", {token: installationToken});
+  await configureCodexEgress(sandbox, proxyHost, installationToken);
 }
 
 export function sandboxFor(env: Env, sandboxId: string): RvwSandbox {
