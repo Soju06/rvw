@@ -1,5 +1,11 @@
 import {ContainerProxy, Sandbox, getSandbox, type Process} from "@cloudflare/sandbox";
 
+import {
+  injectCodexCredential,
+  injectGitHubApiCredential,
+  injectGitHubCloneCredential,
+} from "./sandbox-auth";
+
 export {ContainerProxy};
 
 export class RvwSandbox extends Sandbox<Env> {
@@ -8,11 +14,28 @@ export class RvwSandbox extends Sandbox<Env> {
   interceptHttps = true;
 }
 
-const outboundHandler = (request: Request, env: Env) => {
-    const authenticated = new Request(request);
-    authenticated.headers.set("Authorization", `Bearer ${env.CODEX_API_KEY}`);
-    console.log(JSON.stringify({event: "codex_credential_injected", hostname: new URL(request.url).hostname}));
-    return fetch(authenticated);
+const outboundHandler = (request: Request, env: Env): Promise<Response> => {
+  return injectCodexCredential(request, env.CODEX_API_KEY, fetch, ({hostname}) => {
+    console.log(JSON.stringify({event: "codex_credential_injected", hostname}));
+  });
+};
+
+function tokenFromContext(context: {params?: unknown}): string {
+  if (typeof context.params !== "object" || context.params === null) {
+    throw new Error("GitHub outbound handler token parameters are missing");
+  }
+  const token = (context.params as Record<string, unknown>).token;
+  if (typeof token !== "string" || token.length === 0) {
+    throw new Error("GitHub outbound handler token is missing");
+  }
+  return token;
+}
+
+RvwSandbox.outboundHandlers = {
+  githubApi: (request: Request, _env: Env, context: {params?: unknown}) =>
+    injectGitHubApiCredential(request, tokenFromContext(context)),
+  githubClone: (request: Request, _env: Env, context: {params?: unknown}) =>
+    injectGitHubCloneCredential(request, tokenFromContext(context)),
 };
 
 RvwSandbox.outboundByHost = {"codex.nekos.me": outboundHandler};
@@ -20,6 +43,14 @@ RvwSandbox.outboundByHost = {"codex.nekos.me": outboundHandler};
 export function configureOutbound(env: Env): void {
   const host = env.CODEX_PROXY_HOST || "codex.nekos.me";
   RvwSandbox.outboundByHost = {[host]: outboundHandler};
+}
+
+export async function configureGitHubEgress(
+  sandbox: RvwSandbox,
+  installationToken: string,
+): Promise<void> {
+  await sandbox.setOutboundByHost("api.github.com", "githubApi", {token: installationToken});
+  await sandbox.setOutboundByHost("github.com", "githubClone", {token: installationToken});
 }
 
 export function sandboxFor(env: Env, sandboxId: string): RvwSandbox {

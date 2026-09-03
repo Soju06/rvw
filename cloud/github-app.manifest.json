@@ -5,5 +5,5 @@
   "redirect_url": "https://<worker-host>/github/callback",
   "public": false,
   "default_permissions": {"checks": "write", "pull_requests": "write", "contents": "read", "metadata": "read"},
-  "default_events": ["pull_request", "check_suite", "installation", "installation_repositories"]
+  "default_events": ["pull_request", "check_run", "check_suite", "installation", "installation_repositories"]
 }

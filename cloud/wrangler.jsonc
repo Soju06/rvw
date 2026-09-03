@@ -4,13 +4,141 @@
   "main": "worker/src/index.ts",
   "compatibility_date": "2026-09-02",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": {"RVW_ENV": "dev", "CODEX_PROXY_HOST": "codex.nekos.me", "RVW_VERSION": "0.0.0"},
-  "containers": [{"name": "rvw-sandbox", "class_name": "RvwSandbox", "image": "./Dockerfile", "image_build_context": "..", "instance_type": "lite", "max_instances": 1}],
-  "durable_objects": {"bindings": [{"name": "RVW_SANDBOX", "class_name": "RvwSandbox"}]},
-  "migrations": [{"tag": "rvw-cloud-v1", "new_sqlite_classes": ["RvwSandbox"]}],
+  "vars": {
+    "RVW_ENV": "dev",
+    "RVW_VERSION": "0.0.0",
+    "CODEX_PROXY_HOST": "codex.nekos.me",
+    "GITHUB_APP_ID": "replace-with-github-app-id",
+    "RVW_JOB_DEADLINE_MINUTES": "90"
+  },
+  "containers": [
+    {
+      "name": "rvw-sandbox",
+      "class_name": "RvwSandbox",
+      "image": "./Dockerfile",
+      "image_build_context": "..",
+      "instance_type": "lite",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {"name": "RVW_SANDBOX", "class_name": "RvwSandbox"},
+      {"name": "RVW_REVIEW_JOB", "class_name": "RvwReviewJob"}
+    ]
+  },
+  "migrations": [
+    {"tag": "rvw-cloud-v1", "new_sqlite_classes": ["RvwSandbox"]},
+    {"tag": "rvw-cloud-v2", "new_sqlite_classes": ["RvwReviewJob"]}
+  ],
+  "queues": {
+    "producers": [
+      {"binding": "RVW_REVIEW_JOBS", "queue": "rvw-review-jobs-dev"},
+      {"binding": "RVW_REVIEW_JOBS_DLQ", "queue": "rvw-review-jobs-dlq-dev"}
+    ],
+    "consumers": [
+      {
+        "queue": "rvw-review-jobs-dev",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "retry_delay": 30,
+        "dead_letter_queue": "rvw-review-jobs-dlq-dev"
+      }
+    ]
+  },
+  "r2_buckets": [{"binding": "RVW_ARTIFACTS", "bucket_name": "rvw-artifacts-dev"}],
   "observability": {"enabled": true, "logs": {"head_sampling_rate": 1}},
   "env": {
-    "spike": {"name": "rvw-cloud-spike", "vars": {"RVW_ENV": "spike", "RVW_VERSION": "0.0.0", "CODEX_PROXY_HOST": "codex.nekos.me"}, "containers": [{"name": "rvw-sandbox", "class_name": "RvwSandbox", "image": "./Dockerfile", "image_build_context": "..", "instance_type": "standard-2", "max_instances": 2}], "durable_objects": {"bindings": [{"name": "RVW_SANDBOX", "class_name": "RvwSandbox"}]}},
-    "prod": {"name": "rvw-cloud-prod", "vars": {"RVW_ENV": "prod", "RVW_VERSION": "0.0.0", "CODEX_PROXY_HOST": "codex.nekos.me"}, "containers": [{"name": "rvw-sandbox", "class_name": "RvwSandbox", "image": "./Dockerfile", "image_build_context": "..", "instance_type": "standard-2", "max_instances": 10}], "durable_objects": {"bindings": [{"name": "RVW_SANDBOX", "class_name": "RvwSandbox"}]}}
+    "spike": {
+      "name": "rvw-cloud-spike",
+      "vars": {
+        "RVW_ENV": "spike",
+        "RVW_VERSION": "0.0.0",
+        "CODEX_PROXY_HOST": "codex.nekos.me",
+        "GITHUB_APP_ID": "replace-with-github-app-id",
+        "RVW_JOB_DEADLINE_MINUTES": "90"
+      },
+      "containers": [
+        {
+          "name": "rvw-sandbox",
+          "class_name": "RvwSandbox",
+          "image": "./Dockerfile",
+          "image_build_context": "..",
+          "instance_type": "standard-2",
+          "max_instances": 2
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {"name": "RVW_SANDBOX", "class_name": "RvwSandbox"},
+          {"name": "RVW_REVIEW_JOB", "class_name": "RvwReviewJob"}
+        ]
+      },
+      "queues": {
+        "producers": [
+          {"binding": "RVW_REVIEW_JOBS", "queue": "rvw-review-jobs-spike"},
+          {"binding": "RVW_REVIEW_JOBS_DLQ", "queue": "rvw-review-jobs-dlq-spike"}
+        ],
+        "consumers": [
+          {
+            "queue": "rvw-review-jobs-spike",
+            "max_batch_size": 5,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "retry_delay": 30,
+            "dead_letter_queue": "rvw-review-jobs-dlq-spike"
+          }
+        ]
+      },
+      "r2_buckets": [
+        {"binding": "RVW_ARTIFACTS", "bucket_name": "rvw-artifacts-spike"}
+      ]
+    },
+    "prod": {
+      "name": "rvw-cloud-prod",
+      "vars": {
+        "RVW_ENV": "prod",
+        "RVW_VERSION": "0.0.0",
+        "CODEX_PROXY_HOST": "codex.nekos.me",
+        "GITHUB_APP_ID": "replace-with-github-app-id",
+        "RVW_JOB_DEADLINE_MINUTES": "90"
+      },
+      "containers": [
+        {
+          "name": "rvw-sandbox",
+          "class_name": "RvwSandbox",
+          "image": "./Dockerfile",
+          "image_build_context": "..",
+          "instance_type": "standard-2",
+          "max_instances": 10
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {"name": "RVW_SANDBOX", "class_name": "RvwSandbox"},
+          {"name": "RVW_REVIEW_JOB", "class_name": "RvwReviewJob"}
+        ]
+      },
+      "queues": {
+        "producers": [
+          {"binding": "RVW_REVIEW_JOBS", "queue": "rvw-review-jobs-prod"},
+          {"binding": "RVW_REVIEW_JOBS_DLQ", "queue": "rvw-review-jobs-dlq-prod"}
+        ],
+        "consumers": [
+          {
+            "queue": "rvw-review-jobs-prod",
+            "max_batch_size": 5,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "retry_delay": 30,
+            "dead_letter_queue": "rvw-review-jobs-dlq-prod"
+          }
+        ]
+      },
+      "r2_buckets": [
+        {"binding": "RVW_ARTIFACTS", "bucket_name": "rvw-artifacts-prod"}
+      ]
+    }
   }
 }
