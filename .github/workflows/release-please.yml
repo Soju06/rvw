@@ -19,9 +19,9 @@ jobs:
     steps:
       - name: Run release-please
         id: release
-        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v4 — same pin as codex-lb; v5 silently no-ops the uv.lock toml updater
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v4; v5 silently no-ops the uv.lock toml updater
         with:
-          # RELEASE_PLEASE_TOKEN is a required PAT (codex-lb pattern): tags it
+          # RELEASE_PLEASE_TOKEN is a required PAT for release tagging.
           # pushes trigger release.yml via the tag event. PyPI Trusted
           # Publishing rejects OIDC claims from reusable-caller chains, and
           # tags created by the default repository token never start
@@ -31,7 +31,7 @@ jobs:
           manifest-file: .github/release-please-manifest.json
 
       # release-please's toml extra-file updater does not actually rewrite
-      # uv.lock (observed on both v4 and v5, 2026-07-28; codex-lb worked
+      # uv.lock (observed on both v4 and v5, 2026-07-28; the pinned action worked
       # around it with manual 'chore(release): sync uv lock' commits every
       # release). Regenerate the lock on the release branch here instead.
       # The push must use the PAT: a default-repository-token push would not

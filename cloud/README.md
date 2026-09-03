@@ -1,5 +1,37 @@
 # rvw Cloudflare App platform scaffold
 
+This is a reusable self-hosted deployment scaffold. Deployer-specific account,
+organization, host, and application-registration values live outside this
+repository (for example in a private deployment repository or CI variables and
+secrets). The committed Wrangler environments and reusable Actions workflow are
+consumed with those private overrides.
+
+## Deployer configuration
+
+| Kind | Name | Purpose |
+| --- | --- | --- |
+| Variable | `CODEX_PROXY_HOST` | Sole hostname where the Worker injects the Codex API credential; required, and empty/unset fails closed. |
+| Variable | `GITHUB_APP_ID` | Numeric GitHub App identifier; required, and empty/unset fails closed. |
+| Variable | `RVW_JOB_DEADLINE_MINUTES` | Hard review deadline in minutes; defaults to 90. |
+| Secret | `CODEX_API_KEY` | Required upstream Codex credential, injected only at the configured proxy boundary. |
+| Secret | `GITHUB_APP_PRIVATE_KEY` | Required GitHub App private key used to mint installation tokens. |
+| Secret | `GITHUB_WEBHOOK_SECRET` | Required secret used to verify GitHub webhook signatures. |
+| Secret | `RVW_ADMIN_TOKEN` | Required bearer token for operator job-status endpoints. |
+| Terraform variable | `account_id` | Required Cloudflare account identifier for resource provisioning. |
+| Terraform variable | `environment` | Required resource suffix (`dev`, `spike`, or `prod`). |
+| State backend credential | `R2_STATE_ACCESS_KEY_ID` → `AWS_ACCESS_KEY_ID` | Required access-key ID for the remote R2 Terraform state bucket. |
+| State backend credential | `R2_STATE_SECRET_ACCESS_KEY` → `AWS_SECRET_ACCESS_KEY` | Required secret access key for the remote R2 Terraform state bucket. |
+
+Terraform also reads `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from
+CI/environment configuration. Never commit these values.
+
+For deployment, pass the required non-secret values from private CI variables
+with Wrangler `--var CODEX_PROXY_HOST:<host> --var GITHUB_APP_ID:<id>` overrides.
+The included release workflow maps repository variables `RVW_CODEX_PROXY_HOST`
+and `RVW_GITHUB_APP_ID` to those Worker binding names.
+Reusable workflow callers similarly select their fork, image, and optional
+provider base URL rather than relying on a deployer-specific committed default.
+
 This directory is the Cloudflare Worker + Sandbox SDK execution plane.
 The default Wrangler environment is local development (`RVW_ENV=dev`); `spike`
 enables the bounded A0 lifecycle endpoints with `standard-2` and two instances;
@@ -102,20 +134,17 @@ gate.
 
 ### Register the GitHub App
 
-The registered App is `rvw-review` (App ID `4813211`). Install it from
-<https://github.com/apps/rvw-review/installations/new>.
-
-1. Replace both `<worker-host>` placeholders in
+1. Replace the `<your-org>/<your-fork>` and `<worker-host>` placeholders in
    `cloud/github-app.manifest.json`. The webhook URL must be
    `https://<worker-host>/github/webhook`; the callback remains a registration
    placeholder because A1 has no user OAuth flow.
-2. Open GitHub's App manifest creation flow and submit the manifest. Confirm the
+2. Open GitHub's App manifest creation flow and submit the template. Confirm the
    requested permissions are Checks write, Pull requests write, Contents read,
    and Metadata read, and confirm `pull_request` plus `check_run` are among the
    subscribed events.
-3. Confirm the registered App ID is `4813211` as declared by every environment's
-   `GITHUB_APP_ID` Wrangler var, download the App private key once, create a webhook
-   secret, and install the App on the intended repositories.
+3. Record the generated numeric App ID in the deployer's private
+   `GITHUB_APP_ID` Wrangler override, download the App private key once, create a
+   webhook secret, and install the App on the intended repositories.
 4. Configure the four Worker secrets interactively for each deployed environment:
 
    ```bash
@@ -129,7 +158,7 @@ The registered App is `rvw-review` (App ID `4813211`). Install it from
    history, logs, `.dev.vars`, or committed files. `GITHUB_APP_PRIVATE_KEY`,
    `GITHUB_WEBHOOK_SECRET`, `CODEX_API_KEY`, and `RVW_ADMIN_TOKEN` are secret
    bindings; `GITHUB_APP_ID`, `RVW_JOB_DEADLINE_MINUTES`, and
-   `CODEX_PROXY_HOST` are non-secret vars.
+   `CODEX_PROXY_HOST` are non-secret vars supplied by the deployer.
 
 ### Observe and operate jobs
 

@@ -34,11 +34,11 @@ describe("validateTargetInput", () => {
 
 describe("buildSandboxProcessEnv", () => {
   it("passes only the placeholder credential and proxy URL", () => {
-    const processEnv = buildSandboxProcessEnv("codex.nekos.me");
+    const processEnv = buildSandboxProcessEnv("proxy.example");
 
     expect(processEnv).toEqual({
       CODEX_API_KEY: "placeholder-not-a-secret",
-      CODEX_BASE_URL: "https://codex.nekos.me/backend-api/codex",
+      CODEX_BASE_URL: "https://proxy.example/backend-api/codex",
     });
     expect(Object.keys(processEnv)).toHaveLength(2);
   });

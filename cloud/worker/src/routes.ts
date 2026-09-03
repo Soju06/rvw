@@ -1,4 +1,5 @@
-import {optionalFile, processPayload, sandboxFor} from "./sandbox";
+import type {RequiredConfig} from "./config";
+import {configureOutbound, optionalFile, processPayload, sandboxFor} from "./sandbox";
 import {
   RESULT_ARTIFACT_NAMES,
   buildSandboxProcessEnv,
@@ -52,15 +53,15 @@ function json(value: unknown, init?: ResponseInit): Response { return Response.j
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function required(url: URL, key: string): string | null { return url.searchParams.get(key); }
 
-export async function start(env: Env, url: URL): Promise<Response> {
+export async function start(env: Env, config: RequiredConfig, url: URL): Promise<Response> {
   const target = validateTargetInput(required(url, "repo"), required(url, "target"));
   if (!target) return json({error: "repo must be a safe HTTPS GitHub repository URL and target must be 7-40 lowercase hexadecimal characters"}, {status: 400});
   const sandboxId = `rvw-spike-${crypto.randomUUID()}`;
   const sandbox = sandboxFor(env, sandboxId);
+  await configureOutbound(sandbox, config.codexProxyHost);
   await sandbox.writeFile("/workspace/run-review.sh", reviewScript(target.repoUrl, target.targetSha));
   await sandbox.exec("chmod 0755 /workspace/run-review.sh");
-  const proxyHost = env.CODEX_PROXY_HOST || "codex.nekos.me";
-  const process = await sandbox.startProcess("/workspace/run-review.sh", {env: buildSandboxProcessEnv(proxyHost)});
+  const process = await sandbox.startProcess("/workspace/run-review.sh", {env: buildSandboxProcessEnv(config.codexProxyHost)});
   return json({sandboxId, processId: process.id, repo: target.repoUrl, target: target.targetSha}, {status: 202});
 }
 
@@ -93,11 +94,15 @@ export async function destroy(env: Env, url: URL): Promise<Response> {
   return json({sandboxId, destroyed: true, observedAt: new Date().toISOString()});
 }
 
-export function handleRoute(request: Request, env: Env): Promise<Response> | Response {
+export function handleRoute(
+  request: Request,
+  env: Env,
+  config: RequiredConfig,
+): Promise<Response> | Response {
   const url = new URL(request.url);
   if (env.RVW_ENV !== "spike") return json({error: "not found"}, {status: 404});
   try {
-    if (request.method === "POST" && url.pathname === "/start") return start(env, url);
+    if (request.method === "POST" && url.pathname === "/start") return start(env, config, url);
     if (request.method === "GET" && url.pathname === "/status") return status(env, url);
     if (request.method === "GET" && url.pathname === "/result") return result(env, url);
     if (request.method === "POST" && url.pathname === "/destroy") return destroy(env, url);

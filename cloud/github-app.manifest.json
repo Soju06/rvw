@@ -1,6 +1,6 @@
 {
   "name": "rvw",
-  "url": "https://github.com/Soju06/rvw",
+  "url": "https://github.com/<your-org>/<your-fork>",
   "hook_attributes": {
     "url": "https://<worker-host>/github/webhook"
   },

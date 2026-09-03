@@ -42,7 +42,8 @@ def test_cloud_codex_template_leaves_runtime_base_url_unconfigured() -> None:
 
 def test_egress_injection_emits_secret_free_structured_event() -> None:
     sandbox = (ROOT / "cloud/worker/src/sandbox.ts").read_text(encoding="utf-8")
+    sandbox_config = (ROOT / "cloud/worker/src/sandbox-config.ts").read_text(encoding="utf-8")
 
-    assert 'event: "codex_credential_injected"' in sandbox
-    assert "JSON.stringify" in sandbox
+    assert 'event: "codex_credential_injected"' in sandbox_config
+    assert "JSON.stringify" in sandbox_config
     assert "interceptHttps = true" in sandbox

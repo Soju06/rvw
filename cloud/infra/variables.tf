@@ -11,10 +11,3 @@ variable "environment" {
     error_message = "environment must be dev, spike, or prod"
   }
 }
-
-variable "cloudflare_api_token" {
-  type        = string
-  sensitive   = true
-  default     = null
-  description = "Runtime token supplied by CI; never commit a value."
-}
