@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/Soju06/rvw/compare/v0.9.0...v0.9.1) (2026-09-03)
+
+
+### Bug Fixes
+
+* **cloud:** drop implicit installation events from the App manifest ([#51](https://github.com/Soju06/rvw/issues/51)) ([5d4822c](https://github.com/Soju06/rvw/commit/5d4822c0e6f22580fb744fb19642754ee57c2ffc))
+
 ## [0.9.0](https://github.com/Soju06/rvw/compare/v0.8.1...v0.9.0) (2026-09-03)
 
 
