@@ -8,7 +8,7 @@
     "RVW_ENV": "dev",
     "RVW_VERSION": "0.0.0",
     "CODEX_PROXY_HOST": "codex.nekos.me",
-    "GITHUB_APP_ID": "replace-with-github-app-id",
+    "GITHUB_APP_ID": "4813211",
     "RVW_JOB_DEADLINE_MINUTES": "90"
   },
   "containers": [
@@ -56,7 +56,7 @@
         "RVW_ENV": "spike",
         "RVW_VERSION": "0.0.0",
         "CODEX_PROXY_HOST": "codex.nekos.me",
-        "GITHUB_APP_ID": "replace-with-github-app-id",
+        "GITHUB_APP_ID": "4813211",
         "RVW_JOB_DEADLINE_MINUTES": "90"
       },
       "containers": [
@@ -101,7 +101,7 @@
         "RVW_ENV": "prod",
         "RVW_VERSION": "0.0.0",
         "CODEX_PROXY_HOST": "codex.nekos.me",
-        "GITHUB_APP_ID": "replace-with-github-app-id",
+        "GITHUB_APP_ID": "4813211",
         "RVW_JOB_DEADLINE_MINUTES": "90"
       },
       "containers": [

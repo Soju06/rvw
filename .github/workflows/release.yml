@@ -168,9 +168,24 @@ jobs:
       - name: Apply Terraform resources
         working-directory: cloud/infra
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: terraform init -backend=false && terraform apply -auto-approve -var environment=prod
+        run: |
+          terraform init \
+            -backend-config="bucket=rvw-terraform-state" \
+            -backend-config="key=rvw/prod/terraform.tfstate" \
+            -backend-config="region=auto" \
+            -backend-config="endpoints={s3=\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}" \
+            -backend-config="use_path_style=true" \
+            -backend-config="skip_credentials_validation=true" \
+            -backend-config="skip_metadata_api_check=true" \
+            -backend-config="skip_region_validation=true" \
+            -backend-config="skip_requesting_account_id=true" \
+            -backend-config="skip_s3_checksum=true"
+          terraform apply -auto-approve -var environment=prod
       - name: Deploy Worker (prod)
         working-directory: cloud
         env:
