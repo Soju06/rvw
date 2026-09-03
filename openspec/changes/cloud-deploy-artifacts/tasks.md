@@ -31,4 +31,4 @@
   reusable workflow/module references to GitHub release notes.
 - [x] 4.2 Run all requested Python, OpenSpec, workflow, neutrality, npm,
   Wrangler, Terraform, and Docker gates.
-- [ ] 4.3 Commit, push `feat/cloud-deploy-artifacts`, and open a PR to `main`.
+- [x] 4.3 Commit, push `feat/cloud-deploy-artifacts`, and open a PR to `main`.
