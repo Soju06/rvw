@@ -139,65 +139,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice title=Container image digest::ghcr.io/soju06/rvw@${IMAGE_DIGEST}"
 
-  deploy-cloud:
-    name: Provision Cloudflare resources and deploy Worker
-    needs: gates
-    if: vars.RVW_CLOUD_DEPLOY == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          ref: ${{ env.RELEASE_TAG }}
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: cloud/package-lock.json
-      - name: Install cloud dependencies
-        working-directory: cloud
-        run: npm ci
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1 — runner has no terraform binary
-        with:
-          terraform_version: "1.15.6"
-          terraform_wrapper: false
-      # A1 binds concrete Queue and R2 names, so infrastructure must exist
-      # before Wrangler resolves and deploys those production bindings.
-      - name: Apply Terraform resources
-        working-directory: cloud/infra
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          TF_VAR_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          terraform init \
-            -backend-config="bucket=rvw-terraform-state" \
-            -backend-config="key=rvw/prod/terraform.tfstate" \
-            -backend-config="region=auto" \
-            -backend-config="endpoints={s3=\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}" \
-            -backend-config="use_path_style=true" \
-            -backend-config="skip_credentials_validation=true" \
-            -backend-config="skip_metadata_api_check=true" \
-            -backend-config="skip_region_validation=true" \
-            -backend-config="skip_requesting_account_id=true" \
-            -backend-config="skip_s3_checksum=true"
-          terraform apply -auto-approve -var environment=prod
-      - name: Deploy Worker (prod)
-        working-directory: cloud
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          RVW_DEPLOY_CODEX_PROXY_HOST: ${{ vars.RVW_CODEX_PROXY_HOST }}
-          RVW_DEPLOY_GITHUB_APP_ID: ${{ vars.RVW_GITHUB_APP_ID }}
-        run: >-
-          npx wrangler deploy --env prod
-          --var "CODEX_PROXY_HOST:${RVW_DEPLOY_CODEX_PROXY_HOST}"
-          --var "GITHUB_APP_ID:${RVW_DEPLOY_GITHUB_APP_ID}"
-
   publish:
     needs: build
     runs-on: ubuntu-latest
@@ -232,12 +173,28 @@ jobs:
           path: dist/
       - name: Create release or upload artifacts
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          workflow_ref="uses: ${RELEASE_REPOSITORY}/.github/workflows/rvw-deploy.yml@${RELEASE_TAG}"
+          module_ref="source = \"github.com/${RELEASE_REPOSITORY}//cloud/infra?ref=${RELEASE_TAG}\""
+          release_notes=$(cat <<EOF
+          ## Deployment artifacts
+
+          ${workflow_ref}
+          ${module_ref}
+
+          rvw publishes these reusable assets; deployers consume them from their own repository.
+          EOF
+          )
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" dist/* --clobber
           else
             gh release create "$RELEASE_TAG" dist/* --title "$RELEASE_TAG" --generate-notes
           fi
-        env:
-          GH_TOKEN: ${{ github.token }}
+          existing_notes=$(gh release view "$RELEASE_TAG" --json body --jq .body)
+          if [[ "$existing_notes" != *"$workflow_ref"* ]]; then
+            gh release edit "$RELEASE_TAG" --notes "$(printf '%s\n\n%s' "$existing_notes" "$release_notes")"
+          fi

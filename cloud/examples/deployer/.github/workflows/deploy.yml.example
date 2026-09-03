@@ -1,0 +1,31 @@
+name: deploy rvw
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["rvw-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: <owner>/rvw/.github/workflows/rvw-deploy.yml@v0.10.0
+    with:
+      environment: spike
+      rvw_ref: v0.10.0
+      account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      codex_proxy_host: ${{ vars.RVW_CODEX_PROXY_HOST }}
+      github_app_id: ${{ vars.RVW_GITHUB_APP_ID }}
+      terraform_backend_bucket: ${{ vars.RVW_TERRAFORM_STATE_BUCKET }}
+      terraform_backend_key: rvw/spike/terraform.tfstate
+      terraform_backend_endpoint: ${{ vars.RVW_R2_ENDPOINT }}
+      worker_url: ${{ vars.RVW_WORKER_URL }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+      GITHUB_WEBHOOK_SECRET: ${{ secrets.GITHUB_WEBHOOK_SECRET }}
+      RVW_ADMIN_TOKEN: ${{ secrets.RVW_ADMIN_TOKEN }}
+      R2_STATE_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+      R2_STATE_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}

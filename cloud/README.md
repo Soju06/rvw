@@ -1,10 +1,23 @@
-# rvw Cloudflare App platform scaffold
+# rvw Cloudflare deployment artifacts
 
-This is a reusable self-hosted deployment scaffold. Deployer-specific account,
-organization, host, and application-registration values live outside this
-repository (for example in a private deployment repository or CI variables and
-secrets). The committed Wrangler environments and reusable Actions workflow are
-consumed with those private overrides.
+rvw publishes deployment artifacts; you deploy. This repository does not operate
+a Cloudflare account or instance. Consumers pin the Terraform module and
+reusable workflow to one rvw release tag from their own deployment repository.
+
+```hcl
+module "rvw" {
+  source = "github.com/<owner>/rvw//cloud/infra?ref=vX.Y.Z"
+}
+```
+
+```yaml
+uses: <owner>/rvw/.github/workflows/rvw-deploy.yml@vX.Y.Z
+```
+
+Use [`examples/deployer`](examples/deployer) as the minimal consumer layout.
+Upgrade by bumping the module `ref` and workflow `@tag` together. Do not copy or
+merge `wrangler.jsonc`; the reusable workflow checks out the selected tag and
+passes deployer values as CLI overrides.
 
 ## Deployer configuration
 
@@ -27,10 +40,7 @@ CI/environment configuration. Never commit these values.
 
 For deployment, pass the required non-secret values from private CI variables
 with Wrangler `--var CODEX_PROXY_HOST:<host> --var GITHUB_APP_ID:<id>` overrides.
-The included release workflow maps repository variables `RVW_CODEX_PROXY_HOST`
-and `RVW_GITHUB_APP_ID` to those Worker binding names.
-Reusable workflow callers similarly select their fork, image, and optional
-provider base URL rather than relying on a deployer-specific committed default.
+The reusable workflow maps caller inputs to those Worker binding names.
 
 This directory is the Cloudflare Worker + Sandbox SDK execution plane.
 The default Wrangler environment is local development (`RVW_ENV=dev`); `spike`
@@ -47,9 +57,10 @@ Check Run. No dashboard, D1 database, or analytics are part of A1.
 npm ci
 npx tsc --noEmit
 npm test
-npx wrangler deploy --dry-run --outdir dist --env spike
-npx wrangler deploy --dry-run --outdir dist --env prod
+npx wrangler deploy --dry-run --outdir dist --env spike --var CODEX_PROXY_HOST:proxy.example --var GITHUB_APP_ID:1
+npx wrangler deploy --dry-run --outdir dist --env prod --var CODEX_PROXY_HOST:proxy.example --var GITHUB_APP_ID:1
 (cd infra && terraform fmt -check && terraform init -backend=false && terraform validate)
+(cd examples/deployer && terraform fmt -check && terraform init -backend=false && terraform validate)
 docker build -f cloud/Dockerfile .
 ```
 
@@ -128,9 +139,8 @@ Each Wrangler environment binds concrete names:
 
 Terraform must be applied for the selected environment before deploying its
 Worker so the Queue, DLQ, and R2 bucket exist when Wrangler resolves bindings.
-The release workflow preserves this order and remains disabled unless repository
-variable `RVW_CLOUD_DEPLOY` is exactly `true`. A1 does not change or bypass that
-gate.
+The reusable workflow performs that ordering when `manage_terraform` is true;
+consumers may manage Terraform themselves and set it false.
 
 ### Register the GitHub App
 

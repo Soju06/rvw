@@ -27,6 +27,9 @@ This capability governs repository release preparation and publication rather th
 - The per-tag concurrency group prevents overlapping runs of the same release tag but
   does not serialize different tags updating `latest`; version and digest pins remain
   the stable consumer references.
+- The release rail is publish-only for Cloudflare: it adds copyable references to the
+  reusable workflow and Terraform module in release notes, while deployers call those
+  assets from their own repositories.
 
 ## Operational constraints
 
