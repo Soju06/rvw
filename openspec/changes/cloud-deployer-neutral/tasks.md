@@ -25,4 +25,4 @@
 ## 5. Verification and delivery
 
 - [x] 5.1 Run all Python, OpenSpec, actionlint, Worker, Wrangler, Terraform, Docker, and neutrality gates as bare commands and resolve failures.
-- [ ] 5.2 Inspect the final diff against `feat/cloud-tf-r2-backend`, commit, push `feat/cloud-deployer-neutral`, and open a PR with the requested stacked base.
+- [x] 5.2 Inspect the final diff against `feat/cloud-tf-r2-backend`, commit, push `feat/cloud-deployer-neutral`, and open a PR with the requested stacked base.
