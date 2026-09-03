@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/Soju06/rvw/compare/v0.8.1...v0.9.0) (2026-09-03)
+
+
+### Features
+
+* **cloud:** add durable GitHub review pipeline ([#49](https://github.com/Soju06/rvw/issues/49)) ([3e13639](https://github.com/Soju06/rvw/commit/3e136391d84ecf4c57feacb9dc441e1eaa9743e9))
+
 ## [0.8.1](https://github.com/Soju06/rvw/compare/v0.8.0...v0.8.1) (2026-09-03)
 
 
