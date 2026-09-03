@@ -102,6 +102,9 @@ gate.
 
 ### Register the GitHub App
 
+The registered App is `rvw-review` (App ID `4813211`). Install it from
+<https://github.com/apps/rvw-review/installations/new>.
+
 1. Replace both `<worker-host>` placeholders in
    `cloud/github-app.manifest.json`. The webhook URL must be
    `https://<worker-host>/github/webhook`; the callback remains a registration
@@ -110,9 +113,9 @@ gate.
    requested permissions are Checks write, Pull requests write, Contents read,
    and Metadata read, and confirm `pull_request` plus `check_run` are among the
    subscribed events.
-3. Record the generated numeric App ID in the environment's `GITHUB_APP_ID`
-   Wrangler var, download the App private key once, create a webhook secret, and
-   install the App on the intended repositories.
+3. Confirm the registered App ID is `4813211` as declared by every environment's
+   `GITHUB_APP_ID` Wrangler var, download the App private key once, create a webhook
+   secret, and install the App on the intended repositories.
 4. Configure the four Worker secrets interactively for each deployed environment:
 
    ```bash
@@ -163,6 +166,12 @@ a scoped installation token in the clone command's environment only; never pass
 it to the long-running `rvw auto` process and never substitute the Codex key.
 
 ## Bootstrap and one-time manual steps
+
+Terraform state has a separate chicken-and-egg bootstrap. Follow
+[`infra/bootstrap/README.md`](infra/bootstrap/README.md) to create
+`rvw-terraform-state` once and provision the owner-managed repository secrets
+`R2_STATE_ACCESS_KEY_ID` and `R2_STATE_SECRET_ACCESS_KEY`. These are R2 S3
+credentials and are distinct from the Cloudflare account API token below.
 
 Bootstrap Cloudflare API token permission checklist (owner performs once; store
 the resulting values as GitHub repository secrets):

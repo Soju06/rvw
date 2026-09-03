@@ -1,10 +1,13 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.10.0"
   required_providers {
     cloudflare = { source = "cloudflare/cloudflare", version = "~> 5.0" }
   }
-  # Planned migration: move state to a locked R2 backend once A1 resources exist.
-  backend "local" {}
+  # Bucket, key, R2 endpoint, and credentials are partial configuration supplied
+  # by the operator at init time. Credentials come from AWS_* environment vars.
+  backend "s3" {
+    use_lockfile = true
+  }
 }
 
 provider "cloudflare" {
