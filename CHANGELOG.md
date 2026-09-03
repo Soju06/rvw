@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/Soju06/rvw/compare/v0.9.1...v0.10.0) (2026-09-03)
+
+
+### Features
+
+* **cloud:** add locked R2 terraform state ([#53](https://github.com/Soju06/rvw/issues/53)) ([7866f98](https://github.com/Soju06/rvw/commit/7866f987ddb864842648f2004ceb9cc9a57f062a))
+
+
+### Bug Fixes
+
+* **cloud:** remove deployer-specific defaults ([#54](https://github.com/Soju06/rvw/issues/54)) ([1ce668d](https://github.com/Soju06/rvw/commit/1ce668dc86de02a69147fd18276d53511825cb7f))
+
 ## [0.9.1](https://github.com/Soju06/rvw/compare/v0.9.0...v0.9.1) (2026-09-03)
 
 
