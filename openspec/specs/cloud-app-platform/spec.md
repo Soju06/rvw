@@ -65,7 +65,7 @@ The tag release workflow MUST include a `deploy-cloud` job after shared `gates`,
 - **THEN** the release workflow skips cloud deployment while other release jobs remain eligible
 
 ### Requirement: GitHub App contract is declared
-The manifest MUST declare app name `rvw`, permissions `checks:write`, `pull_requests:write`, `contents:read`, `metadata:read`, events `pull_request`, `check_suite`, `installation`, and `installation_repositories`, and a configurable webhook URL placeholder.
+The manifest MUST declare app name `rvw`, permissions `checks:write`, `pull_requests:write`, `contents:read`, `metadata:read`, events `pull_request`, `check_run`, and `check_suite` (installation events are delivered to every App implicitly and MUST NOT be listed in `default_events`), and a configurable webhook URL placeholder.
 
 #### Scenario: Manifest is used for registration
 - **WHEN** an owner opens the documented manifest flow
