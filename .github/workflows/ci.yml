@@ -63,12 +63,19 @@ jobs:
         run: npm test
       - name: Wrangler dry-run (spike)
         working-directory: cloud
-        run: npx wrangler deploy --dry-run --outdir dist --env spike
+        run: npx wrangler deploy --dry-run --outdir dist --env spike --var CODEX_PROXY_HOST:proxy.example --var GITHUB_APP_ID:1
       - name: Wrangler dry-run (prod)
         working-directory: cloud
-        run: npx wrangler deploy --dry-run --outdir dist --env prod
+        run: npx wrangler deploy --dry-run --outdir dist --env prod --var CODEX_PROXY_HOST:proxy.example --var GITHUB_APP_ID:1
       - name: Terraform validation
         working-directory: cloud/infra
+        run: terraform fmt -check && terraform init -backend=false && terraform validate
+      - name: Terraform deployer example validation
+        working-directory: cloud/examples/deployer
+        env:
+          TF_VAR_cloudflare_api_token: placeholder
+          TF_VAR_account_id: placeholder
+          TF_VAR_environment: spike
         run: terraform fmt -check && terraform init -backend=false && terraform validate
       - name: Build cloud image from repository source
         run: docker build -f cloud/Dockerfile -t rvw-cloud-scaffold-check .

@@ -1,0 +1,232 @@
+name: deploy rvw
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Cloudflare environment to deploy.
+        type: string
+        required: true
+      rvw_ref:
+        description: Immutable rvw release tag to check out.
+        type: string
+        required: true
+      worker_name:
+        description: Worker name; empty derives rvw-cloud-<environment>.
+        type: string
+        required: false
+        default: ""
+      codex_proxy_host:
+        description: Host where the Worker may inject the Codex credential.
+        type: string
+        required: true
+      github_app_id:
+        description: Numeric GitHub App ID.
+        type: string
+        required: true
+      job_deadline_minutes:
+        description: Hard review deadline in minutes.
+        type: number
+        required: false
+        default: 90
+      account_id:
+        description: Cloudflare account ID.
+        type: string
+        required: true
+      manage_terraform:
+        description: Initialize and apply the published Terraform module.
+        type: boolean
+        required: false
+        default: true
+      terraform_backend_bucket:
+        description: R2 Terraform state bucket (required when managing Terraform).
+        type: string
+        required: false
+        default: ""
+      terraform_backend_key:
+        description: R2 Terraform state object key.
+        type: string
+        required: false
+        default: ""
+      terraform_backend_endpoint:
+        description: R2 S3 endpoint.
+        type: string
+        required: false
+        default: ""
+      worker_url:
+        description: Public Worker URL used for readiness; defaults to workers.dev name.
+        type: string
+        required: false
+        default: ""
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CODEX_API_KEY:
+        required: true
+      GITHUB_APP_PRIVATE_KEY:
+        required: true
+      GITHUB_WEBHOOK_SECRET:
+        required: true
+      RVW_ADMIN_TOKEN:
+        required: true
+      R2_STATE_ACCESS_KEY_ID:
+        required: false
+      R2_STATE_SECRET_ACCESS_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
+      RVW_ENVIRONMENT: ${{ inputs.environment }}
+      RVW_REF: ${{ inputs.rvw_ref }}
+      RVW_WORKER_NAME: ${{ inputs.worker_name }}
+      RVW_WORKER_URL: ${{ inputs.worker_url }}
+      RVW_CODEX_PROXY_HOST: ${{ inputs.codex_proxy_host }}
+      RVW_GITHUB_APP_ID: ${{ inputs.github_app_id }}
+      RVW_JOB_DEADLINE_MINUTES: ${{ inputs.job_deadline_minutes }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
+    steps:
+      - name: Validate deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RVW_ENVIRONMENT" in spike|prod) ;; *) echo "environment must be spike or prod" >&2; exit 2 ;; esac
+          test -n "$RVW_REF"
+          test -n "$RVW_CODEX_PROXY_HOST"
+          test -n "$RVW_GITHUB_APP_ID"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+      - name: Check out rvw release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.rvw_ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: cloud/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: 0.8.22
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.6
+          terraform_wrapper: false
+
+      - name: Install cloud dependencies
+        working-directory: cloud
+        run: npm ci
+
+      - name: Apply Terraform resources
+        if: ${{ inputs.manage_terraform }}
+        working-directory: cloud/examples/deployer
+        env:
+          TF_VAR_account_id: ${{ inputs.account_id }}
+          TF_VAR_environment: ${{ inputs.environment }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The reusable workflow deploys the exact checked-out tag's module;
+          # the example's GitHub source pin is for consumers, not this local run.
+          sed -i 's#source      = .*#source      = "../../infra"#' main.tf
+          test -n "$AWS_ACCESS_KEY_ID" && test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "${{ inputs.terraform_backend_bucket }}"
+          test -n "${{ inputs.terraform_backend_key }}"
+          test -n "${{ inputs.terraform_backend_endpoint }}"
+          terraform init \
+            -backend-config="bucket=${{ inputs.terraform_backend_bucket }}" \
+            -backend-config="key=${{ inputs.terraform_backend_key }}" \
+            -backend-config="region=auto" \
+            -backend-config="endpoints={s3=\"${{ inputs.terraform_backend_endpoint }}\"}" \
+            -backend-config="use_path_style=true" \
+            -backend-config="skip_credentials_validation=true" \
+            -backend-config="skip_metadata_api_check=true" \
+            -backend-config="skip_region_validation=true" \
+            -backend-config="skip_requesting_account_id=true" \
+            -backend-config="skip_s3_checksum=true" \
+            -backend-config="use_lockfile=true"
+          terraform apply -auto-approve \
+            -var="account_id=${{ inputs.account_id }}" \
+            -var="environment=${{ inputs.environment }}"
+
+      - name: Deploy Worker
+        working-directory: cloud
+        env:
+          RVW_VERSION: ${{ inputs.rvw_ref }}
+        run: |
+          set -euo pipefail
+          worker_name="${RVW_WORKER_NAME:-}"
+          if [ -z "$worker_name" ]; then worker_name="rvw-cloud-${RVW_ENVIRONMENT}"; fi
+          printf 'RVW_WORKER_NAME=%s\n' "$worker_name" >> "$GITHUB_ENV"
+          printf 'RVW_VERSION=%s\n' "${RVW_REF#v}" >> "$GITHUB_ENV"
+          npx wrangler containers list --json 2>/dev/null \
+            | jq -r '.. | objects | .image_digest? // .imageDigest? // empty' 2>/dev/null \
+            | grep -E '^sha256:[0-9a-f]{64}$' | head -n 1 > /tmp/rvw-previous-digest || true
+          npx wrangler deploy --env "$RVW_ENVIRONMENT" \
+            --name "$worker_name" \
+            --var "CODEX_PROXY_HOST:${RVW_CODEX_PROXY_HOST}" \
+            --var "GITHUB_APP_ID:${RVW_GITHUB_APP_ID}" \
+            --var "RVW_JOB_DEADLINE_MINUTES:${RVW_JOB_DEADLINE_MINUTES}" \
+            --var "RVW_VERSION:${RVW_REF#v}" | tee /tmp/rvw-wrangler-deploy.log
+          grep -Eo 'sha256:[0-9a-f]{64}' /tmp/rvw-wrangler-deploy.log | tail -n 1 > /tmp/rvw-expected-digest || true
+
+      - name: Put Worker secrets
+        working-directory: cloud
+        env:
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+          GITHUB_WEBHOOK_SECRET: ${{ secrets.GITHUB_WEBHOOK_SECRET }}
+          RVW_ADMIN_TOKEN: ${{ secrets.RVW_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          for secret_name in CODEX_API_KEY GITHUB_APP_PRIVATE_KEY GITHUB_WEBHOOK_SECRET RVW_ADMIN_TOKEN; do
+            printf '%s' "${!secret_name}" | npx wrangler secret put "$secret_name" --env "$RVW_ENVIRONMENT"
+          done
+
+      - name: Wait for container rollout and health
+        working-directory: cloud
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + RVW_JOB_DEADLINE_MINUTES * 60 ))
+          expected_digest=""
+          if [ -s /tmp/rvw-expected-digest ]; then expected_digest=$(cat /tmp/rvw-expected-digest); fi
+          previous_digest=""
+          if [ -s /tmp/rvw-previous-digest ]; then previous_digest=$(cat /tmp/rvw-previous-digest); fi
+          worker_url="${RVW_WORKER_URL:-}"
+          if [ -z "$worker_url" ]; then worker_url="https://${RVW_WORKER_NAME}.workers.dev"; fi
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            containers_json=$(npx wrangler containers list --json 2>/dev/null || true)
+            reported_digest=$(printf '%s' "$containers_json" | jq -r '.. | objects | .image_digest? // .imageDigest? // empty' 2>/dev/null | grep -E '^sha256:[0-9a-f]{64}$' | head -n 1 || true)
+            digest_ready=false
+            if [ -n "$expected_digest" ] && [ "$reported_digest" = "$expected_digest" ]; then
+              digest_ready=true
+            elif [ -z "$expected_digest" ] && [ -n "$reported_digest" ] && [ "$reported_digest" != "$previous_digest" ]; then
+              # Wrangler versions differ in whether deploy output includes the
+              # image digest; a changed reported digest is the A0 fallback.
+              digest_ready=true
+            fi
+            if [ "$digest_ready" = true ]; then
+              if curl --fail --silent --show-error --max-time 15 "$worker_url/healthz" | jq -e --arg env "$RVW_ENVIRONMENT" '.environment == $env' >/dev/null; then
+                echo "container rollout and health check passed for $RVW_ENVIRONMENT ($expected_digest)"
+                exit 0
+              fi
+            fi
+            sleep 30
+          done
+          echo "timed out waiting for container digest $expected_digest and /healthz environment $RVW_ENVIRONMENT" >&2
+          exit 1
