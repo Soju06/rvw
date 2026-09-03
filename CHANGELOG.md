@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/Soju06/rvw/compare/v0.10.0...v0.11.0) (2026-09-03)
+
+
+### Features
+
+* **cloud:** publish reusable deployment artifacts ([#56](https://github.com/Soju06/rvw/issues/56)) ([4e19678](https://github.com/Soju06/rvw/commit/4e1967892260df3f3f9864e5128b297b3020f2ad))
+
 ## [0.10.0](https://github.com/Soju06/rvw/compare/v0.9.1...v0.10.0) (2026-09-03)
 
 
