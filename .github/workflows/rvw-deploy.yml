@@ -104,9 +104,22 @@ jobs:
           test -n "$RVW_CODEX_PROXY_HOST"
           test -n "$RVW_GITHUB_APP_ID"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
+      # In a reusable workflow github.repository is the CALLER, so a bare
+      # checkout would look for the rvw tag in the deployer's repo (measured:
+      # first live dispatch failed with "git exited 1"). Derive the repo that
+      # owns this workflow from github.workflow_ref (owner/repo/.github/...).
+      - name: Resolve rvw repository
+        id: rvw_repo
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          repo="${WORKFLOW_REF%%/.github/*}"
+          test -n "$repo"
+          echo "repository=$repo" >> "$GITHUB_OUTPUT"
       - name: Check out rvw release
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ${{ steps.rvw_repo.outputs.repository }}
           persist-credentials: false
           ref: ${{ inputs.rvw_ref }}
 
