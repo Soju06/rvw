@@ -217,11 +217,19 @@ jobs:
           if [ -s /tmp/rvw-expected-digest ]; then expected_digest=$(cat /tmp/rvw-expected-digest); fi
           previous_digest=""
           if [ -s /tmp/rvw-previous-digest ]; then previous_digest=$(cat /tmp/rvw-previous-digest); fi
+          # Container application name is declared in wrangler.jsonc
+          # (containers[].name, same across envs); read it instead of assuming.
+          container_name=$(python3 -c 'import json,re,sys; s=re.sub(r"//[^\n]*","",open("wrangler.jsonc").read()); d=json.loads(s); e=sys.argv[1]; c=(d.get("env",{}).get(e,{}).get("containers") or d.get("containers")); print(c[0]["name"])' "$RVW_ENVIRONMENT")
+          test -n "$container_name"
           worker_url="${RVW_WORKER_URL:-}"
           if [ -z "$worker_url" ]; then worker_url="https://${RVW_WORKER_NAME}.workers.dev"; fi
           while [ "$(date +%s)" -lt "$deadline" ]; do
             containers_json=$(npx wrangler containers list --json 2>/dev/null || true)
-            reported_digest=$(printf '%s' "$containers_json" | jq -r '.. | objects | .image_digest? // .imageDigest? // empty' 2>/dev/null | grep -E '^sha256:[0-9a-f]{64}$' | head -n 1 || true)
+            # `wrangler containers list --json` reports the image as
+            # `<registry>/<account>/<app>@sha256:<digest>` (measured 2026-09-03);
+            # there is no separate image_digest field. Scope to THIS Worker's
+            # container application so sibling apps on the account are ignored.
+            reported_digest=$(printf '%s' "$containers_json" | jq -r --arg name "$container_name" '.. | objects | select(.name? == $name) | .image? // empty' 2>/dev/null | grep -oE 'sha256:[0-9a-f]{64}' | head -n 1 || true)
             digest_ready=false
             if [ -n "$expected_digest" ] && [ "$reported_digest" = "$expected_digest" ]; then
               digest_ready=true
@@ -231,7 +239,7 @@ jobs:
               digest_ready=true
             fi
             if [ "$digest_ready" = true ]; then
-              if curl --fail --silent --show-error --max-time 15 "$worker_url/healthz" | jq -e --arg env "$RVW_ENVIRONMENT" '.environment == $env' >/dev/null; then
+              if curl --fail --silent --show-error --max-time 15 "$worker_url/healthz" | jq -e --arg env "$RVW_ENVIRONMENT" '.env == $env' >/dev/null; then
                 echo "container rollout and health check passed for $RVW_ENVIRONMENT ($expected_digest)"
                 exit 0
               fi
