@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/Soju06/rvw/compare/v0.11.0...v0.11.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* **cloud:** check out rvw from the workflow-owning repo in rvw-deploy.yml ([#58](https://github.com/Soju06/rvw/issues/58)) ([91047db](https://github.com/Soju06/rvw/commit/91047db1863186ae4e782d87f5a61545251cae49))
+
 ## [0.11.0](https://github.com/Soju06/rvw/compare/v0.10.0...v0.11.0) (2026-09-03)
 
 
