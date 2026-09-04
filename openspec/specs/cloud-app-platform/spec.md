@@ -23,6 +23,27 @@ No Cloudflare, GitHub, or Codex secret value, token, private key, or generated a
 - **WHEN** source, configuration, image build inputs, and manifests are reviewed
 - **THEN** no credential value is present and all secret references are placeholders or runtime names
 
+### Requirement: Sandbox image ships a compatible reproducible GitHub CLI
+
+The cloud Sandbox image MUST install an exact GitHub CLI release from the official
+upstream release archive at `/usr/local/bin/gh`, MUST verify that archive against a
+pinned SHA-256 and the checksum manifest from the same release, and MUST NOT install the
+distribution-provided `gh` package. The image build MUST fail unless the installed
+version is at least the declared minimum version that supports every pull-request field
+used by rvw target resolution, including `headRefOid`.
+
+#### Scenario: Sandbox image definition is inspected offline
+
+- **WHEN** a maintainer inspects the cloud Dockerfile without network credentials
+- **THEN** it declares exact GitHub CLI and minimum versions, omits `gh` from the
+  distribution package list, and verifies the exact official release archive checksum
+
+#### Scenario: Sandbox image is built
+
+- **WHEN** the cloud Sandbox image build installs its declared GitHub CLI release
+- **THEN** `/usr/local/bin/gh` reports that exact release and the build-time minimum
+  version assertion succeeds
+
 ### Requirement: Cloud assets are deployer-neutral
 Cloud code and committed configuration MUST NOT contain deployer-specific identifiers; required deployer values MUST be provided by configuration and MUST fail closed when absent. Deployer-specific values MUST live outside this repository in private deployment configuration or CI variables and secrets.
 

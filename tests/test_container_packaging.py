@@ -96,7 +96,7 @@ def test_dockerfile_pins_complete_multistage_runtime() -> None:
     assert "node:24-bookworm-slim" in dockerfile
     assert "ghcr.io/astral-sh/uv:" in dockerfile
     assert "@openai/codex@0.152.0" in dockerfile
-    for package in ("bash", "coreutils", "git", "gh", "ripgrep", "util-linux"):
+    for package in ("bash", "coreutils", "git", "ripgrep", "util-linux"):
         assert package in dockerfile
     assert "uv pip install --system" in dockerfile
     assert "COPY src" in dockerfile
