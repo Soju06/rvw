@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.4](https://github.com/Soju06/rvw/compare/v0.11.3...v0.11.4) (2026-09-04)
+
+
+### Bug Fixes
+
+* **cloud:** preserve A1 process artifacts ([#64](https://github.com/Soju06/rvw/issues/64)) ([09ba6c0](https://github.com/Soju06/rvw/commit/09ba6c0900917ef935050db0ea8e6f2721bbae55))
+
 ## [0.11.3](https://github.com/Soju06/rvw/compare/v0.11.2...v0.11.3) (2026-09-04)
 
 
