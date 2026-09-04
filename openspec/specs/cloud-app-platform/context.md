@@ -57,3 +57,14 @@ neither exists. The image now supplies a versioned external fallback while
 retaining repository-base policy precedence. The checkouts, working directory,
 `--repo-dir`, `CODEX_BASE_URL`, explicit `RVW_CODEX_SANDBOX`, and fetched base SHA
 were all present and are not supported as causes by the source or live trace.
+
+The 2026-09-04 v0.11.4 A1 rerun exposed a later image compatibility boundary. The
+Sandbox image installed Debian's apt-provided GitHub CLI, reported as version 2.45.0,
+and rvw target resolution failed after 4,467 ms when `gh pr view` rejected
+`headRefOid` in `_PR_FIELDS` as an unknown JSON field. No lane dispatch or Codex
+invocation occurred. Official GitHub CLI history identifies v2.18.0 as the release that
+added `headRefOid`, and upstream v2.45.0 source contains the field, so the reported
+version alone does not explain the observed binary behavior. The image contract now
+removes that ambiguity: it installs the exact official v2.100.0 Linux amd64 archive at
+`/usr/local/bin/gh`, authenticates it with the pinned SHA-256 and same-release checksum
+manifest, and separately enforces the actual v2.18.0 compatibility floor during build.

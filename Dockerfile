@@ -10,6 +10,9 @@ FROM python:3.12-slim-bookworm AS runtime
 
 ARG CODEX_BASE_URL=""
 ARG RVW_IMAGE_VERSION="dev"
+ARG GH_VERSION="v2.100.0"
+ARG GH_SHA256="e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be"
+ARG MIN_GH_VERSION="2.18.0"
 
 LABEL org.opencontainers.image.title="rvw" \
       org.opencontainers.image.description="Containerized systemic rvw review runtime" \
@@ -26,11 +29,32 @@ RUN apt-get update \
         bash \
         ca-certificates \
         coreutils \
-        gh \
+        curl \
         git \
+        gzip \
         ripgrep \
+        tar \
         util-linux \
     && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    gh_version="${GH_VERSION#v}"; \
+    gh_archive="gh_${gh_version}_linux_amd64.tar.gz"; \
+    gh_checksums="gh_${gh_version}_checksums.txt"; \
+    gh_release_url="https://github.com/cli/cli/releases/download/${GH_VERSION}"; \
+    curl --fail --location --silent --show-error --output "/tmp/${gh_archive}" "${gh_release_url}/${gh_archive}"; \
+    curl --fail --location --silent --show-error --output "/tmp/${gh_checksums}" "${gh_release_url}/${gh_checksums}"; \
+    grep --fixed-strings "${GH_SHA256}  ${gh_archive}" "/tmp/${gh_checksums}"; \
+    printf '%s  %s\n' "${GH_SHA256}" "${gh_archive}" | (cd /tmp && sha256sum --check -); \
+    tar --extract --gzip --file="/tmp/${gh_archive}" --directory=/tmp; \
+    install --mode=0755 "/tmp/gh_${gh_version}_linux_amd64/bin/gh" /usr/local/bin/gh; \
+    gh --version; \
+    installed_version="$(gh --version)"; \
+    installed_version="${installed_version#gh version }"; \
+    installed_version="${installed_version%% *}"; \
+    test "${installed_version}" = "${gh_version}"; \
+    dpkg --compare-versions "${installed_version}" ge "${MIN_GH_VERSION}"; \
+    rm --recursive --force "/tmp/${gh_archive}" "/tmp/${gh_checksums}" "/tmp/gh_${gh_version}_linux_amd64"
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 COPY --from=codex /usr/local/bin/node /usr/local/bin/node

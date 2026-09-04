@@ -28,6 +28,12 @@ GitHub Actions entry. Normative behavior is in [spec.md](spec.md).
 - Each release tag builds the checked-out source with its normalized version and an
   empty build-time Codex endpoint, then publishes one GHCR image under the version and
   `latest` tags. The release summary exposes its digest for immutable caller pins.
+- Both image definitions install the official GitHub CLI v2.100.0 Linux amd64 archive
+  at `/usr/local/bin/gh` rather than inheriting Debian's package. The build pins SHA-256
+  `e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be`, confirms that
+  value appears for the archive in v2.100.0's `checksums.txt`, verifies the downloaded
+  bytes, and enforces v2.18.0 as the first release supporting rvw's required
+  `headRefOid` field.
 
 ## Constraints
 
