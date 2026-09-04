@@ -1,6 +1,12 @@
 import {DurableObject} from "cloudflare:workers";
+import type {Process} from "@cloudflare/sandbox";
 
-import {REVIEW_ARTIFACT_NAMES, artifactKey, artifactPath} from "./artifacts";
+import {
+  REVIEW_RESULT_ARTIFACT_NAMES,
+  artifactKey,
+  artifactPath,
+  type ReviewArtifactName,
+} from "./artifacts";
 import {requiredConfig, type RequiredConfig} from "./config";
 import {
   clearInstallationToken,
@@ -23,11 +29,19 @@ import {
   type ReviewResultMapping,
 } from "./review-job-contract";
 import {
+  combinedProcessLog,
+  missingArtifactDiagnostics,
+  processFacts,
+  processJson,
+  type CapturedProcessLogs,
+  type ProcessFacts,
+} from "./review-job-observability";
+import {
   buildGitCloneUrl,
   buildReviewProcessEnv,
   buildRvwAutoInvocation,
 } from "./sandbox-auth";
-import {configureOutbound, optionalFile, sandboxFor} from "./sandbox";
+import {configureOutbound, optionalFile, readTextFile, sandboxFor} from "./sandbox";
 import {validateReviewJobMessage, type ReviewJobMessage} from "./webhook";
 
 const JOB_STORAGE_KEY = "job";
@@ -51,6 +65,8 @@ interface JobRecord {
   deadlineAt?: string;
   sandboxId?: string;
   processId?: string;
+  processCommand?: string;
+  processStartedAt?: string;
   checkRunId?: number;
   checkRunUrl?: string;
   conclusion?: CheckConclusion;
@@ -91,7 +107,7 @@ TARGET=/workspace/target
 ADJ=/workspace/adjudication
 OUT=/tmp/rvw
 mkdir -p "$RESULT" /root/.config/gh
-exec > >(tee -a "$RESULT/run.log") 2>&1
+exec > >(tee -a "$RESULT/run.log") 2> >(tee -a "$RESULT/run.log" >&2)
 cat > /root/.config/gh/hosts.yml <<'RVW_GH_CONFIG'
 github.com:
     user: x-access-token
@@ -100,6 +116,7 @@ github.com:
 RVW_GH_CONFIG
 chmod 0600 /root/.config/gh/hosts.yml
 unset GH_TOKEN GITHUB_TOKEN RVW_CODEX_DEFAULT_BASE_URL RVW_CODEX_SANDBOX
+printenv | LC_ALL=C sort | sed -E '/(bearer|token|key=)/I s/=.*/=[REDACTED]/' > "$RESULT/environment.txt"
 git clone --no-checkout '${cloneUrl}' "$TARGET"
 git -C "$TARGET" fetch --no-tags origin 'refs/pull/${message.prNumber}/head' '${message.baseSha}'
 git -C "$TARGET" checkout --detach '${message.headSha}'
@@ -108,7 +125,7 @@ git -C "$ADJ" fetch --no-tags origin 'refs/pull/${message.prNumber}/head' '${mes
 git -C "$ADJ" checkout --detach '${message.headSha}'
 cd "$TARGET"
 set +e
-${buildRvwAutoInvocation(message.prNumber)} > "$RESULT/rvw-auto.json"
+${buildRvwAutoInvocation(message.owner, message.repo, message.prNumber)} > "$RESULT/rvw-auto.json"
 review_rc=$?
 python - "$RESULT/rvw-auto.json" "$OUT" "$RESULT" <<'PY'
 import json
@@ -168,6 +185,7 @@ function summaryText(
   jobId: string,
   mapping: ReviewResultMapping,
   summary: ArtifactSummary | null,
+  processDiagnostics?: string,
 ): string {
   const lines = [mapping.reason];
   if (summary !== null) {
@@ -181,6 +199,7 @@ function summaryText(
         .join(", ") || "none"}.`,
     );
   }
+  if (processDiagnostics !== undefined) lines.push(processDiagnostics);
   lines.push(`Artifacts: job ${jobId}`);
   return lines.join("\n\n");
 }
@@ -345,6 +364,7 @@ export class RvwReviewJob extends DurableObject<Env> {
     await sandbox.writeFile("/workspace/run-review.sh", reviewScript(message));
     await sandbox.exec("chmod 0755 /workspace/run-review.sh");
     const process = await sandbox.startProcess("/workspace/run-review.sh", {
+      autoCleanup: false,
       env: buildReviewProcessEnv(config.codexProxyHost),
     });
     const deadlineAtMs =
@@ -353,6 +373,8 @@ export class RvwReviewJob extends DurableObject<Env> {
       ...record,
       sandboxId,
       processId: process.id,
+      processCommand: process.command,
+      processStartedAt: process.startTime.toISOString(),
       deadlineAt: new Date(deadlineAtMs).toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -551,14 +573,147 @@ export class RvwReviewJob extends DurableObject<Env> {
     return next;
   }
 
+  private async putArtifact(
+    record: JobRecord,
+    name: ReviewArtifactName,
+    content: string,
+  ): Promise<ArtifactMetadata> {
+    const stored = await this.env.RVW_ARTIFACTS.put(
+      artifactKey(record.jobId, name),
+      content,
+      {
+        httpMetadata: {
+          contentType: name.endsWith(".json")
+            ? "application/json"
+            : name.endsWith(".md")
+              ? "text/markdown; charset=utf-8"
+              : "text/plain; charset=utf-8",
+        },
+      },
+    );
+    return {
+      name,
+      key: stored.key,
+      size: stored.size,
+      etag: stored.etag,
+      uploadedAt: stored.uploaded.toISOString(),
+    };
+  }
+
+  private async putArtifactBestEffort(
+    record: JobRecord,
+    name: ReviewArtifactName,
+    content: string,
+  ): Promise<ArtifactMetadata | null> {
+    try {
+      return await this.putArtifact(record, name, content);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "review_job_diagnostic_persistence_failure",
+          jobId: record.jobId,
+          artifact: name,
+          error: errorMessage(error),
+        }),
+      );
+      return null;
+    }
+  }
+
+  private mergeArtifactMetadata(
+    current: ArtifactMetadata[],
+    additions: ArtifactMetadata[],
+  ): ArtifactMetadata[] {
+    const merged = new Map(current.map((artifact) => [artifact.name, artifact]));
+    for (const artifact of additions) merged.set(artifact.name, artifact);
+    return [...merged.values()];
+  }
+
+  private async persistTerminalDiagnostics(
+    record: JobRecord,
+    process: Process | null,
+    exitCode: number | null,
+  ): Promise<{record: JobRecord; facts: ProcessFacts; stderr: string}> {
+    if (record.sandboxId === undefined) {
+      const facts = processFacts(
+        {command: record.processCommand ?? "/workspace/run-review.sh", exitCode},
+        Date.now(),
+      );
+      return {record, facts, stderr: ""};
+    }
+    const sandbox = sandboxFor(this.env, record.sandboxId);
+    const observedAt = Date.now();
+    const startedAt =
+      process?.startTime ??
+      (record.processStartedAt === undefined ? undefined : new Date(record.processStartedAt));
+    const facts = processFacts(
+      {
+        command: process?.command ?? record.processCommand ?? "/workspace/run-review.sh",
+        exitCode: process?.exitCode ?? exitCode,
+        startTime: startedAt,
+        endTime: process?.endTime,
+      },
+      observedAt,
+    );
+    let logs: CapturedProcessLogs | null = null;
+    if (record.processId !== undefined) {
+      try {
+        logs = await sandbox.getProcessLogs(record.processId);
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: "review_job_process_logs_unavailable",
+            jobId: record.jobId,
+            error: errorMessage(error),
+          }),
+        );
+      }
+    }
+
+    const additions: ArtifactMetadata[] = [];
+    const processArtifact = await this.putArtifactBestEffort(
+      record,
+      "process.json",
+      processJson(facts),
+    );
+    if (processArtifact !== null) additions.push(processArtifact);
+
+    const runLog =
+      logs === null
+        ? await optionalFile(sandbox, artifactPath("run.log"))
+        : combinedProcessLog(logs);
+    if (runLog !== null) {
+      const runArtifact = await this.putArtifactBestEffort(record, "run.log", runLog);
+      if (runArtifact !== null) additions.push(runArtifact);
+    }
+
+    const environment = await optionalFile(sandbox, artifactPath("environment.txt"));
+    if (environment !== null) {
+      const environmentArtifact = await this.putArtifactBestEffort(
+        record,
+        "environment.txt",
+        environment,
+      );
+      if (environmentArtifact !== null) additions.push(environmentArtifact);
+    }
+
+    const next = {
+      ...record,
+      artifacts: this.mergeArtifactMetadata(record.artifacts, additions),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.save(next);
+    return {record: next, facts, stderr: logs?.stderr ?? ""};
+  }
+
   private async persistArtifacts(record: JobRecord): Promise<ArtifactMetadata[]> {
     if (record.sandboxId === undefined) return [];
     const sandbox = sandboxFor(this.env, record.sandboxId);
     const artifacts: ArtifactMetadata[] = [];
-    for (const name of REVIEW_ARTIFACT_NAMES) {
-      let file;
+    for (const name of REVIEW_RESULT_ARTIFACT_NAMES) {
+      let content: string;
       try {
-        file = await sandbox.readFile(artifactPath(name), {encoding: "none"});
+        content = await readTextFile(sandbox, artifactPath(name));
       } catch (error) {
         console.log(
           JSON.stringify({
@@ -570,26 +725,7 @@ export class RvwReviewJob extends DurableObject<Env> {
         );
         continue;
       }
-      const stored = await this.env.RVW_ARTIFACTS.put(
-        artifactKey(record.jobId, name),
-        file.content,
-        {
-          httpMetadata: {
-            contentType: name.endsWith(".json")
-              ? "application/json"
-              : name.endsWith(".md")
-                ? "text/markdown; charset=utf-8"
-                : "text/plain; charset=utf-8",
-          },
-        },
-      );
-      artifacts.push({
-        name,
-        key: stored.key,
-        size: stored.size,
-        etag: stored.etag,
-        uploadedAt: stored.uploaded.toISOString(),
-      });
+      artifacts.push(await this.putArtifact(record, name, content));
     }
     return artifacts;
   }
@@ -597,7 +733,11 @@ export class RvwReviewJob extends DurableObject<Env> {
   private async persistArtifactsBestEffort(record: JobRecord): Promise<JobRecord> {
     try {
       const artifacts = await this.persistArtifacts(record);
-      const next = {...record, artifacts, updatedAt: new Date().toISOString()};
+      const next = {
+        ...record,
+        artifacts: this.mergeArtifactMetadata(record.artifacts, artifacts),
+        updatedAt: new Date().toISOString(),
+      };
       await this.save(next);
       return next;
     } catch (error) {
@@ -614,6 +754,7 @@ export class RvwReviewJob extends DurableObject<Env> {
 
   private async finishPublishing(
     record: JobRecord,
+    process: Process | null,
     exitCode: number | null,
     resultOutput: string,
     config: RequiredConfig,
@@ -625,6 +766,8 @@ export class RvwReviewJob extends DurableObject<Env> {
     const message = record.message;
     const checkRunId = record.checkRunId;
     const sandbox = sandboxFor(this.env, record.sandboxId ?? "missing");
+    const diagnostics = await this.persistTerminalDiagnostics(record, process, exitCode);
+    record = diagnostics.record;
     const [discoverJson, outcomeJson] = await Promise.all([
       optionalFile(sandbox, artifactPath("discover.json")),
       optionalFile(sandbox, artifactPath("outcome.json")),
@@ -634,8 +777,10 @@ export class RvwReviewJob extends DurableObject<Env> {
       mapping = {terminalState: "failed", conclusion: "neutral", reason: overrideReason};
     }
     let summary: ArtifactSummary | null = null;
+    let processSummary: string | undefined;
     try {
       if (discoverJson === null || outcomeJson === null) {
+        processSummary = missingArtifactDiagnostics(diagnostics.facts, diagnostics.stderr);
         throw new Error("required result artifact is missing");
       }
       summary = summarizeArtifacts(discoverJson, outcomeJson);
@@ -647,7 +792,11 @@ export class RvwReviewJob extends DurableObject<Env> {
       };
     }
     const artifacts = await this.persistArtifacts(record);
-    record = {...record, artifacts, updatedAt: new Date().toISOString()};
+    record = {
+      ...record,
+      artifacts: this.mergeArtifactMetadata(record.artifacts, artifacts),
+      updatedAt: new Date().toISOString(),
+    };
     await this.save(record);
     const token = await this.token(record, config.githubAppId);
     await updateCheckRun(token, {
@@ -656,7 +805,7 @@ export class RvwReviewJob extends DurableObject<Env> {
       checkRunId,
       conclusion: mapping.conclusion,
       title: titleFor(mapping),
-      summary: summaryText(record.jobId, mapping, summary),
+      summary: summaryText(record.jobId, mapping, summary, processSummary),
     });
     record = {
       ...record,
@@ -710,11 +859,15 @@ export class RvwReviewJob extends DurableObject<Env> {
       }
       if (record.state === "publishing") {
         const sandbox = sandboxFor(this.env, record.sandboxId ?? "missing");
+        const process =
+          record.processId === undefined ? null : await sandbox.getProcess(record.processId);
         const resultOutput = (await optionalFile(sandbox, "/workspace/result/rvw-auto.json")) ?? "";
         const exitText = await optionalFile(sandbox, "/workspace/result/process-exit-code");
-        const exitCode = exitText === null ? null : Number.parseInt(exitText.trim(), 10);
+        const recordedExitCode = exitText === null ? null : Number.parseInt(exitText.trim(), 10);
+        const exitCode = process?.exitCode ?? recordedExitCode;
         await this.finishPublishing(
           record,
+          process,
           Number.isNaN(exitCode) ? null : exitCode,
           resultOutput,
           config,
@@ -733,6 +886,7 @@ export class RvwReviewJob extends DurableObject<Env> {
         await this.finishPublishing(
           record,
           null,
+          null,
           "",
           config,
           "Sandbox process record disappeared",
@@ -745,7 +899,13 @@ export class RvwReviewJob extends DurableObject<Env> {
       }
       record = await this.transition(record, "publishing");
       const resultOutput = (await optionalFile(sandbox, "/workspace/result/rvw-auto.json")) ?? "";
-      await this.finishPublishing(record, process.exitCode ?? null, resultOutput, config);
+      await this.finishPublishing(
+        record,
+        process,
+        process.exitCode ?? null,
+        resultOutput,
+        config,
+      );
     } catch (error) {
       console.error(
         JSON.stringify({

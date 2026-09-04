@@ -104,13 +104,17 @@ export function buildReviewProcessEnv(
   };
 }
 
-export function buildRvwAutoInvocation(prNumber: number): string {
+export function buildRvwAutoInvocation(owner: string, repo: string, prNumber: number): string {
+  if (!REPOSITORY_PART.test(owner) || !REPOSITORY_PART.test(repo)) {
+    throw new Error("GitHub owner and repository must be safe path components");
+  }
   if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
     throw new Error("pull-request number must be a positive integer");
   }
   return (
-    "env RVW_CODEX_SANDBOX=danger-full-access " +
+    `env GH_REPO='${owner}/${repo}' RVW_CODEX_SANDBOX=danger-full-access ` +
     "python -m rvw.container_entrypoint auto " +
-    `--target '${prNumber}' --repo-dir "$ADJ" --json`
+    `--target 'https://github.com/${owner}/${repo}/pull/${prNumber}' ` +
+    '--repo-dir "$ADJ" --json'
   );
 }

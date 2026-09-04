@@ -22,4 +22,6 @@ COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN uv python install 3.12 --default && uv venv --python 3.12 /opt/rvw-venv && uv pip install --python /opt/rvw-venv/bin/python --no-cache . && rvw --version && codex --version && node --version && rvw lanes list
 COPY cloud/docker/codex-config.toml /etc/rvw/codex-config.toml
+RUN mkdir -p /root/.hermes/review/policies
+COPY cloud/docker/auto-policy.yaml /root/.hermes/review/policies/auto.yaml
 WORKDIR /workspace
