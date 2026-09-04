@@ -21,5 +21,5 @@
   invocation facts, and unresolved early-exit hypotheses.
 - [x] 3.2 Run every required Python, OpenSpec, workflow, cloud, Wrangler, and
   Docker gate as a bare command and inspect the final diff for secrets.
-- [ ] 3.3 Commit, push `fix/cloud-artifact-transport`, and open a pull request
+- [x] 3.3 Commit, push `fix/cloud-artifact-transport`, and open a pull request
   to `main` without deploying.
