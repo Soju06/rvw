@@ -1,0 +1,13 @@
+promote_to_blocker:
+  agreement_at_least: 2
+  severity_at_least: warning
+
+drop:
+  agreement_at_most: 1
+  severity_at_most: suggestion
+
+block_when:
+  severity_at_least: blocker
+  confirmed_only: true
+
+publish_state: comment

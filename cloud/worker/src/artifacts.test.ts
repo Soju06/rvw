@@ -10,6 +10,8 @@ describe("review artifact layout", () => {
       "merge.json",
       "outcome.json",
       "run.log",
+      "process.json",
+      "environment.txt",
     ]);
     expect(REVIEW_ARTIFACT_NAMES.map((name) => artifactKey("17:23:42:abc", name))).toEqual(
       REVIEW_ARTIFACT_NAMES.map((name) => `jobs/17:23:42:abc/${name}`),

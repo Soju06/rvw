@@ -100,11 +100,12 @@ describe("review process environment", () => {
   });
 
   it("materializes Codex configuration before running auto in the outer Sandbox", () => {
-    expect(buildRvwAutoInvocation(42)).toBe(
-      "env RVW_CODEX_SANDBOX=danger-full-access " +
+    expect(buildRvwAutoInvocation("acme", "rockets", 42)).toBe(
+      "env GH_REPO='acme/rockets' RVW_CODEX_SANDBOX=danger-full-access " +
         "python -m rvw.container_entrypoint auto " +
-        "--target '42' --repo-dir \"$ADJ\" --json",
+        "--target 'https://github.com/acme/rockets/pull/42' --repo-dir \"$ADJ\" --json",
     );
-    expect(() => buildRvwAutoInvocation(0)).toThrow(/positive integer/);
+    expect(() => buildRvwAutoInvocation("acme", "rockets", 0)).toThrow(/positive integer/);
+    expect(() => buildRvwAutoInvocation("bad owner", "rockets", 42)).toThrow(/path components/);
   });
 });

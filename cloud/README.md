@@ -176,8 +176,12 @@ The hard job deadline is `RVW_JOB_DEADLINE_MINUTES` and defaults to 90. A health
 process is polled every 30 seconds and is never killed because an HTTP observer
 stopped waiting. Artifacts are stored under
 `jobs/<installation_id:repo_id:pr_number:head_sha>/` as `report.md`,
-`discover.json`, `merge.json`, `outcome.json`, and `run.log`; Worker responses
-return keys and metadata only.
+`discover.json`, `merge.json`, `outcome.json`, `run.log`, `process.json`, and
+`environment.txt`; Worker responses return keys and metadata only. When a
+process ends, the Worker saves SDK-captured stdout/stderr, process exit facts,
+and the available redacted environment snapshot before interpreting result
+artifacts. A missing-result Check Run includes the exit code, duration, and a
+credential-filtered tail of approximately 20 stderr lines.
 
 An operator can inspect metadata in any environment with:
 
@@ -196,6 +200,22 @@ The Sandbox environment contains only a placeholder `CODEX_API_KEY` and the
 Codex proxy URL. GitHub API and git clone credentials are short-lived,
 repository-scoped installation tokens attached by the Worker egress handlers;
 neither `GH_TOKEN` nor `GITHUB_TOKEN` is passed to the review process.
+
+All current A1 artifacts are text and are read explicitly as UTF-8. On pinned
+`@cloudflare/sandbox` 0.12.9, the default HTTP transport supports UTF-8 and
+base64 `readFile` results; only raw `encoding: "none"` requires RPC.
+`SANDBOX_TRANSPORT` configures the Sandbox Durable Object's Worker environment,
+not the review process environment, and `getSandbox(..., {transport: "rpc"})`
+is the explicit per-sandbox alternative. A route-compatible `readFileStream`
+API also exists for future binary artifacts. A1 does not enable RPC because it
+has no binary artifacts.
+
+The image installs a versioned fallback auto policy at
+`/root/.hermes/review/policies/auto.yaml`. rvw still checks the target base
+revision for `.rvw/policies/auto.yaml` first, so repository policy takes
+precedence. The A1 command uses the full pull-request URL from the webhook
+message and supplies its non-secret repository identity to `gh`, avoiding a
+redundant `gh repo view` lookup and remote inference before PR resolution.
 
 The pinned SDK's outbound-request boundary and the exact Basic authorization
 rewrite are covered offline. Before trusting the first production rollout,

@@ -5,6 +5,7 @@ import {
   injectGitHubCloneCredential,
 } from "./sandbox-auth";
 import {codexOutboundHandler, configureCodexEgress} from "./sandbox-config";
+import {optionalTextFile, readTextFile, type TextFileReader} from "./text-file";
 
 export {ContainerProxy};
 
@@ -50,11 +51,11 @@ export function processPayload(process: Process | null): Record<string, unknown>
   return {id: process.id, pid: process.pid, command: process.command, status: process.status, startTime: process.startTime, endTime: process.endTime, exitCode: process.exitCode};
 }
 
-export async function optionalFile(sandbox: RvwSandbox, path: string): Promise<string | null> {
-  try {
-    const file = await sandbox.readFile(path);
-    return typeof file.content === "string" ? file.content : null;
-  } catch {
-    return null;
-  }
+export {readTextFile};
+
+export async function optionalFile(
+  sandbox: TextFileReader,
+  path: string,
+): Promise<string | null> {
+  return await optionalTextFile(sandbox, path);
 }
