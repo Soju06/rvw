@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/Soju06/rvw/compare/v0.11.1...v0.11.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* **cloud:** take the rvw repository as an input in rvw-deploy.yml ([#60](https://github.com/Soju06/rvw/issues/60)) ([17700f6](https://github.com/Soju06/rvw/commit/17700f653f22dfccaaaa9629468f21156dfaa568))
+
 ## [0.11.1](https://github.com/Soju06/rvw/compare/v0.11.0...v0.11.1) (2026-09-04)
 
 
