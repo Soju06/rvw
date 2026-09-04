@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.5](https://github.com/Soju06/rvw/compare/v0.11.4...v0.11.5) (2026-09-04)
+
+
+### Bug Fixes
+
+* pin GitHub CLI in container images ([#67](https://github.com/Soju06/rvw/issues/67)) ([8167dfb](https://github.com/Soju06/rvw/commit/8167dfba55f1d34d280c2725de76dea486b7da87))
+
 ## [0.11.4](https://github.com/Soju06/rvw/compare/v0.11.3...v0.11.4) (2026-09-04)
 
 
