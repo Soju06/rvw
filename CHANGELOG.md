@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.3](https://github.com/Soju06/rvw/compare/v0.11.2...v0.11.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* **cloud:** make the rollout/health gate observe real fields ([#62](https://github.com/Soju06/rvw/issues/62)) ([379ff5b](https://github.com/Soju06/rvw/commit/379ff5bc3c376cfda787f4903fc574c3393a8911))
+
 ## [0.11.2](https://github.com/Soju06/rvw/compare/v0.11.1...v0.11.2) (2026-09-04)
 
 
