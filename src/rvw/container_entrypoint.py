@@ -62,10 +62,44 @@ def run_entrypoint(
 
     home_value = environ.get("HOME")
     home = Path(home_value) if home_value else Path.home()
-    materialize_codex_config(template_path=template_path, home=home, environ=environ)
-    rvw_argv = ["rvw", *argv]
-    executor = os.execvp if execvp is None else execvp
-    executor("rvw", rvw_argv)
+    try:
+        materialize_codex_config(template_path=template_path, home=home, environ=environ)
+        rvw_argv = ["rvw", *argv]
+        executor = os.execvp if execvp is None else execvp
+        executor("rvw", rvw_argv)
+    except Exception as exc:
+        from rvw.store import finalize_process, initialize_process, redact_diagnostic
+
+        def option(name: str) -> str | None:
+            for index, arg in enumerate(argv):
+                if arg.startswith(name + "="):
+                    return arg[len(name) + 1 :]
+                if arg == name and index + 1 < len(argv):
+                    return argv[index + 1]
+            return None
+
+        if argv and argv[0] in {"run", "auto"}:
+            try:
+                out = option("--out")
+                handle, _ = initialize_process(
+                    Path(out) if out else None,
+                    target_spec=option("--target") or "unknown",
+                    base_ref=option("--base-ref"),
+                    head_ref=option("--head-ref"),
+                    command=["rvw", *argv],
+                )
+                process = finalize_process(
+                    handle.dir, failure_code="container_setup_failed", failure_detail=str(exc)
+                )
+                if "--json" in argv:
+                    print(process.model_dump_json())
+            except OSError as persistence_error:
+                print(
+                    f"diagnostic persistence failed: {redact_diagnostic(str(persistence_error))}",
+                    file=sys.stderr,
+                )
+        print(f"container setup failed: {redact_diagnostic(str(exc))}", file=sys.stderr)
+        raise SystemExit(3) from exc
 
 
 def main() -> None:

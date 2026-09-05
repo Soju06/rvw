@@ -3,7 +3,7 @@ import {describe, expect, it, vi} from "vitest";
 import {
   buildGitCloneUrl,
   buildReviewProcessEnv,
-  buildRvwAutoInvocation,
+  buildRvwRunInvocation,
   credentialKindForHost,
   injectCodexCredential,
   injectGitHubApiCredential,
@@ -99,13 +99,18 @@ describe("review process environment", () => {
     expect(JSON.stringify(processEnv)).not.toContain("ghs_");
   });
 
-  it("materializes Codex configuration before running auto in the outer Sandbox", () => {
-    expect(buildRvwAutoInvocation("acme", "rockets", 42)).toBe(
-      "env GH_REPO='acme/rockets' RVW_CODEX_SANDBOX=danger-full-access " +
-        "python -m rvw.container_entrypoint auto " +
-        "--target 'https://github.com/acme/rockets/pull/42' --repo-dir \"$ADJ\" --json",
-    );
-    expect(() => buildRvwAutoInvocation("acme", "rockets", 0)).toThrow(/positive integer/);
-    expect(() => buildRvwAutoInvocation("bad owner", "rockets", 42)).toThrow(/path components/);
+  it("runs the canonical command with webhook anchors and the artifact root", () => {
+    const options = {owner: "acme", repo: "rockets", prNumber: 42,
+      baseSha: "b".repeat(40), headSha: "a".repeat(40)};
+    const command = buildRvwRunInvocation(options);
+    expect(command).toContain("python -m rvw.container_entrypoint run ");
+    expect(command).toContain("--target 'https://github.com/acme/rockets/pull/42'");
+    expect(command).toContain(`--base-ref '${options.baseSha}' --head-ref '${options.headSha}'`);
+    expect(command).toContain("--out '/workspace/result' --policy auto --publish github-comment --json");
+    expect(command).not.toContain("GH_REPO");
+    expect(command).not.toContain("--repo-dir");
+    expect(() => buildRvwRunInvocation({...options, prNumber: 0})).toThrow(/positive integer/);
+    expect(() => buildRvwRunInvocation({...options, owner: "bad owner"})).toThrow(/path components/);
+    expect(() => buildRvwRunInvocation({...options, headSha: "moving"})).toThrow(/anchors/);
   });
 });

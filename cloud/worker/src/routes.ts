@@ -1,9 +1,8 @@
+import {artifactManifest, artifactPath} from "./artifacts";
 import type {RequiredConfig} from "./config";
 import {configureOutbound, optionalFile, processPayload, sandboxFor} from "./sandbox";
 import {
-  RESULT_ARTIFACT_NAMES,
   buildSandboxProcessEnv,
-  resultArtifactPath,
   validateTargetInput,
 } from "./spike-contract";
 
@@ -13,10 +12,8 @@ function reviewScript(repoUrl: string, targetSha: string): string { return Strin
 set -u
 LOG=/workspace/rvw-a0.log
 RESULT=/workspace/result
-OUT=/workspace/rvw-out
 TARGET=/workspace/target
-ADJ=/workspace/adjudication
-mkdir -p "$RESULT" "$OUT"
+mkdir -p "$RESULT"
 exec > >(tee -a "$LOG") 2>&1
 printf 'A0_PROCESS_FIRST_LOG_TS=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
 printf 'A0_REVIEW_TARGET=%s\n' '${targetSha}'
@@ -33,16 +30,10 @@ probe_rc=$?
 printf '%s\n' "$probe_rc" > "$RESULT/inner-sandbox-probe-exit-code.txt"
 set -e
 git clone '${repoUrl}' "$TARGET"; git -C "$TARGET" checkout --detach '${targetSha}'
-git clone '${repoUrl}' "$ADJ"; git -C "$ADJ" checkout --detach '${targetSha}'
 cd "$TARGET"
 set +e
-env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint review --target '${targetSha}' --repo-dir "$ADJ" --out "$OUT" --json > "$RESULT/review-command-output.txt" 2>&1
+env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint run --target '${targetSha}' --repo-dir "$TARGET" --out "$RESULT" --policy auto --publish none --json
 review_rc=$?
-run_dir="$(find "$OUT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
-if [[ -n "$run_dir" ]]; then
-  printf '%s\n' "$run_dir" > "$RESULT/run-dir.txt"
-  for artifact in report.md discover.json outcome.json run.json; do [[ -f "$run_dir/$artifact" ]] && cp "$run_dir/$artifact" "$RESULT/$artifact"; done
-fi
 printf 'A0_REVIEW_EXIT_CODE=%s\n' "$review_rc"
 printf 'A0_RUN_FINISHED_EPOCH_MS=%s\n' "$(date +%s%3N)"
 printf '%s\n' "$review_rc" > /workspace/process-exit-code
@@ -82,7 +73,12 @@ export async function result(env: Env, url: URL): Promise<Response> {
   if (!sandboxId) return json({error: "sandboxId is required"}, {status: 400});
   const sandbox = sandboxFor(env, sandboxId);
   const artifacts: Record<string, string | null> = {};
-  for (const name of RESULT_ARTIFACT_NAMES) artifacts[name] = await optionalFile(sandbox, resultArtifactPath(name));
+  const processJson = await optionalFile(sandbox, artifactPath("process.json"));
+  if (processJson !== null) {
+    for (const {path} of artifactManifest(processJson)) {
+      artifacts[path] = await optionalFile(sandbox, artifactPath(path));
+    }
+  }
   artifacts["process-exit-code"] = await optionalFile(sandbox, "/workspace/process-exit-code");
   return json({sandboxId, artifacts, observedAt: new Date().toISOString()});
 }

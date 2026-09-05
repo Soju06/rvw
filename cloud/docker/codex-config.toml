@@ -1,7 +1,0 @@
-model_provider = "rvw"
-
-[model_providers.rvw]
-name = "rvw"
-wire_api = "responses"
-env_key = "CODEX_API_KEY"
-requires_openai_auth = false

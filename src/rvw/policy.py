@@ -19,6 +19,10 @@ intentionally not expressible by policy.
 
 from __future__ import annotations
 
+import subprocess
+import warnings
+from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
@@ -28,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.merge import MergeResult
 from rvw.schema import Severity, Verdict
+from rvw.target import ResolvedTarget
 
 _SEVERITY_RANK = {
     Severity.SUGGESTION: 1,
@@ -84,6 +89,15 @@ class AutoDecision(BaseModel):
     considered: int
 
 
+@dataclass(frozen=True)
+class EffectivePolicy:
+    """The selected policy and reproducible provenance for the process contract."""
+
+    policy: AutoPolicy
+    source: Literal["explicit", "repository", "external", "package"]
+    path: str
+
+
 def load_policy(path: Path) -> AutoPolicy:
     """Load and strictly validate one YAML auto policy."""
 
@@ -91,6 +105,60 @@ def load_policy(path: Path) -> AutoPolicy:
     if not expanded.is_file():
         raise PolicyNotFound(expanded)
     return AutoPolicy.model_validate(yaml.safe_load(expanded.read_text(encoding="utf-8")))
+
+
+def resolve_auto_policy(
+    target: ResolvedTarget,
+    *,
+    cwd: Path,
+    policy: str | Path = "auto",
+    external_path: Path | None = None,
+) -> EffectivePolicy:
+    """Select explicit, immutable repository, legacy external, then packaged policy.
+
+    Only a missing source permits fallback. Invalid YAML or a schema violation
+    in the selected source must reach the caller as an invalid configuration.
+    """
+
+    if str(policy) != "auto":
+        explicit = Path(policy).expanduser()
+        if not explicit.is_absolute():
+            explicit = cwd / explicit
+        return EffectivePolicy(load_policy(explicit), "explicit", str(explicit))
+
+    if target.base_sha is not None:
+        repository_path = f"{target.base_sha}:.rvw/policies/auto.yaml"
+        try:
+            raw = subprocess.run(
+                ["git", "show", repository_path],
+                cwd=cwd,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            selected = AutoPolicy.model_validate(yaml.safe_load(raw))
+            return EffectivePolicy(selected, "repository", repository_path)
+
+    external = (external_path or Path("~/.hermes/review/policies/auto.yaml")).expanduser()
+    if not external.is_absolute():
+        external = cwd / external
+    if external.is_file():
+        warnings.warn(
+            f"external auto policy is deprecated: {external}; "
+            "move it to .rvw/policies/auto.yaml or pass --policy explicitly",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return EffectivePolicy(load_policy(external), "external", str(external))
+
+    resource_path = "resources/policies/auto-default.yaml"
+    default = files("rvw").joinpath(resource_path).read_text(encoding="utf-8")
+    return EffectivePolicy(
+        AutoPolicy.model_validate(yaml.safe_load(default)), "package", f"rvw:{resource_path}"
+    )
 
 
 def _at_least(value: Severity, threshold: Severity) -> bool:
@@ -160,8 +228,10 @@ __all__ = [
     "AutoPolicy",
     "BlockRule",
     "DropRule",
+    "EffectivePolicy",
     "PolicyNotFound",
     "PromoteRule",
     "evaluate",
     "load_policy",
+    "resolve_auto_policy",
 ]

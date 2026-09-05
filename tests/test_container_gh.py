@@ -36,15 +36,9 @@ def test_container_pins_and_verifies_official_gh_release(relative_path: str) -> 
     assert re.fullmatch(r"v?\d+\.\d+\.\d+", gh_version)
     assert re.fullmatch(r"v?\d+\.\d+\.\d+", minimum_version)
 
-    checksum_step = next(
-        (
-            line
-            for line in normalized.splitlines()
-            if line.startswith("RUN ") and "checksums.txt" in line
-        ),
-        None,
-    )
-    assert checksum_step is not None, "missing same-release checksum verification step"
+    assert "COPY docker/install-gh.sh /usr/local/lib/rvw/install-gh.sh" in dockerfile
+    assert "RUN sh /usr/local/lib/rvw/install-gh.sh" in dockerfile
+    checksum_step = (ROOT / "docker/install-gh.sh").read_text(encoding="utf-8")
     assert "https://github.com/cli/cli/releases/download/${GH_VERSION}" in checksum_step
     assert "sha256sum --check" in checksum_step
     assert "GH_SHA256" in checksum_step
@@ -52,3 +46,14 @@ def test_container_pins_and_verifies_official_gh_release(relative_path: str) -> 
     assert "/usr/local/bin/gh" in checksum_step
     assert "gh --version" in checksum_step
     assert 'dpkg --compare-versions "${installed_version}" ge "${MIN_GH_VERSION}"' in checksum_step
+
+
+def test_both_images_share_identical_gh_pins() -> None:
+    pins = [
+        tuple(
+            _argument((ROOT / filename).read_text(), name)
+            for name in ("GH_VERSION", "GH_SHA256", "MIN_GH_VERSION")
+        )
+        for filename in DOCKERFILES
+    ]
+    assert pins[0] == pins[1]

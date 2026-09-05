@@ -2,9 +2,9 @@
 
 The A0 feasibility spike built a Cloudflare Sandbox Worker outside this repository. This scaffold ports that path into version control while preserving the owner decision that real credentials are injected by `outboundByHost` at egress and never placed in a sandbox process. Wrangler 4.128.0 confirms `image_build_context` is a supported container field; the cloud Dockerfile therefore uses repository-root context for source installation.
 
-The future A1 architecture is webhook → Queue → Sandbox job → GitHub Check Runs API. The GitHub App permissions are checks write, pull requests write, contents read, and metadata read, with pull_request, check_run, and check_suite events. Check-run state starts at `in_progress` and resolves to `success`, `failure`, or `neutral`. Job messages carry a job identifier, installation/repository/PR identifiers, head SHA, source event, attempt, and timestamps. Artifacts are planned for R2 with D1 metadata, but neither is consumed by this change.
+The implemented A1 architecture is webhook → Queue → Sandbox job → GitHub Check Runs API. The GitHub App permissions are checks write, pull requests write, contents read, and metadata read, with pull_request, check_run, and check_suite events. Check-run state starts at `in_progress` and resolves to `success`, `failure`, or `neutral`. Job messages carry a job identifier, installation/repository/PR identifiers, head SHA, source event, attempt, and timestamps. Artifacts are retained in R2 and job state is held by the review Durable Object; D1 metadata remains outside the implemented path.
 
-Cloudflare API credentials with Containers permissions are not available during this change. CI intentionally uses dry-runs, local Terraform validation, typechecking, and Docker build only. rvw publishes a Terraform module and reusable deployment workflow; deployers provision credentials and secrets in their own repositories.
+Local change verification uses dry-runs, local Terraform validation, typechecking, and Docker builds without Cloudflare credentials. rvw publishes a Terraform module and reusable deployment workflow; deployers provision credentials and secrets in their own repositories.
 
 The 2026-09-02 A0 rerun measured a roughly 3.6-second cold start and a roughly
 24.5-minute small review on a `standard-2` instance. Inner
@@ -53,8 +53,9 @@ stderr means its application-level failure remains unproved; A1 now uses the
 known full PR URL and bypasses that lookup. A second fast failure was provable:
 the measured base revision had no `.rvw/policies/auto.yaml`, the image had no
 external default policy, and rvw intentionally fails before its pipeline when
-neither exists. The image now supplies a versioned external fallback while
-retaining repository-base policy precedence. The checkouts, working directory,
+neither exists. The interim image supplied a versioned external fallback; the unified contract
+replaces that copy with the package default after repository-base and deprecated
+external-policy precedence. The checkouts, working directory,
 `--repo-dir`, `CODEX_BASE_URL`, explicit `RVW_CODEX_SANDBOX`, and fetched base SHA
 were all present and are not supported as causes by the source or live trace.
 
@@ -68,3 +69,9 @@ version alone does not explain the observed binary behavior. The image contract 
 removes that ambiguity: it installs the exact official v2.100.0 Linux amd64 archive at
 `/usr/local/bin/gh`, authenticates it with the pinned SHA-256 and same-release checksum
 manifest, and separately enforces the actual v2.18.0 compatibility floor during build.
+
+## Unified App execution evidence (2026-09-05)
+
+The `/tmp/rvw-surfaces-analysis.md` audit inspected committed v0.11.5 (`613201f`) code, not deployed image state. It found timeout persisted four stage artifacts but skipped `run.log`, `process.json`, and `environment.txt`, with the same diagnostic omission on start failure and supersession (`cloud/worker/src/review-job.ts:148–152,387–470,822–836`, baseline lines). Terminal handling now attempts one common best-effort persistence phase before Sandbox destruction, and SDK termination observations supplement the Python process schema rather than create a competing object.
+
+App formerly supplied URL plus `GH_REPO` to compensate for unbound Python calls, installed fallback policy in an external-registry image path, parsed stdout for the run ID, copied artifacts out of `/tmp`, and recounted coverage/findings in TypeScript (`cloud/worker/src/sandbox-auth.ts:107–119`, `cloud/Dockerfile:46–47`, `cloud/worker/src/review-job-contract.ts:116–195`, baseline lines). It now passes webhook anchors and an explicit output directory to `run` and consumes Python process/summary/manifest files. Zero VALID lanes map to a neutral Check even if an envelope claims PASS. Webhook authentication, installation tokens and egress, queue/lifecycle, Check Run API, and R2 transport remain platform duties.

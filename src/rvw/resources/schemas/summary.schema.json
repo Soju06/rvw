@@ -1,0 +1,111 @@
+{
+  "$defs": {
+    "FindingCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "blocker": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Blocker",
+          "type": "integer"
+        },
+        "warning": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Warning",
+          "type": "integer"
+        },
+        "suggestion": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Suggestion",
+          "type": "integer"
+        }
+      },
+      "title": "FindingCounts",
+      "type": "object"
+    },
+    "SummaryLanes": {
+      "additionalProperties": false,
+      "properties": {
+        "dispatched": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Dispatched",
+          "type": "integer"
+        },
+        "valid": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Valid",
+          "type": "integer"
+        },
+        "uncovered": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Uncovered",
+          "type": "integer"
+        }
+      },
+      "title": "SummaryLanes",
+      "type": "object"
+    },
+    "VerdictCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "CONFIRMED": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Confirmed",
+          "type": "integer"
+        },
+        "REJECTED": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Rejected",
+          "type": "integer"
+        },
+        "UNCERTAIN": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Uncertain",
+          "type": "integer"
+        }
+      },
+      "title": "VerdictCounts",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "lanes": {
+      "$ref": "#/$defs/SummaryLanes"
+    },
+    "findings": {
+      "$ref": "#/$defs/FindingCounts"
+    },
+    "verdicts": {
+      "$ref": "#/$defs/VerdictCounts"
+    },
+    "blockers": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blockers",
+      "type": "array"
+    },
+    "markdown": {
+      "default": "Review has not completed.",
+      "title": "Markdown",
+      "type": "string"
+    }
+  },
+  "title": "ExecutionSummary",
+  "type": "object"
+}

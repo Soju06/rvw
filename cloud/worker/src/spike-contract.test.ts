@@ -1,9 +1,7 @@
 import {describe, expect, it} from "vitest";
 
 import {
-  RESULT_ARTIFACT_NAMES,
   buildSandboxProcessEnv,
-  resultArtifactPath,
   validateTargetInput,
 } from "./spike-contract";
 
@@ -41,13 +39,5 @@ describe("buildSandboxProcessEnv", () => {
       CODEX_BASE_URL: "https://proxy.example/backend-api/codex",
     });
     expect(Object.keys(processEnv)).toHaveLength(2);
-  });
-});
-
-describe("resultArtifactPath", () => {
-  it("resolves every result artifact under the process output directory", () => {
-    expect(RESULT_ARTIFACT_NAMES.map(resultArtifactPath)).toEqual(
-      RESULT_ARTIFACT_NAMES.map((name) => `/workspace/result/${name}`),
-    );
   });
 });

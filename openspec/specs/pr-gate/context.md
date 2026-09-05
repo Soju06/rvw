@@ -71,3 +71,9 @@ If the pull request head still equals an existing run's captured head, resume th
 ## Historical deltas
 
 Before this capability, checkout ownership and anchor freshness were external concerns, and ordinary publish had no pre-publication stale-target guard. Those limitations remain for standalone `review` and `publish`; `gate` adds the stronger composed contract without changing their behavior.
+
+## Portable auto policy evidence (2026-09-05)
+
+At v0.11.5 (`613201f`), the surface audit found default policy resolution at the captured base commit followed by `~/.hermes/review/policies/auto.yaml`, while only the App image installed that external fallback (`src/rvw/cli.py:1705–1708`, `src/rvw/policy.py:87–93`, `cloud/Dockerfile:46–47`, baseline lines; `/tmp/rvw-surfaces-analysis.md`). Actions hid the home directory behind tmpfs and had no fallback install. The common policy-gated command therefore ships the same values as `rvw:resources/policies/auto-default.yaml`, after explicit, base-commit, and deprecated external precedence. Malformed selected content remains an error; a missing registry no longer prevents a routine review.
+
+Policy execution remains separate from the human disposition gate. `run` evaluates the existing YAML promote/drop/block rules and records source provenance; `gate` continues its artifact-backed disposition, owner authorization, and inheritance behavior.

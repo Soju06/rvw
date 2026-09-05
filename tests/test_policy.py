@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import warnings
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+import rvw.policy as policy_module
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import EnrichedFinding
 from rvw.merge import CollapseGroup, MergeResult, merge
 from rvw.policy import AutoPolicy, PolicyNotFound, evaluate, load_policy
 from rvw.schema import Severity, Tier, Verdict
+from rvw.target import ResolvedTarget
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -191,3 +195,105 @@ def test_outcome_none_treats_every_group_as_uncertain() -> None:
     assert result.verdict == "PASS"
     assert result.considered == 13
     assert result.blocking == []
+
+
+def policy_repo(tmp_path: Path, *, repository_policy: str | None = None) -> ResolvedTarget:
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    subprocess.run(["git", "config", "user.name", "Fixture"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"], cwd=tmp_path, check=True
+    )
+    (tmp_path / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+    if repository_policy is not None:
+        path = tmp_path / ".rvw" / "policies" / "auto.yaml"
+        path.parent.mkdir(parents=True)
+        path.write_text(repository_policy, encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "--quiet", "-m", "fixture"], cwd=tmp_path, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    return ResolvedTarget(
+        kind="pr",
+        repo="octo/widgets",
+        pr_number=42,
+        base_sha=base,
+        head_sha="a" * 40,
+        changed_paths=["fixture.txt"],
+        diff="fixture diff\n",
+    )
+
+
+def test_auto_policy_package_fallback_without_external_registry(tmp_path: Path) -> None:
+    target = policy_repo(tmp_path)
+    selected = policy_module.resolve_auto_policy(
+        target, cwd=tmp_path, external_path=tmp_path / "missing-external.yaml"
+    )
+    assert selected.source == "package"
+    assert selected.path == "rvw:resources/policies/auto-default.yaml"
+    assert selected.policy == policy()
+
+
+def test_auto_policy_explicit_path_wins_over_repository_and_external(tmp_path: Path) -> None:
+    target = policy_repo(tmp_path, repository_policy=policy().model_dump_json())
+    explicit = tmp_path / "explicit.yaml"
+    explicit.write_text(policy(publish_state="none").model_dump_json(), encoding="utf-8")
+    external = tmp_path / "external.yaml"
+    external.write_text("invalid: external\n", encoding="utf-8")
+    selected = policy_module.resolve_auto_policy(
+        target, cwd=tmp_path, policy=Path("explicit.yaml"), external_path=external
+    )
+    assert selected.source == "explicit"
+    assert selected.path == str(explicit)
+    assert selected.policy.publish_state == "none"
+
+
+def test_auto_policy_repository_base_wins_over_worktree_and_external(tmp_path: Path) -> None:
+    target = policy_repo(tmp_path, repository_policy=policy(publish_state="none").model_dump_json())
+    (tmp_path / ".rvw" / "policies" / "auto.yaml").write_text(
+        "invalid: untrusted worktree\n", encoding="utf-8"
+    )
+    external = tmp_path / "external.yaml"
+    external.write_text("invalid: external\n", encoding="utf-8")
+    with warnings.catch_warnings(record=True) as captured:
+        selected = policy_module.resolve_auto_policy(target, cwd=tmp_path, external_path=external)
+    assert captured == []
+    assert selected.source == "repository"
+    assert selected.path == f"{target.base_sha}:.rvw/policies/auto.yaml"
+    assert selected.policy.publish_state == "none"
+
+
+def test_auto_policy_external_fallback_warns_deprecation(tmp_path: Path) -> None:
+    target = policy_repo(tmp_path)
+    external = tmp_path / "external.yaml"
+    external.write_text(policy(publish_state="none").model_dump_json(), encoding="utf-8")
+    with pytest.warns(FutureWarning, match="external auto policy.*deprecated"):
+        selected = policy_module.resolve_auto_policy(target, cwd=tmp_path, external_path=external)
+    assert selected.source == "external"
+    assert selected.path == str(external)
+    assert selected.policy.publish_state == "none"
+
+
+def test_auto_policy_missing_explicit_does_not_fall_back(tmp_path: Path) -> None:
+    target = policy_repo(tmp_path, repository_policy=policy().model_dump_json())
+    with pytest.raises(PolicyNotFound, match=r"missing-explicit\.yaml"):
+        policy_module.resolve_auto_policy(target, cwd=tmp_path, policy="missing-explicit.yaml")
+
+
+@pytest.mark.parametrize("source", ["explicit", "repository", "external"])
+def test_auto_policy_malformed_selected_source_does_not_fall_back(
+    tmp_path: Path, source: str
+) -> None:
+    invalid = "invalid: policy\n"
+    target = policy_repo(tmp_path, repository_policy=invalid if source == "repository" else None)
+    selected_path = tmp_path / "selected.yaml"
+    selected_path.write_text(invalid, encoding="utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        with pytest.raises(ValidationError):
+            policy_module.resolve_auto_policy(
+                target,
+                cwd=tmp_path,
+                policy=selected_path if source == "explicit" else "auto",
+                external_path=selected_path,
+            )

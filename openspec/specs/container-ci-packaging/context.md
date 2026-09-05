@@ -10,10 +10,10 @@ GitHub Actions entry. Normative behavior is in [spec.md](spec.md).
 - VOOY-757 (2026-09-01) selected GitHub Actions with a prebuilt image. The base-side
   `pull_request_target` definition and CODEOWNERS on the caller plus `.rvw/**` prevent a
   PR from activating its own workflow or policy changes.
-- The reusable workflow passes the PR number to auto so recorded-base rules and COMMENT
-  publication retain PR semantics; immutable event-head checkout verification fails
-  closed if the PR advances during a run.
-- `rvw auto` is the job check through its existing 0/1 PASS/BLOCK exit. Finding
+- The initial reusable workflow passed the PR number to auto; the unified contract now
+  passes the full PR URL and both event anchors to run for explicit repository binding
+  and early immutable-anchor verification.
+- `rvw run` is the job check through its reserved 0/1/2/3 process exits. Finding
   narratives remain COMMENT-only, and initial adoption does not make the job required.
 - The local image is 297,754,398 bytes and reports Python 3.12.14, Node 24.20.0,
   Codex 0.152.0, and rvw 0.4.1 with seven packaged common lane documents.
@@ -49,3 +49,9 @@ The implementation report and smoke evidence are under
 `/tmp/rvw-phase2-smoke-20260902/evidence/`; the successful run ID is
 `rvw-20260902-030319-226798-commit-5d4d3cb64`, and the failed read-only measurement is
 `rvw-20260902-025328-383170-commit-5d4d3cb64`.
+
+## Unified adapter evidence (2026-09-05)
+
+The v0.11.5 (`613201f`) surface audit found that the reusable workflow invoked numeric-target `auto` without event anchors, a persistent output mount, artifact upload, or a configured job timeout (`.github/workflows/rvw-review.yml:31–75`, baseline lines; `/tmp/rvw-surfaces-analysis.md`). The updated workflow passes the complete PR URL and captured base/head to `run`, mounts an artifact directory, renders the Python summary, uploads retained output on all completed step outcomes, and defaults its configurable timeout to 90 minutes. Exit 1 remains a policy BLOCK; invalid and infrastructure exits are distinct 2 and 3 and still fail the job.
+
+Both images already pinned the same official gh v2.100.0 archive, SHA-256, and v2.18.0 compatibility minimum (`Dockerfile:13–15,40–57`, `cloud/Dockerfile:13–36`, baseline lines). Consolidation retains those checks in `docker/install-gh.sh`. The duplicate Codex provider templates were byte-equivalent; both images now copy `docker/codex-config.toml`. The App-only policy image copy is replaced by the installed package resource.

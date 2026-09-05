@@ -39,10 +39,10 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 
 - Container CI mounts the target repository read-only at `/workspace`; project `.rvw/`
   policy and lanes continue to resolve from the immutable base-side contract.
-- `review` does not itself apply the auto YAML policy; `auto` calls the shared pipeline and then evaluates policy.
+- `review` does not itself apply the auto YAML policy; `auto` translates compatibility options into the shared `run` policy-gated command.
 - `adjudicate --run` requires persisted target, discovery, and merge inputs and never repeats discovery. A failed attempt may update `run.json` with its error while retaining the previous outcome and report.
-- Without `--repo-dir`, the common pipeline skips adjudication and renders unadjudicated findings; a confirmed-only auto policy therefore cannot block those groups.
-- The `auto` command uses the default external registry and default run root rather than exposing all review command overrides.
+- Agentic execution without `--repo-dir` provisions a checkout used by discovery and adjudication. Inline execution without a checkout can render unadjudicated findings, which a confirmed-only policy does not block.
+- `run` and `auto` use the ordinary layered lane loader and support an explicit artifact directory; interactive pause and worktree-rule overrides remain `review` concerns.
 - Sample gap detection compares rule-ID sets against the lane enum. `(file, line)` differences remain a separate variance signal and body text is not semantically compared.
 - Doctor reads only persisted runs with `discover.json` and defaults to the newest 20.
 - Stack members run sequentially and do not inherit auto policy or gate
@@ -56,7 +56,7 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 ## Failure modes
 
 - A permissive drop/promote/block policy can produce an unintended PASS.
-- Missing policy files fail before the pipeline runs.
+- Missing explicitly selected policies and malformed selected policies fail before the pipeline runs; absent repository/external policies select the package default.
 - `--allow-approve` can mislead callers if they ignore the warning; it has no enabling effect.
 - Sampling is model-driven and can vary between runs despite equal replica counts.
 - Sampling uses the production diff planner and scales as two variants x replicas x chunks, while comparison still unions valid findings by variant.
@@ -93,3 +93,9 @@ A one-replica suggestion is dropped. A two-replica confirmed warning is promoted
 - Before stack support, common stage execution lived directly in the CLI.
   Extracted pipeline helpers now preserve the same review, auto, report, and
   gate behavior while allowing ordered member composition.
+
+## Unified execution contract evidence (2026-09-05)
+
+The 132-line `/tmp/rvw-surfaces-analysis.md` audit inspected v0.11.5 (`613201f`) and passed all 12 main specifications before its failure injections. A failed review summary plus empty merge returned `review → 3` but `auto → PASS/0`; infrastructure and missing-policy auto injections returned exit 1 with empty stdout (`src/rvw/cli.py:669–676,1666–1686,1709–1756`, `src/rvw/summary.py:106–113`, `src/rvw/adjudicate.py:318–326`, baseline lines). The common `run` boundary now checks execution health before deterministic policy evaluation and reserves 0/1/2/3 for pass/block/invalid/infra.
+
+The audit also found that Actions and App checked out event SHAs without passing them to Python, and that a PR URL did not bind the numbered `gh pr view/diff` calls (`src/rvw/target.py:172–212`, `.github/workflows/rvw-review.yml:39–75`, `cloud/worker/src/sandbox-auth.ts:107–119`, baseline lines). Event adapters now pass both anchors and Python binds repository operations. Host agentic execution already provisioned a checkout when `--repo-dir` was absent; the prior constraint claiming it always skipped adjudication was stale. `run` owns policy-gated automation while `review` retains its existing interactive/pause role.

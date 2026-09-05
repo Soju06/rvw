@@ -104,17 +104,39 @@ export function buildReviewProcessEnv(
   };
 }
 
-export function buildRvwAutoInvocation(owner: string, repo: string, prNumber: number): string {
+/** Quote one shell argument; callers may safely pass paths containing apostrophes. */
+export function shellQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+export interface ReviewInvocation {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  baseSha: string;
+  headSha: string;
+  out?: string;
+  repoDir?: string;
+  publish?: "none" | "github-comment";
+}
+
+export function buildRvwRunInvocation(options: ReviewInvocation): string {
+  const {owner, repo, prNumber, baseSha, headSha} = options;
   if (!REPOSITORY_PART.test(owner) || !REPOSITORY_PART.test(repo)) {
     throw new Error("GitHub owner and repository must be safe path components");
   }
   if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
     throw new Error("pull-request number must be a positive integer");
   }
+  if (!/^[0-9a-f]{40}$/.test(baseSha) || !/^[0-9a-f]{40}$/.test(headSha)) {
+    throw new Error("pull-request anchors must be full commit SHAs");
+  }
   return (
-    `env GH_REPO='${owner}/${repo}' RVW_CODEX_SANDBOX=danger-full-access ` +
-    "python -m rvw.container_entrypoint auto " +
-    `--target 'https://github.com/${owner}/${repo}/pull/${prNumber}' ` +
-    '--repo-dir "$ADJ" --json'
+    "env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint run " +
+    `--target ${shellQuote(`https://github.com/${owner}/${repo}/pull/${prNumber}`)} ` +
+    `--base-ref ${shellQuote(baseSha)} --head-ref ${shellQuote(headSha)} ` +
+    `--out ${shellQuote(options.out ?? "/workspace/result")} ` +
+    (options.repoDir === undefined ? "" : `--repo-dir ${shellQuote(options.repoDir)} `) +
+    `--policy auto --publish ${options.publish ?? "github-comment"} --json`
   );
 }

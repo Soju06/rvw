@@ -5,19 +5,25 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
+from contextlib import ExitStack, chdir
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, Never, cast
 
 import typer
+import yaml
 from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
+from typer import _click as click
+from typer.core import TyperCommand
 
 from rvw import __version__
 from rvw.adjudicate import (
@@ -67,10 +73,11 @@ from rvw.gate import (
     verify_pull_request,
     write_disposition_template,
 )
-from rvw.hostslots import HostSlotGate, host_slot_gate_from_env
+from rvw.hostslots import HostSlotGate, host_slot_gate_from_env, parse_host_concurrency
 from rvw.hunks import hunk_sha256_by_id
 from rvw.lane import Lane, load_lane, load_new_lane
 from rvw.lane_lint import scope_diagnostics
+from rvw.merge import merge
 from rvw.pipeline import (
     PipelineArtifacts,
     PipelineInfrastructureError,
@@ -80,7 +87,7 @@ from rvw.pipeline import (
     optional_outcome,
     verdict_counts,
 )
-from rvw.policy import evaluate, load_policy
+from rvw.policy import PolicyNotFound, evaluate, resolve_auto_policy
 from rvw.provenance import current_build_provenance, version_label
 from rvw.publish import PublishError, publish_body_review, publish_review
 from rvw.registry import (
@@ -88,7 +95,6 @@ from rvw.registry import (
     Registry,
     load_effective_registry,
     load_registry,
-    load_repo_policy,
 )
 from rvw.report import render_report
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
@@ -117,9 +123,26 @@ from rvw.store import (
     RunNotFound,
     RunStore,
     StageMissing,
+    diagnostic_attempt,
+    initialize_process,
     parse_pr_run_id,
+    redact_diagnostic,
+    save_process,
 )
-from rvw.summary import ReviewStatus, RunError, RunSummary, summarize_run
+from rvw.store import (
+    _write_json as write_artifact_json,
+)
+from rvw.summary import (
+    EffectivePolicySource,
+    ProcessFailure,
+    ProcessTarget,
+    ReviewStatus,
+    RunError,
+    RunSummary,
+    RuntimeSettings,
+    execution_summary,
+    summarize_run,
+)
 from rvw.target import ResolvedTarget, TargetResolutionError, resolve_target
 
 EXIT_OK = 0
@@ -151,6 +174,55 @@ _EXAMPLES: dict[str, list[str]] = {
     "lanes": ["rvw lanes list", "rvw lanes show slop-hygiene"],
     "doctor": ["rvw doctor"],
 }
+
+
+class ContractCommand(TyperCommand):
+    """Persist usage failures even when Click rejects input before the callback."""
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        raw = list(args)
+        try:
+            return super().parse_args(ctx, args)
+        except click.exceptions.UsageError as exc:
+
+            def option(name: str) -> str | None:
+                for index, arg in enumerate(raw):
+                    if arg.startswith(name + "="):
+                        return arg[len(name) + 1 :]
+                    if arg == name and index + 1 < len(raw):
+                        return raw[index + 1]
+                return None
+
+            out = option("--out")
+            try:
+                handle, process = initialize_process(
+                    Path(out).resolve() if out else None,
+                    target_spec=option("--target") or "unknown",
+                    command=["rvw", "run", *raw],
+                    root=DEFAULT_RUN_ROOT,
+                )
+                process.status, process.exit_code = "invalid", 2
+                process.failure = ProcessFailure(
+                    code="invalid_input", detail=redact_diagnostic(str(exc))
+                )
+                with (handle.dir / "run.log").open("a", encoding="utf-8") as log:
+                    log.write(f"invalid_input:{process.failure.detail}\n")
+                save_process(handle.dir, process)
+                if "--json" in raw:
+                    _write_json(process.model_dump(mode="json"))
+            except OSError as persistence_error:
+                click.echo(f"diagnostic persistence failed: {persistence_error}", err=True)
+            raise
+
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except (click.exceptions.Exit, click.ClickException):
+            raise
+        except (Exception, KeyboardInterrupt) as exc:
+            click.echo(f"infrastructure failure: {redact_diagnostic(str(exc))}", err=True)
+            raise click.exceptions.Exit(EXIT_SYSTEM_ERROR) from exc
+
 
 app = typer.Typer(
     name="rvw",
@@ -721,6 +793,8 @@ async def _execute_pipeline(
     host_gate: HostSlotGate | None = None,
     allow_worktree_rules: bool = False,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
+    run_handle: RunHandle | None = None,
+    lane_sources: dict[str, int] | None = None,
 ) -> _PipelineArtifacts | None:
     """Execute and persist common review stages without publishing or rendering CLI output."""
     target = resolved_target or _resolve_cli_target(target_spec)
@@ -735,9 +809,15 @@ async def _execute_pipeline(
     else:
         registry, lanes_root = _load_registry_root(registry_root)
     active_lanes = _load_active_lanes(registry, lanes_root, target)
+    if lane_sources is not None and isinstance(registry, EffectiveRegistry):
+        active_ids = {lane.id for lane in active_lanes}
+        for source in registry.sources:
+            if source.lane.id in active_ids:
+                lane_sources[source.source] = lane_sources.get(source.source, 0) + 1
 
     async def execute_with_checkout(checkout: Path | None) -> _PipelineArtifacts | None:
         return await execute_pipeline(
+            run_handle=run_handle,
             registry=registry,
             lanes_root=lanes_root,
             target=target,
@@ -1635,17 +1715,11 @@ def _publish_gate_verdict(
         raise typer.Exit(EXIT_NOT_FOUND)
 
 
-@app.command()
+@app.command(cls=ContractCommand)
 def auto(
     target: Annotated[str, Option("--target")],
-    repo_dir: Annotated[
-        Path | None,
-        Option(
-            "--repo-dir",
-            help="Verified checkout used for agentic discovery and adjudication.",
-        ),
-    ] = None,
-    policy_path: Annotated[Path, Option("--policy")] = DEFAULT_AUTO_POLICY,
+    repo_dir: Annotated[Path | None, Option("--repo-dir")] = None,
+    policy_path: Annotated[str, Option("--policy")] = "auto",
     concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
     deadline: Annotated[
         int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
@@ -1658,103 +1732,365 @@ def auto(
         int, Option("--adjudicate-replicas", min=1)
     ] = _PLAN_ADJUDICATE_REPLICAS,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
+    base_ref: Annotated[str | None, Option("--base-ref")] = None,
+    head_ref: Annotated[str | None, Option("--head-ref")] = None,
+    out: Annotated[Path | None, Option("--out")] = None,
 ) -> None:
+    """Compatibility alias of run, using the policy's publication preference."""
     if allow_approve:
-        _error_console.print(
-            "approve publishing is not implemented (ADR-009 Phase-5 opt-in placeholder)",
-            markup=False,
-        )
-    host_gate = _command_host_gate()
-    try:
-        asyncio.run(
-            _auto_pipeline(
-                target_spec=target,
-                repo_dir=repo_dir,
-                policy_path=policy_path,
-                concurrency=concurrency,
-                deadline_seconds=deadline,
-                publish=publish,
-                json_output=json_output,
-                discover_replicas=replicas,
-                adjudicate_replicas=adjudicate_replicas,
-                host_gate=host_gate,
-                discovery_mode=discovery_mode,
-            )
-        )
-    except EmptyReviewDiffError as exc:
-        _empty_review_failure(exc, json_output=json_output)
-    except CheckoutVerificationError as exc:
-        _checkout_failure(exc, json_output=json_output)
+        _error_console.print("approve publishing is not implemented (compatibility placeholder)")
+    _run_command(
+        target,
+        repo_dir,
+        policy_path,
+        concurrency,
+        deadline,
+        None if publish is None else ("github-comment" if publish else "none"),
+        json_output,
+        replicas,
+        adjudicate_replicas,
+        discovery_mode,
+        base_ref,
+        head_ref,
+        out,
+    )
 
 
-async def _auto_pipeline(
-    *,
-    target_spec: str,
-    repo_dir: Path | None,
-    policy_path: Path,
-    concurrency: int,
-    deadline_seconds: int,
-    publish: bool | None,
-    json_output: bool,
-    discover_replicas: int,
-    adjudicate_replicas: int,
-    host_gate: HostSlotGate | None = None,
-    discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
+@app.command("run", cls=ContractCommand)
+def run_command(
+    target: Annotated[str, Option("--target")],
+    repo_dir: Annotated[Path | None, Option("--repo-dir")] = None,
+    policy_path: Annotated[str, Option("--policy")] = "auto",
+    publish: Annotated[Literal["none", "github-comment"], Option("--publish")] = "none",
+    base_ref: Annotated[str | None, Option("--base-ref")] = None,
+    head_ref: Annotated[str | None, Option("--head-ref")] = None,
+    out: Annotated[Path | None, Option("--out")] = None,
+    concurrency: Annotated[int, Option("--concurrency", min=1)] = DEFAULT_CONCURRENCY,
+    deadline: Annotated[
+        int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = DEFAULT_DEADLINE_SECONDS,
+    replicas: Annotated[int, Option("--replicas", min=1)] = _PLAN_REPLICAS,
+    adjudicate_replicas: Annotated[
+        int, Option("--adjudicate-replicas", min=1)
+    ] = _PLAN_ADJUDICATE_REPLICAS,
+    discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
+    json_output: Annotated[bool, Option("--json")] = False,
 ) -> None:
-    resolved_target: ResolvedTarget | None = None
-    policy: Any | None = None
-    if policy_path.expanduser() == DEFAULT_AUTO_POLICY:
-        resolved_target = _resolve_cli_target(target_spec)
-        policy = load_repo_policy(resolved_target, cwd=Path.cwd())
-    policy = policy or load_policy(policy_path)
-    artifacts = await _execute_pipeline(
-        target_spec=target_spec,
-        repo_dir=repo_dir,
-        registry_root=DEFAULT_REGISTRY_ROOT,
-        discover_replicas=discover_replicas,
+    """Execute a policy-gated review and persist the shared result contract."""
+    _run_command(
+        target,
+        repo_dir,
+        policy_path,
+        concurrency,
+        deadline,
+        publish,
+        json_output,
+        replicas,
+        adjudicate_replicas,
+        discovery_mode,
+        base_ref,
+        head_ref,
+        out,
+    )
+
+
+def _run_command(
+    target: str,
+    repo_dir: Path | None,
+    policy_path: str,
+    concurrency: int,
+    deadline: int,
+    publish: Literal["none", "github-comment"] | None,
+    json_output: bool,
+    replicas: int,
+    adjudicate_replicas: int,
+    discovery_mode: DiscoveryMode,
+    base_ref: str | None,
+    head_ref: str | None,
+    out: Path | None,
+) -> None:
+    started = time.monotonic()
+    runtime = RuntimeSettings(
+        replicas=replicas,
         adjudicate_replicas=adjudicate_replicas,
         concurrency=concurrency,
-        deadline_seconds=deadline_seconds,
-        out_root=DEFAULT_RUN_ROOT,
-        pause=False,
-        dynamic_brief=None,
-        host_gate=host_gate,
-        resolved_target=resolved_target,
-        discovery_mode=discovery_mode,
+        deadline=deadline,
+        discovery_mode=discovery_mode.value,
+        publish=publish or "none",
     )
-    if artifacts is None:
-        raise RuntimeError("auto pipeline stopped before report generation")
+    canonical = ["rvw", "run", "--target", target, "--policy", policy_path]
+    for name, value in [
+        ("--base-ref", base_ref),
+        ("--head-ref", head_ref),
+        ("--repo-dir", str(repo_dir.resolve()) if repo_dir else None),
+        ("--out", str(out.resolve()) if out else None),
+    ]:
+        if value is not None:
+            canonical.extend([name, value])
+    for name, value in [
+        ("--replicas", replicas),
+        ("--adjudicate-replicas", adjudicate_replicas),
+        ("--concurrency", concurrency),
+        ("--deadline", deadline),
+        ("--discovery-mode", discovery_mode.value),
+    ]:
+        canonical.extend([name, str(value)])
+    run, process = initialize_process(
+        out.resolve() if out else None,
+        target_spec=target,
+        base_ref=base_ref,
+        head_ref=head_ref,
+        command=canonical,
+        runtime=runtime,
+        root=DEFAULT_RUN_ROOT,
+    )
+    stage = "configuration"
+    artifacts: PipelineArtifacts | None = None
 
-    decision = evaluate(policy, artifacts.merged, artifacts.outcome)
-    should_publish = policy.publish_state == "comment" if publish is None else publish
-    if should_publish and artifacts.target.kind == "pr" and artifacts.target.pr_number is not None:
-        publish_review(
-            run=artifacts.run,
-            repo=artifacts.target.repo,
-            pr_number=artifacts.target.pr_number,
-            report_md=artifacts.report_md,
-            merged=artifacts.merged,
-            outcome=artifacts.outcome,
-            execute=True,
+    def terminate(signum: int, frame: object) -> Never:
+        raise KeyboardInterrupt(f"received signal {signum}")
+
+    previous_sigterm = signal.signal(signal.SIGTERM, terminate)
+    try:
+        runtime.host_concurrency = parse_host_concurrency(os.environ.get("RVW_HOST_CONCURRENCY"))
+        sandbox = os.environ.get("RVW_CODEX_SANDBOX", "read-only")
+        if sandbox not in {"read-only", "danger-full-access"}:
+            raise ValueError(f"invalid RVW_CODEX_SANDBOX: {sandbox}")
+        runtime.sandbox = sandbox
+        host_gate = host_slot_gate_from_env()
+        # Resolve explicit paths in the invocation directory before entering a checkout.
+        selected_policy = (
+            str(Path(policy_path).expanduser().resolve()) if policy_path != "auto" else "auto"
         )
-
-    payload = {
-        "run_id": artifacts.run.run_id,
-        "verdict": decision.verdict,
-        "blocking": decision.blocking,
-        "dropped": decision.dropped,
-        "promoted": decision.promoted,
-        "considered": decision.considered,
-        "report_path": str(artifacts.report_path),
-    }
+        with ExitStack() as stack:
+            if repo_dir is not None:
+                if not repo_dir.is_dir():
+                    raise ValueError(f"repository directory does not exist: {repo_dir}")
+                repo_dir = repo_dir.resolve()
+                stack.enter_context(chdir(repo_dir))
+            stage = "target"
+            resolved = _resolve_cli_target(target)
+            process.target = ProcessTarget(
+                repo=resolved.repo,
+                pr=resolved.pr_number,
+                base=resolved.base_sha,
+                head=resolved.head_sha,
+            )
+            run.save_target(resolved)
+            if (base_ref is not None and base_ref != resolved.base_sha) or (
+                head_ref is not None and head_ref != resolved.head_sha
+            ):
+                process.failure = ProcessFailure(
+                    code="target_anchor_mismatch",
+                    detail=f"expected base={base_ref} head={head_ref}; resolved base={resolved.base_sha} head={resolved.head_sha}",
+                )
+                process.status, process.exit_code = "invalid", 2
+            else:
+                if selected_policy != "auto" and not Path(selected_policy).is_file():
+                    raise PolicyNotFound(Path(selected_policy))
+                if runtime.publish == "github-comment" and resolved.kind != "pr":
+                    stage = "configuration"
+                    raise ValueError("github-comment publication requires a PR target")
+                if repo_dir is None and discovery_mode is DiscoveryMode.AGENTIC:
+                    stage = "checkout"
+                    temporary = stack.enter_context(tempfile.TemporaryDirectory(prefix="rvw-run-"))
+                    if resolved.base_sha is None:
+                        raise CheckoutVerificationError(
+                            "missing-base", "agentic review requires a base SHA"
+                        )
+                    if resolved.kind == "pr" and resolved.pr_number is not None:
+                        repo_dir = provision_checkout(
+                            repo=resolved.repo,
+                            pr_number=resolved.pr_number,
+                            base_sha=resolved.base_sha,
+                            head_sha=resolved.head_sha,
+                            destination=Path(temporary) / "checkout",
+                        )
+                    else:
+                        repo_dir = provision_local_checkout(
+                            source=Path.cwd(),
+                            base_sha=resolved.base_sha,
+                            head_sha=resolved.head_sha,
+                            destination=Path(temporary) / "checkout",
+                        )
+                    stack.enter_context(chdir(repo_dir))
+                stage = "policy"
+                effective = resolve_auto_policy(
+                    resolved,
+                    cwd=Path.cwd(),
+                    policy=selected_policy,
+                    external_path=DEFAULT_AUTO_POLICY,
+                )
+                process.effective_policy = EffectivePolicySource(
+                    source=effective.source, path=effective.path
+                )
+                if publish is None:
+                    runtime.publish = (
+                        "github-comment" if effective.policy.publish_state == "comment" else "none"
+                    )
+                process.command.extend(["--publish", runtime.publish])
+                stage = "review"
+                save_process(run.dir, process)
+                artifacts = asyncio.run(
+                    _execute_pipeline(
+                        target_spec=target,
+                        repo_dir=repo_dir,
+                        registry_root=DEFAULT_REGISTRY_ROOT,
+                        discover_replicas=replicas,
+                        adjudicate_replicas=adjudicate_replicas,
+                        concurrency=concurrency,
+                        deadline_seconds=deadline,
+                        out_root=run.dir.parent,
+                        pause=False,
+                        dynamic_brief=None,
+                        resolved_target=resolved,
+                        host_gate=host_gate,
+                        discovery_mode=discovery_mode,
+                        run_handle=run,
+                        lane_sources=process.lane_sources,
+                    )
+                )
+                if artifacts is None:
+                    raise RuntimeError("pipeline stopped before report generation")
+                health = _artifact_summary(artifacts)
+                if health.status is ReviewStatus.FAILED or health.coverage_totals.valid == 0:
+                    write_artifact_json(
+                        run.dir / "summary.json",
+                        execution_summary(
+                            artifacts.discovered,
+                            artifacts.merged,
+                            artifacts.outcome,
+                            [],
+                        ).model_dump(mode="json"),
+                    )
+                    detail = (
+                        health.error.message if health.error else "no valid planned lane execution"
+                    )
+                    raise RuntimeError(detail)
+                decision = evaluate(effective.policy, artifacts.merged, artifacts.outcome)
+                write_artifact_json(
+                    run.dir / "summary.json",
+                    execution_summary(
+                        artifacts.discovered,
+                        artifacts.merged,
+                        artifacts.outcome,
+                        decision.blocking,
+                    ).model_dump(mode="json"),
+                )
+                stage = "publication"
+                if runtime.publish == "github-comment":
+                    if resolved.kind != "pr" or resolved.pr_number is None:
+                        stage = "configuration"
+                        raise ValueError("github-comment publication requires a PR target")
+                    publish_review(
+                        run=run,
+                        repo=resolved.repo,
+                        pr_number=resolved.pr_number,
+                        report_md=artifacts.report_md,
+                        merged=artifacts.merged,
+                        outcome=artifacts.outcome,
+                        execute=True,
+                    )
+                process.status = "block" if decision.verdict == "BLOCK" else "pass"
+                process.exit_code = 1 if decision.verdict == "BLOCK" else 0
+                process.failure = None
+    except (Exception, KeyboardInterrupt) as exc:
+        if isinstance(exc, PipelineInfrastructureError):
+            artifacts = exc.artifacts
+        invalid = isinstance(exc, (PolicyNotFound, EmptyReviewDiffError)) or (
+            stage in {"configuration", "target", "policy"}
+            and isinstance(exc, (ValueError, yaml.YAMLError))
+        )
+        code = {
+            "configuration": "invalid_configuration",
+            "target": "invalid_target",
+            "policy": "invalid_policy",
+            "checkout": "checkout_failed",
+            "review": "review_failed",
+            "publication": "publication_failed",
+        }[stage]
+        if isinstance(exc, TargetResolutionError):
+            invalid = any(
+                marker in str(exc).lower()
+                for marker in (
+                    "could not resolve to a pullrequest",
+                    "no pull requests found",
+                    "unknown revision",
+                    "bad object",
+                    "not a git repository",
+                    "http 404",
+                    "not found (http 404)",
+                )
+            )
+            code = "invalid_target" if invalid else "target_resolution_failed"
+        if isinstance(exc, PolicyNotFound):
+            code = "policy_not_found"
+        if isinstance(exc, EmptyReviewDiffError):
+            code = "empty_review_diff"
+        if isinstance(exc, KeyboardInterrupt):
+            code = "interrupted"
+        process.status, process.exit_code = ("invalid", 2) if invalid else ("infra_failed", 3)
+        process.failure = ProcessFailure(
+            code=code, detail=redact_diagnostic(str(exc) or type(exc).__name__)
+        )
+        try:
+            discovered = artifacts.discovered if artifacts else run.load_discover()
+        except (OSError, ValueError, KeyError):
+            discovered = DiscoverResult(lane_results={}, findings=[], coverage=[])
+        with diagnostic_attempt("run.json"):
+            run.save_summary(
+                summarize_run(
+                    run.run_id,
+                    discovered,
+                    error=RunError(stage=stage, reason=code, message=process.failure.detail),
+                )
+            )
+        if stage == "review":
+            try:
+                merged = artifacts.merged if artifacts else run.load_merge()
+            except (OSError, ValueError, KeyError):
+                merged = merge([], lane_tiers={})
+            with diagnostic_attempt("summary.json"):
+                write_artifact_json(
+                    run.dir / "summary.json",
+                    execution_summary(
+                        discovered,
+                        merged,
+                        artifacts.outcome if artifacts else None,
+                        [],
+                    ).model_dump(mode="json"),
+                )
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        process.duration_ms = max(0, int((time.monotonic() - started) * 1000))
+        with (
+            diagnostic_attempt("run.log"),
+            (run.dir / "run.log").open("a", encoding="utf-8") as log,
+        ):
+            reason = (
+                f"{process.failure.code}:{process.failure.detail}"
+                if process.failure
+                else process.status
+            )
+            log.write(redact_diagnostic(reason) + "\n")
+        with diagnostic_attempt("environment.txt"):
+            (run.dir / "environment.txt").write_text(
+                f"rvw={__version__}\n"
+                + "\n".join(f"{key}={value}" for key, value in runtime.model_dump().items())
+                + "\n",
+                encoding="utf-8",
+            )
+        save_process(run.dir, process)
     if json_output:
-        _write_json(payload)
+        _write_json(process.model_dump(mode="json"))
     else:
-        _console.print(f"run id: {artifacts.run.run_id}", markup=False, soft_wrap=True)
-        _console.print(f"verdict: {decision.verdict}", markup=False)
-        _console.print(f"report: {artifacts.report_path}", markup=False, soft_wrap=True)
-    if decision.verdict == "BLOCK":
-        raise typer.Exit(EXIT_NOT_FOUND)
+        _console.print(
+            f"run id: {process.run_id}\nstatus: {process.status}\nartifacts: {run.dir}",
+            markup=False,
+        )
+        if process.failure:
+            _error_console.print(f"{process.failure.code}:{process.failure.detail}", markup=False)
+    raise typer.Exit(process.exit_code)
 
 
 @app.command()
@@ -1801,11 +2137,6 @@ def plan(
         _write_json(payload)
     else:
         _print_plan(payload)
-
-
-@app.command()
-def run(run_id: Annotated[str | None, Option("--run")] = None) -> None:
-    _stub(1)
 
 
 @app.command("adjudicate")

@@ -125,16 +125,16 @@ The runtime protocol MUST provide `execute_raw` with a caller-supplied schema, v
 #### Scenario: Adjudication reads checked-out source
 
 - **WHEN** adjudication calls `execute_raw` with a provisioned repository directory
-- **THEN** Codex runs read-only with that directory as its process working directory and validates the adjudication-specific output model
+- **THEN** Codex uses the configured sandbox mode with that directory as its process working directory and validates the adjudication-specific output model
 
 ### Requirement: Discovery execution uses its verified checkout
 
-The runtime protocol MUST accept a caller-supplied workdir for lane execution, and agentic discovery MUST execute plain `codex exec` with that workdir set to the verified checkout. The checkout MUST remain read-only to Codex and the command MUST NOT use `codex exec review`.
+The runtime protocol MUST accept a caller-supplied workdir for lane execution, and agentic discovery MUST execute plain `codex exec` with that workdir set to the verified checkout. The execution MUST honor the selected sandbox mode and its surface isolation boundary, and the command MUST NOT use `codex exec review`.
 
 #### Scenario: Agentic lane explores repository context
 
 - **WHEN** discovery dispatches an agentic lane for a verified target checkout
-- **THEN** plain structured `codex exec` runs read-only with that checkout as its process working directory
+- **THEN** plain structured `codex exec` runs in the selected sandbox mode with that checkout as its process working directory
 
 ### Requirement: Codex execution is read-only and bounded
 
@@ -148,10 +148,12 @@ computer, app, plugin, image, multi-agent, and collaboration tools, disable
 rule loading and persisted sessions, and use strict structured output. Agentic
 mode MUST disable multi-agent and collaboration modes while retaining source
 exploration for agentic discovery and explicitly expanded adjudication. The
-project container MUST select `danger-full-access` because measured nested
+root project container MUST select `danger-full-access` because measured nested
 bubblewrap namespace creation is unavailable there; this fallback MUST NOT
-change the host default, and the read-only-mounted container MUST remain the
-isolation boundary. The adapter SHALL never invoke `codex exec review`. The
+change the host default, and the read-only-mounted root container MUST remain the
+isolation boundary. The App Sandbox MUST explicitly select and record its
+effective sandbox mode and MUST NOT describe its checkout as read-only unless
+that property is enforced by its own isolation boundary. The adapter SHALL never invoke `codex exec review`. The
 adapter MUST capture its newly created process
 group before awaiting the runtime and enforce each configured deadline by
 cancelling its process-owning task. That task MUST terminate the complete
@@ -174,19 +176,19 @@ reasoning effort.
 #### Scenario: Agentic discovery execution
 
 - **WHEN** agentic DISCOVER starts a lane replica in its verified checkout
-- **THEN** its Codex command uses bounded agentic read-only mode and can inspect
+- **THEN** its Codex command uses bounded agentic mode with the configured sandbox selection and can inspect
   the provisioned checkout
 
 #### Scenario: Initial adjudication execution
 
 - **WHEN** an initial adjudication pass evaluates candidates from the supplied
   reviewed diff
-- **THEN** its Codex command uses tool-less read-only mode
+- **THEN** its Codex command uses tool-less mode with the configured sandbox selection
 
 #### Scenario: Expanded adjudication execution
 
 - **WHEN** an initially UNCERTAIN candidate starts its one expanded pass
-- **THEN** its Codex command uses agentic read-only mode and can inspect the
+- **THEN** its Codex command uses agentic mode with the configured sandbox selection and can inspect the
   provisioned checkout
 
 #### Scenario: Host runtime uses its default sandbox
@@ -240,3 +242,31 @@ reasoning effort.
 
 - **WHEN** a lane runtime is invoked
 - **THEN** plain `codex exec` receives the lane's closed-enum output schema and custom prompt
+
+### Requirement: Policy-gated execution owns a versioned process envelope
+
+Python MUST initialize `process.json` before target resolution and finalize it for every `run` or `auto` termination for which the artifact directory can be written. Its strict version-1 schema MUST contain `schema_version: 1`, string `run_id`, `target` with nullable `repo`, `pr`, `base`, and `head`, `status` in `pass|block|invalid|infra_failed`, the corresponding integer `exit_code` in `0|1|2|3`, nonnegative integer `duration_ms`, canonical argument-array `command`, `effective_policy` with nullable `source` and `path`, a `lane_sources` count mapping, `runtime` effective settings, nullable `failure` with `code` and `detail`, an `artifacts` array of relative `path` and nonnegative `size_bytes` records, and nullable `sdk_observations` with nullable `exit_code`, `signal`, `duration_ms`, and wrapper `command`. Policy source MUST be `explicit`, `repository`, `external`, or `package` when known. Runtime settings MUST include `replicas`, `adjudicate_replicas`, `concurrency`, `deadline`, `discovery_mode`, `publish`, `host_concurrency`, and `sandbox`. Before completion, the envelope MUST default to `infra_failed`, exit 3, and failure `execution_incomplete`; it MUST never predeclare PASS. Adapters MUST consume this envelope rather than manufacture a competing result format.
+
+#### Scenario: Resolution fails before discovery
+
+- **WHEN** target resolution fails after artifact-root initialization
+- **THEN** `process.json` still identifies the run, selected settings, failure and reserved exit code, with unknown target and policy fields null
+
+#### Scenario: Execution is forcibly stopped
+
+- **WHEN** an adapter observes forced termination after Python initialized its contract
+- **THEN** the incomplete envelope remains a failure and the adapter merges SDK-observed supplemental termination evidence into that same contract without inventing a policy verdict
+
+### Requirement: Every terminal execution retains shared diagnostics
+
+Python MUST write top-level `run.log` and `environment.txt` beside its process and summary contracts. Diagnostics MUST redact credentials and MUST describe effective runtime configuration without copying credential values. Finalization MUST retain already produced stage and runtime artifacts on failure. A supervisor MUST attempt the same diagnostic persistence before destruction for normal completion, timeout, process start failure, process disappearance, and supersession; persistence errors MUST not suppress the original terminal reason or prevent other diagnostics from being attempted.
+
+#### Scenario: Publication fails after report generation
+
+- **WHEN** publication raises after stage artifacts were saved
+- **THEN** those files and the log, environment, process, and summary contracts remain discoverable under the selected output directory
+
+#### Scenario: One diagnostic cannot be read
+
+- **WHEN** an adapter cannot read a particular terminal diagnostic
+- **THEN** it attempts the remaining diagnostics and records the failed persistence operation before Sandbox destruction

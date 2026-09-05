@@ -5,19 +5,34 @@ from __future__ import annotations
 import errno
 import json
 import os
+import platform
 import re
 import stat
+import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from rvw import __version__
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport
 from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage
 from rvw.merge import MergeResult
-from rvw.summary import RunSummary, running_summary
+from rvw.summary import (
+    ArtifactEntry,
+    ExecutionSummary,
+    ProcessFailure,
+    ProcessResult,
+    ProcessTarget,
+    RunSummary,
+    RuntimeSettings,
+    SDKObservations,
+    running_summary,
+)
 from rvw.target import ResolvedTarget
 
 if TYPE_CHECKING:
@@ -341,3 +356,189 @@ class RunStore:
 
 
 __all__ = ["InvalidRunId", "RunHandle", "RunNotFound", "RunStore", "StageMissing"]
+
+
+def save_process(out: Path, process: ProcessResult) -> None:
+    """Atomically persist a self-inclusive manifest with exact byte sizes."""
+    entries = [
+        ArtifactEntry(path=path.relative_to(out).as_posix(), size_bytes=path.stat().st_size)
+        for path in sorted(out.rglob("*"))
+        if path.is_file()
+        and not path.is_symlink()
+        and path != out / "process.json"
+        and not any((out / parent).is_symlink() for parent in path.relative_to(out).parents)
+    ]
+    # The decimal digit count of process.json's own size converges in a few passes.
+    size = 0
+    for _ in range(10):
+        process.artifacts = sorted(
+            [*entries, ArtifactEntry(path="process.json", size_bytes=size)],
+            key=lambda item: item.path,
+        )
+        payload = ProcessResult.model_validate(process.model_dump()).model_dump(mode="json")
+        encoded = (
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode()
+        if len(encoded) == size:
+            _write_json(out / "process.json", payload)
+            return
+        size = len(encoded)
+    raise RuntimeError("process manifest size did not converge")
+
+
+def redact_diagnostic(text: str) -> str:
+    """Remove inherited credentials before persisting controller diagnostics."""
+    for key, value in os.environ.items():
+        if value and re.search(r"TOKEN|SECRET|PASSWORD|PRIVATE_KEY|API_KEY", key, re.I):
+            text = text.replace(value, "[REDACTED]")
+    text = re.sub(
+        r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)(?:bearer|token)\s+[^\s\"']+",
+        r"\1[REDACTED]",
+        text,
+    )
+    return text
+
+
+@contextmanager
+def diagnostic_attempt(name: str) -> Iterator[None]:
+    """Keep terminal persistence independent without hiding failed attempts."""
+    try:
+        yield
+    except OSError as exc:
+        print(
+            f"diagnostic persistence failed ({name}): {redact_diagnostic(str(exc))}",
+            file=sys.stderr,
+        )
+
+
+def initialize_process(
+    out: Path | None,
+    *,
+    target_spec: str,
+    base_ref: str | None = None,
+    head_ref: str | None = None,
+    command: list[str] | None = None,
+    runtime: RuntimeSettings | None = None,
+    root: Path = Path("/tmp/rvw"),
+) -> tuple[RunHandle, ProcessResult]:
+    """Initialize partial diagnostics before target resolution or runtime work."""
+    match = re.match(
+        r"https?://github\.com/([^/\s]+/[^/\s]+)/pull/([0-9]+)(?:[/?#]|$)", target_spec
+    )
+    target = ProcessTarget(base=base_ref, head=head_ref)
+    if match:
+        target.repo = match[1]
+        target.pr = int(match[2]) if int(match[2]) > 0 else None
+    elif target_spec.isdecimal() and int(target_spec) > 0:
+        target.pr = int(target_spec)
+    suffix = f"pr-{target.pr}" if target.pr else "run-pending"
+    run_id = f"rvw-{datetime.now(UTC).strftime(_RUN_ID_TIMESTAMP_FORMAT)}-{suffix}"
+    if out is None:
+        for _ in range(1000):
+            out = root / run_id
+            try:
+                out.mkdir(parents=True, exist_ok=False)
+                break
+            except FileExistsError:
+                run_id = f"rvw-{datetime.now(UTC).strftime(_RUN_ID_TIMESTAMP_FORMAT)}-{suffix}"
+        else:
+            raise FileExistsError("could not allocate a unique run directory")
+    else:
+        out.mkdir(parents=True, exist_ok=True)
+    process = ProcessResult(
+        run_id=run_id,
+        target=target,
+        command=command or ["rvw", "run", "--target", target_spec],
+        runtime=runtime or RuntimeSettings(),
+        failure=ProcessFailure(code="execution_incomplete", detail="review has not completed"),
+    )
+    with diagnostic_attempt("run.log"):
+        (out / "run.log").touch(exist_ok=True)
+    # An allowlist records effective settings without dumping host secrets or endpoints.
+    environment = f"rvw={__version__}\npython={platform.python_version()}\n"
+    environment += "\n".join(
+        f"{key}={value}" for key, value in process.runtime.model_dump().items()
+    )
+    with diagnostic_attempt("environment.txt"):
+        (out / "environment.txt").write_text(environment + "\n", encoding="utf-8")
+    with diagnostic_attempt("summary.json"):
+        _write_json(out / "summary.json", ExecutionSummary().model_dump(mode="json"))
+    run = RunHandle(run_id=run_id, dir=out)
+    with diagnostic_attempt("run.json"):
+        run.save_summary(running_summary(run_id))
+    save_process(out, process)
+    return run, process
+
+
+def finalize_process(
+    out: Path,
+    *,
+    failure_code: str | None = None,
+    failure_detail: str | None = None,
+    sdk_observations: SDKObservations | None = None,
+) -> ProcessResult:
+    """Complete diagnostics after an adapter observes a forced terminal path."""
+    try:
+        process = ProcessResult.model_validate_json((out / "process.json").read_text())
+    except (OSError, ValueError):
+        _, process = initialize_process(out, target_spec="unknown")
+    if failure_code:
+        process.status = "infra_failed"
+        process.exit_code = 3
+        process.failure = ProcessFailure(
+            code=failure_code,
+            detail=redact_diagnostic(failure_detail or failure_code),
+        )
+    if sdk_observations is not None:
+        process.sdk_observations = SDKObservations.model_validate_json(
+            redact_diagnostic(sdk_observations.model_dump_json())
+        )
+    with diagnostic_attempt("summary.json"):
+        if not (out / "summary.json").is_file():
+            _write_json(out / "summary.json", ExecutionSummary().model_dump(mode="json"))
+    with diagnostic_attempt("environment.txt"):
+        if not (out / "environment.txt").is_file():
+            (out / "environment.txt").write_text(f"rvw={__version__}\n", encoding="utf-8")
+    with diagnostic_attempt("run.log"), (out / "run.log").open("a", encoding="utf-8") as log:
+        if process.failure:
+            log.write(f"{process.failure.code}:{process.failure.detail}\n")
+    for name in ("run.log", "environment.txt"):
+        path = out / name
+        with diagnostic_attempt(name):
+            path.write_text(redact_diagnostic(path.read_text(encoding="utf-8")), encoding="utf-8")
+    save_process(out, process)
+    return process
+
+
+def _contract_main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Python-owned review diagnostic persistence")
+    parser.add_argument("action", choices=["initialize", "finalize"])
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--target", default="unknown")
+    parser.add_argument("--base-ref")
+    parser.add_argument("--head-ref")
+    parser.add_argument("--failure-code")
+    parser.add_argument("--failure-detail")
+    parser.add_argument("--sdk-observations-json")
+    args = parser.parse_args()
+    if args.action == "initialize":
+        initialize_process(
+            args.out, target_spec=args.target, base_ref=args.base_ref, head_ref=args.head_ref
+        )
+    else:
+        finalize_process(
+            args.out,
+            failure_code=args.failure_code,
+            failure_detail=args.failure_detail,
+            sdk_observations=(
+                SDKObservations.model_validate_json(args.sdk_observations_json)
+                if args.sdk_observations_json
+                else None
+            ),
+        )
+
+
+if __name__ == "__main__":
+    _contract_main()
