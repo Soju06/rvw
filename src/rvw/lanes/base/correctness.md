@@ -1,7 +1,7 @@
 ---
 lane: correctness
 tier: base
-cost: heavy
+schedule_hint: heavy
 covered_by_others: inject
 severity_cap: blocker
 validation: pending

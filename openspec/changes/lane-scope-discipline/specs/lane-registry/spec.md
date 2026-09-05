@@ -1,42 +1,4 @@
-# lane-registry
-
-## Purpose
-
-Define the review vocabulary, activation tiers, and single-file lane documents and compatibility registries that determine which review lanes run.
-
-## Requirements
-
-### Requirement: Review ontology has five execution concepts
-
-The system MUST model a Rule as one atomic check, a Lane as a named rule bundle plus prompt and output contract, a Layer as the activation owner of lanes, a Runtime as the lane execution engine, and a Run as one lane-runtime-replica-chunk execution.
-
-#### Scenario: Plan resolves executions
-
-- **WHEN** a plan activates two lanes with three replicas on one runtime over two chunks
-- **THEN** it represents 12 runs while retaining each lane's owning layer and rule bundle
-
-### Requirement: Plan exposes mode-expanded execution counts
-
-`rvw plan` MUST display the selected discovery mode. In inline mode it MUST apply the shared diff chunk planner and report total runs as active lanes multiplied by replicas multiplied by chunks. In agentic mode it MUST NOT apply that planner, MUST report one logical scope, and MUST report initial total runs as active lanes multiplied by replicas; a possible bounded coverage wave is reactive and MUST NOT be included in the initial total.
-
-#### Scenario: Three inline lanes span two chunks
-
-- **WHEN** inline planning uses three replicas for three active lanes and the target diff produces two chunks
-- **THEN** plan displays inline mode, two chunks, and 18 initial runs
-
-#### Scenario: Large target uses agentic planning
-
-- **WHEN** agentic planning uses three replicas for three active lanes regardless of target diff size
-- **THEN** plan displays agentic mode, one logical scope, and nine initial runs without consulting the diff budget
-
-### Requirement: Activation uses four fixed tiers
-
-The registry MUST support the ordered tiers `base`, `project`, `scope`, and `dynamic`, and activation results MUST be returned in that tier order.
-
-#### Scenario: Multiple tiers activate
-
-- **WHEN** a target matches a project predicate and two scope path predicates
-- **THEN** the active layers are ordered base, project, matching scopes, then dynamic
+## MODIFIED Requirements
 
 ### Requirement: Predicates narrow activation
 
@@ -111,23 +73,7 @@ A single-file lane MUST contain strict YAML frontmatter with `lane` and `tier`, 
 - **WHEN** a document omits its closing frontmatter delimiter
 - **THEN** loading fails instead of treating it as prompt text
 
-### Requirement: Lane IDs cannot escape the registry
-
-Lane path resolution MUST reject empty, `.` or `..` identifier segments and MUST fail with the attempted path when the resolved document does not exist.
-
-#### Scenario: Traversal-shaped lane ID
-
-- **WHEN** a registry lane identifier contains `../`
-- **THEN** resolution raises an invalid-lane error before reading outside the lanes root
-
-### Requirement: Pending validation is visible
-
-The lane listing MUST display `validation: pending` and a sampling result with no novel free-variant rule IDs SHALL tell the operator that the marker may be removed, regardless of in-enum site variance.
-
-#### Scenario: Sample passes with site variance
-
-- **WHEN** a pending lane's enum-versus-free sample has no free-variant rule ID outside its closed enum but has in-enum site variance
-- **THEN** the sample reports PASS and the CLI prints that the pending marker may be removed
+## ADDED Requirements
 
 ### Requirement: Scheduling metadata is an ordering hint
 

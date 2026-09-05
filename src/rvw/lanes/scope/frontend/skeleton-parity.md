@@ -1,7 +1,7 @@
 ---
 lane: frontend/skeleton-parity
 tier: scope
-cost: light
+schedule_hint: light
 severity_cap: warning
 when:
   paths:
@@ -31,6 +31,9 @@ no skeleton UI exists near the changed components.
 
 Locate the skeleton by convention (`*Skeleton`, `*.skeleton.*`, `isLoading`
 branches, Suspense fallbacks) and compare structure, not pixels.
+
+Allowed finding locations: changed UI files matching `when.paths`. Other files
+in mixed diffs are supporting evidence only.
 
 ## rule: skeleton/shape-drift
 
