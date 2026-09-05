@@ -18,10 +18,10 @@ DEFAULT_DEADLINE_SECONDS = 600
 MAX_DEADLINE_SECONDS = 1800
 
 
-def lpt_sort_key(lane_cost: str) -> int:
-    """Return the shared longest-processing-time-first key for a lane cost."""
+def lpt_sort_key(schedule_hint: str) -> int:
+    """Return the shared longest-processing-time-first key for a scheduling hint."""
 
-    return _COST_ORDER[lane_cost]
+    return _COST_ORDER[schedule_hint]
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +107,7 @@ async def dispatch_outcome(
         *,
         retry_feedback_by_lane_chunk: Mapping[tuple[str, int], str] | None = None,
     ) -> list[RunResult]:
-        ordered = sorted(wave_runs, key=lambda run: lpt_sort_key(run.lane.cost))
+        ordered = sorted(wave_runs, key=lambda run: lpt_sort_key(run.lane.schedule_hint))
         tasks = [
             asyncio.create_task(
                 execute_one(

@@ -1,50 +1,40 @@
 ---
 lane: backend-observability
 tier: scope
-cost: normal
+schedule_hint: normal
 severity_cap: suggestion
 when:
   paths:
-  - '**/*.ts'
-  - '*.ts'
-  - '**/*.js'
-  - '*.js'
-  - '**/*.mjs'
-  - '*.mjs'
-  - '**/*.py'
-  - '*.py'
-  - '**/*.go'
-  - '*.go'
-  - '**/*.rs'
-  - '*.rs'
-  - '**/*.java'
-  - '*.java'
-  - '**/*.rb'
-  - '*.rb'
+  - '**/server/**'
+  - 'server/**'
+  - '**/backend/**'
+  - 'backend/**'
+  - '**/workers/**'
+  - 'workers/**'
 ---
 
 # backend-observability
 
-Review backend code paths for debuggability. When this incident pages someone
-at 3am, can they find the cause from what the system recorded?
+Review diagnosis of backend operations under declared server/backend/worker
+directories. Language suffixes and directories named api alone do not establish
+backend ownership. Only report gaps that materially prevent incident diagnosis.
 
-- `backend/undiagnosable-design` — code structured so failures cannot be
-  localized: multiple failure causes collapsing into one generic error, state
-  transitions with no way to reconstruct the path taken, error messages that
-  do not identify the failing entity/id/input.
-- `backend/logging-gap` — missing or defective logging at decision points:
-  retries/fallbacks that fire silently, caught-and-continued exceptions logged
-  without stack or context, log lines missing the correlating identifier
-  (request id, entity id) needed to join them to an incident, secrets/PII in
-  log payloads.
-
-Only report gaps that would materially hurt diagnosis; do not demand logging
-on every line.
+Allowed finding locations: changed files matching `when.paths` in this domain.
+Other files in a mixed diff are supporting evidence only. An absent subject
+produces no finding; a path match does not impose a new obligation.
 
 ## rule: backend/undiagnosable-design
 
-The rule is defined by the lane guidance above.
+Backend state transitions must leave enough evidence to reconstruct a failed operation
+and identify the affected entity. Missing transition identity can make distinct
+operation histories indistinguishable. Trace a concrete incident through the state
+machine and show the transition or entity that cannot be recovered from recorded
+evidence.
 
 ## rule: backend/logging-gap
 
-The rule is defined by the lane guidance above.
+Backend operation records must carry the correlation identifiers needed to join related
+events. Missing request or entity identifiers can make otherwise recorded events
+impossible to connect to an incident. Trace a multi-step operation through its records
+and identify the missing join. Generic swallowed-error provenance is owned by hygiene
+and sensitive-value exposure by security; do not report those classes here.

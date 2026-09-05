@@ -1,7 +1,7 @@
 ---
 lane: security-exposure
 tier: base
-cost: normal
+schedule_hint: normal
 severity_cap: blocker
 ---
 

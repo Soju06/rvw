@@ -70,6 +70,7 @@ from rvw.gate import (
 from rvw.hostslots import HostSlotGate, host_slot_gate_from_env
 from rvw.hunks import hunk_sha256_by_id
 from rvw.lane import Lane, load_lane, load_new_lane
+from rvw.lane_lint import scope_diagnostics
 from rvw.pipeline import (
     PipelineArtifacts,
     PipelineInfrastructureError,
@@ -2371,20 +2372,28 @@ def lanes_show(
 @lanes_app.command("lint")
 def lanes_lint(
     path: Annotated[Path | None, Argument(help="Lane file or directory to validate.")] = None,
+    path_option: Annotated[
+        Path | None, Option("--path", help="Lane file or directory to validate.")
+    ] = None,
+    scope: Annotated[bool, Option("--scope", help="Check lane scope discipline.")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
 ) -> None:
     """Validate new-format lane documents and report stable reason codes."""
 
+    if path is not None and path_option is not None:
+        raise typer.BadParameter("provide a positional path or --path, not both")
+    selected_path = path_option or path
     paths = (
-        sorted(path.rglob("*.md"))
-        if path is not None and path.is_dir()
-        else [path]
-        if path is not None
+        sorted(selected_path.rglob("*.md"))
+        if selected_path is not None and selected_path.is_dir()
+        else [selected_path]
+        if selected_path is not None
         else sorted(Path(__file__).parent.joinpath("lanes").rglob("*.md"))
         + sorted((Path.cwd() / ".rvw" / "lanes").rglob("*.md"))
     )
-    errors: list[dict[str, str]] = []
+    errors: list[dict[str, object]] = []
     lane_ids: dict[str, Path] = {}
+    loaded: list[tuple[Path, Lane]] = []
     for lane_path in paths:
         if lane_path is None:
             continue
@@ -2397,35 +2406,57 @@ def lanes_lint(
                 ("stale-rules", "stale-rules"),
                 ("duplicate-rule-id", "duplicate-rule-id"),
                 ("empty-rule-body", "empty-rule-body"),
+                ("unsupported-glob-braces", "unsupported-glob-braces"),
                 ("unknown", "unknown-frontmatter-key"),
                 ("extra_forbidden", "unknown-frontmatter-key"),
             ):
                 if marker in message:
                     reason = code
                     break
-            errors.append({"reason": reason, "path": str(lane_path), "message": message})
+            errors.append(
+                {
+                    "reason": reason,
+                    "path": str(lane_path),
+                    "line": None,
+                    "rule_id": None,
+                    "domain": "structure",
+                    "evidence": "",
+                    "severity": "error",
+                    "message": message,
+                }
+            )
             continue
+        loaded.append((lane_path, lane))
         if lane.id in lane_ids:
             errors.append(
                 {
                     "reason": "duplicate-lane-id",
                     "path": str(lane_path),
+                    "line": None,
+                    "rule_id": None,
+                    "domain": "structure",
+                    "evidence": lane.id,
+                    "severity": "error",
                     "message": f"duplicate lane id {lane.id}; first: {lane_ids[lane.id]}",
                 }
             )
         else:
             lane_ids[lane.id] = lane_path
+    if scope:
+        errors.extend(scope_diagnostics(loaded))
     payload = {"ok": not errors, "errors": errors, "lanes": sorted(lane_ids)}
     if json_output:
         _write_json(payload)
     elif errors:
         for error in errors:
-            _error_console.print(
-                f"{error['reason']}: {error['path']}: {error['message']}", markup=False
-            )
+            location = str(error["path"])
+            if error.get("line") is not None:
+                location += f":{error['line']}"
+            _error_console.print(f"{error['reason']}: {location}: {error['message']}", markup=False)
         raise typer.Exit(EXIT_NOT_FOUND)
     else:
-        _console.print(f"validated {len(lane_ids)} lane(s)")
+        suffix = "; scope lint clean" if scope else ""
+        _console.print(f"validated {len(lane_ids)} lane(s){suffix}")
     if errors:
         raise typer.Exit(EXIT_NOT_FOUND)
 

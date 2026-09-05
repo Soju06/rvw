@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
-from rvw.lane import Lane, load_lane, load_new_lane
+from rvw.lane import Lane, load_lane, load_new_lane, validate_glob_patterns
 from rvw.schema import Tier
 
 if TYPE_CHECKING:
@@ -38,7 +38,12 @@ def _glob_match(path: str, pattern: str) -> bool:
 
     normalized_path = posixpath.normpath(path.replace("\\", "/"))
     normalized_pattern = posixpath.normpath(pattern.replace("\\", "/"))
-    return fnmatch.fnmatchcase(normalized_path, normalized_pattern)
+    candidate_patterns = [normalized_pattern]
+    root_pattern = normalized_pattern
+    while root_pattern.startswith("**/"):
+        root_pattern = root_pattern[3:]
+        candidate_patterns.append(root_pattern)
+    return any(fnmatch.fnmatchcase(normalized_path, candidate) for candidate in candidate_patterns)
 
 
 def _repo_match(repo: str, patterns: str | list[str]) -> bool:
@@ -54,6 +59,8 @@ class LayerPredicate(BaseModel):
 
     repo: str | list[str] | None = None
     paths: list[str] | None = None
+
+    _validate_paths = field_validator("paths")(validate_glob_patterns)
 
 
 class Layer(BaseModel):

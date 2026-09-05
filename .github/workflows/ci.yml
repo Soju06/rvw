@@ -25,6 +25,9 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Lane scope lint
+        run: uv run rvw lanes lint --scope
+
       - name: Format
         run: uv run ruff format --check .
 

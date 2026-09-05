@@ -1,7 +1,7 @@
 ---
 lane: dynamic/goal-parity
 tier: dynamic
-cost: normal
+schedule_hint: normal
 severity_cap: blocker
 ---
 

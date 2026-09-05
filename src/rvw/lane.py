@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 import re
+import warnings
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Tier
 
 _SEVERITY_ORDER = (Severity.SUGGESTION, Severity.WARNING, Severity.BLOCKER)
+
+
+def validate_glob_patterns(patterns: list[str] | None) -> list[str] | None:
+    """Reject brace expansion, which is not part of fnmatchcase semantics."""
+
+    for pattern in patterns or ():
+        if "{" in pattern or "}" in pattern:
+            raise ValueError(
+                "unsupported-glob-braces: brace expansion is not supported; list separate patterns"
+            )
+    return patterns
 
 
 class LaneActivation(BaseModel):
@@ -21,21 +33,57 @@ class LaneActivation(BaseModel):
 
     paths: list[str] | None = None
 
+    _validate_paths = field_validator("paths")(validate_glob_patterns)
+
+
+class LaneLintConfig(BaseModel):
+    """Typed exceptions for mechanical lane-scope checks."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    allow_scope_terms: list[str] = Field(default_factory=list, alias="allow-scope-terms")
+
+    @field_validator("allow_scope_terms")
+    @classmethod
+    def _terms_must_be_nonempty(cls, terms: list[str]) -> list[str]:
+        if any(not term.strip() for term in terms):
+            raise ValueError("lint allow-scope-terms entries must be nonempty")
+        return terms
+
 
 class Lane(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(alias="lane")
     tier: Tier
-    cost: Literal["light", "normal", "heavy"] = "normal"
+    schedule_hint: Literal["light", "normal", "heavy"] = "normal"
     rules: list[str] = Field(min_length=1)
     when: LaneActivation | None = None
+    lint: LaneLintConfig | None = None
     severity_cap: Severity = Severity.BLOCKER
     covered_by_others: Literal["inject"] | None = None
     # Lane lifecycle: "pending" = not yet gated by `rvw sample --compare-free`
     # (ADR-004 verification). None = validated / pre-dates the gate.
     validation: Literal["pending"] | None = None
     prompt_body: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_cost(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        if "cost" in data and "schedule_hint" in data:
+            raise ValueError("cost and schedule_hint cannot be used together")
+        if "cost" in data:
+            data["schedule_hint"] = data.pop("cost")
+        return data
+
+    @property
+    def cost(self) -> Literal["light", "normal", "heavy"]:
+        """Compatibility accessor for callers migrating to ``schedule_hint``."""
+
+        return self.schedule_hint
 
     def output_schema(self) -> dict[str, Any]:
         """Build the strict, self-contained schema consumed by lane runtimes."""
@@ -117,6 +165,14 @@ def load_lane(path: Path, *, allow_legacy: bool = True) -> Lane:
 
     try:
         metadata, lines, closing_index = _parse_frontmatter(path)
+        if "cost" in metadata and "schedule_hint" in metadata:
+            raise ValueError("cost and schedule_hint cannot be used together")
+        if "cost" in metadata:
+            warnings.warn(
+                "lane frontmatter cost is deprecated; use schedule_hint instead",
+                FutureWarning,
+                stacklevel=2,
+            )
         body_lines = lines[closing_index + 1 :]
         headings = [line for line in body_lines if _RULE_HEADING.match(line)]
         # Compatibility: old external-registry fixtures have a closed rules list
