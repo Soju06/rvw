@@ -13,14 +13,16 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
 from rvw.adjudicate import AdjudicationOutcome
+from rvw.discover import LaneCoverage
 from rvw.merge import CollapseGroup, MergeResult
-from rvw.report import render_group_item
+from rvw.report import discovery_replica_count, render_group_item
 from rvw.schema import Verdict
 from rvw.store import RunHandle
 
@@ -88,6 +90,7 @@ def _body_without_inline(
     merged: MergeResult,
     outcome: AdjudicationOutcome | None,
     inline_keys: set[str],
+    discovery_replicas: int,
 ) -> str:
     if not inline_keys or outcome is None or _CONFIRMED_HEADING not in report_md:
         return report_md
@@ -105,10 +108,11 @@ def _body_without_inline(
     ]
     sections = [before]
     if retained:
-        sections.append(
-            f"{_CONFIRMED_HEADING}\n\n"
-            + "\n\n".join(render_group_item(group, outcome) for group in retained)
-        )
+        retained_items = [
+            render_group_item(group, outcome, discovery_replicas=discovery_replicas)
+            for group in retained
+        ]
+        sections.append(f"{_CONFIRMED_HEADING}\n\n" + "\n\n".join(retained_items))
     if after:
         sections.append(after)
     return "\n\n".join(section for section in sections if section) + "\n"
@@ -119,6 +123,7 @@ def _payload(
     body: str,
     inline_groups: list[CollapseGroup],
     outcome: AdjudicationOutcome | None,
+    discovery_replicas: int = 3,
 ) -> dict[str, object]:
     payload: dict[str, object] = {"event": "COMMENT", "body": body}
     if inline_groups:
@@ -127,7 +132,7 @@ def _payload(
                 "path": group.file,
                 "line": group.line,
                 "side": "RIGHT",
-                "body": render_group_item(group, outcome),
+                "body": render_group_item(group, outcome, discovery_replicas=discovery_replicas),
             }
             for group in inline_groups
         ]
@@ -148,11 +153,17 @@ def _review_url(raw: str) -> str:
     return value
 
 
-def _fallback_body(body: str, groups: list[CollapseGroup], outcome: AdjudicationOutcome) -> str:
+def _fallback_body(
+    body: str,
+    groups: list[CollapseGroup],
+    outcome: AdjudicationOutcome,
+    discovery_replicas: int,
+) -> str:
     items = []
     for group in groups:
         line = group.line if group.line is not None else "unknown"
-        items.append(f"#### `{group.file}:{line}`\n\n{render_group_item(group, outcome)}")
+        rendered = render_group_item(group, outcome, discovery_replicas=discovery_replicas)
+        items.append(f"#### `{group.file}:{line}`\n\n{rendered}")
     return body.rstrip() + "\n\n### 앵커 실패 항목\n\n" + "\n\n".join(items) + "\n"
 
 
@@ -164,14 +175,21 @@ def publish_review(
     report_md: str,
     merged: MergeResult,
     outcome: AdjudicationOutcome | None,
+    coverage: Sequence[LaneCoverage] = (),
     execute: bool,
 ) -> PublishResult:
     """Build or execute one GitHub COMMENT review from persisted run artifacts."""
 
     inline_groups = _confirmed_inline_groups(merged, outcome)
     inline_keys = {group.key for group in inline_groups}
-    body = _body_without_inline(report_md, merged, outcome, inline_keys)
-    payload = _payload(body=body, inline_groups=inline_groups, outcome=outcome)
+    discovery_replicas = discovery_replica_count(coverage)
+    body = _body_without_inline(report_md, merged, outcome, inline_keys, discovery_replicas)
+    payload = _payload(
+        body=body,
+        inline_groups=inline_groups,
+        outcome=outcome,
+        discovery_replicas=discovery_replicas,
+    )
     payload_text = _json_text(payload)
 
     if not execute:
@@ -198,9 +216,10 @@ def publish_review(
         if exc.status_code != 422 or not inline_groups or outcome is None:
             raise
         fallback = _payload(
-            body=_fallback_body(body, inline_groups, outcome),
+            body=_fallback_body(body, inline_groups, outcome, discovery_replicas),
             inline_groups=[],
             outcome=outcome,
+            discovery_replicas=discovery_replicas,
         )
         raw = _run(command, _json_text(fallback))
         return PublishResult(

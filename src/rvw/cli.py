@@ -685,6 +685,7 @@ async def _review_pipeline(
             report_md=artifacts.report_md,
             merged=artifacts.merged,
             outcome=artifacts.outcome,
+            coverage=artifacts.discovered.coverage,
             execute=publish,
         )
         publication_url = publication.review_url
@@ -1583,6 +1584,7 @@ def _publish_gate_verdict(
             report_md=verdict_markdown,
             merged=artifacts.merged,
             outcome=outcome,
+            coverage=artifacts.discovered.coverage,
             execute=execute,
         )
     except (OSError, subprocess.CalledProcessError, PublishError) as exc:
@@ -1734,6 +1736,7 @@ async def _auto_pipeline(
             report_md=artifacts.report_md,
             merged=artifacts.merged,
             outcome=artifacts.outcome,
+            coverage=artifacts.discovered.coverage,
             execute=True,
         )
 
@@ -1969,6 +1972,7 @@ def publish_command(
         raise typer.Exit(EXIT_USER_ERROR)
 
     try:
+        discovered = run.load_discover()
         merged = run.load_merge()
         outcome = _optional_outcome(run)
         report_md = run.load_report()
@@ -1982,6 +1986,7 @@ def publish_command(
         report_md=report_md,
         merged=merged,
         outcome=outcome,
+        coverage=discovered.coverage,
         execute=execute,
     )
     if execute:

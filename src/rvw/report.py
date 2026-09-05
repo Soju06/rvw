@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Final
 
 from rvw import __version__
 from rvw.adjudicate import AdjudicationOutcome
@@ -17,6 +18,7 @@ from rvw.summary import ReviewStatus, RunSummary
 from rvw.target import ResolvedTarget
 
 _SYNTHESIS_PLACEHOLDER = "_(종합은 오케스트레이터가 작성합니다 — rvw report --synthesis 로 주입)_"
+_LEGACY_DISCOVERY_REPLICA_COUNT: Final = 3
 
 
 def _target_label(target: ResolvedTarget) -> str:
@@ -38,10 +40,18 @@ def _votes(outcome: AdjudicationOutcome | None, key: str) -> str:
     return "/".join(verdict.value for verdict in outcome.replica_votes.get(key, [])) or "없음"
 
 
+def discovery_replica_count(coverage: Sequence[LaneCoverage]) -> int:
+    return max(
+        (run.replica for lane_coverage in coverage for run in lane_coverage.runs),
+        default=_LEGACY_DISCOVERY_REPLICA_COUNT,
+    )
+
+
 def render_group_item(
     group: CollapseGroup,
     outcome: AdjudicationOutcome | None,
     *,
+    discovery_replicas: int = _LEGACY_DISCOVERY_REPLICA_COUNT,
     region_labels: Sequence[str] = (),
 ) -> str:
     """Render one non-folded finding item for reports and inline publication."""
@@ -51,7 +61,7 @@ def render_group_item(
     parts = [
         f"### [{group.severity.value}] {group.rule_id} — {group.file}:{line}{suffix}",
         f"Finding ID: `{group.key}`",
-        f"복제 동의 {group.agreement}/3 · 판정 {_votes(outcome, group.key)}",
+        f"복제 동의 {group.agreement}/{discovery_replicas} · 판정 {_votes(outcome, group.key)}",
     ]
     if outcome is not None:
         reason = outcome.reasons.get(group.key, "")
@@ -71,6 +81,7 @@ def _render_pattern_item(
     outcome: AdjudicationOutcome | None,
     priority_index: dict[str, int],
     region_labels: Sequence[str],
+    discovery_replicas: int,
 ) -> str:
     representative = groups[fold.group_keys[0]]
     members = sorted(
@@ -99,7 +110,9 @@ def _render_pattern_item(
     if fold.shared_identifiers:
         identifiers = ", ".join(f"`{identifier}`" for identifier in fold.shared_identifiers)
         parts.append(f"공유 식별자: {identifiers}")
-    parts.append(f"복제 동의 {highest.agreement}/3 · 판정 {_votes(outcome, highest.key)}")
+    parts.append(
+        f"복제 동의 {highest.agreement}/{discovery_replicas} · 판정 {_votes(outcome, highest.key)}"
+    )
 
     if differing_content:
         for member in members:
@@ -132,6 +145,7 @@ def _folded_items(
     merged: MergeResult,
     outcome: AdjudicationOutcome | None,
     included: set[str],
+    discovery_replicas: int,
 ) -> list[str]:
     groups = {group.key: group for group in merged.groups}
     priority_index = {group.key: index for index, group in enumerate(merged.groups)}
@@ -199,27 +213,52 @@ def _folded_items(
             labels = labels_by_unit[unit.id]
             if unit.pattern is not None:
                 rendered.append(
-                    _render_pattern_item(unit.pattern, groups, outcome, priority_index, labels)
+                    _render_pattern_item(
+                        unit.pattern,
+                        groups,
+                        outcome,
+                        priority_index,
+                        labels,
+                        discovery_replicas,
+                    )
                 )
             else:
                 rendered.append(
-                    render_group_item(groups[unit.keys[0]], outcome, region_labels=labels)
+                    render_group_item(
+                        groups[unit.keys[0]],
+                        outcome,
+                        discovery_replicas=discovery_replicas,
+                        region_labels=labels,
+                    )
                 )
     return rendered
 
 
-def _confirmed_items(merged: MergeResult, outcome: AdjudicationOutcome) -> list[str]:
+def _confirmed_items(
+    merged: MergeResult,
+    outcome: AdjudicationOutcome,
+    discovery_replicas: int,
+) -> list[str]:
     confirmed = {
         group.key for group in merged.groups if outcome.verdicts.get(group.key) is Verdict.CONFIRMED
     }
-    return _folded_items(merged, outcome, confirmed)
+    return _folded_items(merged, outcome, confirmed, discovery_replicas)
 
 
-def _unadjudicated_items(merged: MergeResult) -> list[str]:
-    return _folded_items(merged, None, {group.key for group in merged.groups})
+def _unadjudicated_items(merged: MergeResult, discovery_replicas: int) -> list[str]:
+    return _folded_items(
+        merged,
+        None,
+        {group.key for group in merged.groups},
+        discovery_replicas,
+    )
 
 
-def _unresolved_items(merged: MergeResult, outcome: AdjudicationOutcome) -> list[str]:
+def _unresolved_items(
+    merged: MergeResult,
+    outcome: AdjudicationOutcome,
+    discovery_replicas: int,
+) -> list[str]:
     groups = {group.key: group for group in merged.groups}
     items: list[str] = []
     for key in outcome.unresolved:
@@ -227,7 +266,7 @@ def _unresolved_items(merged: MergeResult, outcome: AdjudicationOutcome) -> list
         if group is None:
             continue
         items.append(
-            f"{render_group_item(group, outcome)}\n\n"
+            f"{render_group_item(group, outcome, discovery_replicas=discovery_replicas)}\n\n"
             "확장 컨텍스트 재검증에서도 미확정 — 수동 확인 필요"
         )
     return items
@@ -345,6 +384,7 @@ def render_report(
 ) -> str:
     """Render one report without reading or writing external state."""
 
+    discovery_replicas = discovery_replica_count(coverage)
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     parts = [
         f"# rvw 리뷰 — {target.repo} {_target_label(target)}",
@@ -356,17 +396,17 @@ def render_report(
     parts.extend(["## 종합", synthesis if synthesis is not None else _SYNTHESIS_PLACEHOLDER])
 
     if outcome is None:
-        items = _unadjudicated_items(merged)
+        items = _unadjudicated_items(merged, discovery_replicas)
         parts.extend(["## 발견 (미판정)", "\n\n".join(items) if items else "_없음_"])
     else:
-        confirmed_items = _confirmed_items(merged, outcome)
+        confirmed_items = _confirmed_items(merged, outcome, discovery_replicas)
         parts.extend(
             [
                 "## 확정 발견 (CONFIRMED)",
                 "\n\n".join(confirmed_items) if confirmed_items else "_없음_",
             ]
         )
-        unresolved_items = _unresolved_items(merged, outcome)
+        unresolved_items = _unresolved_items(merged, outcome, discovery_replicas)
         if unresolved_items:
             parts.extend(["## 검증 미확정", "\n\n".join(unresolved_items)])
         rejected_items = _rejected_items(merged, outcome)
@@ -383,4 +423,4 @@ def render_report(
     return "\n\n".join(parts) + "\n"
 
 
-__all__ = ["render_group_item", "render_report"]
+__all__ = ["discovery_replica_count", "render_group_item", "render_report"]

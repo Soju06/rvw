@@ -7,7 +7,7 @@ import pytest
 
 import rvw.publish as publish_module
 from rvw.adjudicate import AdjudicationOutcome
-from rvw.discover import EnrichedFinding
+from rvw.discover import EnrichedFinding, LaneCoverage, RunCoverage
 from rvw.gate import (
     DispositionDecision,
     DispositionDocument,
@@ -91,26 +91,49 @@ def outcome_fixture(merged: MergeResult) -> AdjudicationOutcome:
     )
 
 
-def prepared_run(tmp_path: Path) -> tuple[RunHandle, MergeResult, AdjudicationOutcome, str]:
+def coverage_fixture() -> list[LaneCoverage]:
+    return [
+        LaneCoverage(
+            lane_id="lane",
+            dispatched=1,
+            valid=1,
+            findings=3,
+            runs=[
+                RunCoverage(
+                    replica=1,
+                    chunk=1,
+                    valid=True,
+                    findings=3,
+                    invalid_reason=None,
+                )
+            ],
+        )
+    ]
+
+
+def prepared_run(
+    tmp_path: Path,
+) -> tuple[RunHandle, MergeResult, AdjudicationOutcome, list[LaneCoverage], str]:
     target = target_fixture()
     run = RunStore(tmp_path).create(target)
     merged = merged_fixture()
     outcome = outcome_fixture(merged)
+    coverage = coverage_fixture()
     report = render_report(
         target=target,
         merged=merged,
         outcome=outcome,
-        coverage=[],
+        coverage=coverage,
         budget=None,
         synthesis="종합 본문",
     )
-    return run, merged, outcome, report
+    return run, merged, outcome, coverage, report
 
 
 def test_dry_run_writes_exact_split_payload_without_calling_gh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    run, merged, outcome, report = prepared_run(tmp_path)
+    run, merged, outcome, coverage, report = prepared_run(tmp_path)
 
     def forbidden_run(cmd: list[str], input_json: str) -> str:
         del cmd, input_json
@@ -125,6 +148,7 @@ def test_dry_run_writes_exact_split_payload_without_calling_gh(
         report_md=report,
         merged=merged,
         outcome=outcome,
+        coverage=coverage,
         execute=False,
     )
 
@@ -142,6 +166,9 @@ def test_dry_run_writes_exact_split_payload_without_calling_gh(
         "body": payload["comments"][0]["body"],
     }
     assert "INLINE-ONLY-BODY" in payload["comments"][0]["body"]
+    assert "복제 동의 1/1" in payload["body"]
+    assert "복제 동의 1/1" in payload["comments"][0]["body"]
+    assert "복제 동의 1/3" not in json.dumps(payload, ensure_ascii=False)
     assert result.review_url is None
     assert result.inline_count == 1
     assert result.body_fallback_count == 0
@@ -151,7 +178,7 @@ def test_dry_run_writes_exact_split_payload_without_calling_gh(
 def test_execute_posts_comment_and_parses_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    run, merged, outcome, report = prepared_run(tmp_path)
+    run, merged, outcome, coverage, report = prepared_run(tmp_path)
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def fake_run(cmd: list[str], input_json: str) -> str:
@@ -167,6 +194,7 @@ def test_execute_posts_comment_and_parses_url(
         report_md=report,
         merged=merged,
         outcome=outcome,
+        coverage=coverage,
         execute=True,
     )
 
@@ -181,7 +209,7 @@ def test_execute_posts_comment_and_parses_url(
 def test_422_retries_once_with_all_inline_comments_in_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    run, merged, outcome, report = prepared_run(tmp_path)
+    run, merged, outcome, coverage, report = prepared_run(tmp_path)
     payloads: list[dict[str, object]] = []
 
     def fake_run(cmd: list[str], input_json: str) -> str:
@@ -200,6 +228,7 @@ def test_422_retries_once_with_all_inline_comments_in_body(
         report_md=report,
         merged=merged,
         outcome=outcome,
+        coverage=coverage,
         execute=True,
     )
 
@@ -208,12 +237,14 @@ def test_422_retries_once_with_all_inline_comments_in_body(
     assert "comments" not in payloads[1]
     assert "### 앵커 실패 항목" in str(payloads[1]["body"])
     assert "INLINE-ONLY-BODY" in str(payloads[1]["body"])
+    assert "복제 동의 1/1" in str(payloads[1]["body"])
+    assert "복제 동의 1/3" not in json.dumps(payloads[1], ensure_ascii=False)
     assert result.inline_count == 0
     assert result.body_fallback_count == 1
 
 
 def test_non_422_error_is_not_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    run, merged, outcome, report = prepared_run(tmp_path)
+    run, merged, outcome, coverage, report = prepared_run(tmp_path)
     calls = 0
 
     def fake_run(cmd: list[str], input_json: str) -> str:
@@ -232,6 +263,7 @@ def test_non_422_error_is_not_retried(tmp_path: Path, monkeypatch: pytest.Monkey
             report_md=report,
             merged=merged,
             outcome=outcome,
+            coverage=coverage,
             execute=True,
         )
 
@@ -298,7 +330,7 @@ def test_body_only_execute_makes_exactly_one_comment_call(
 def test_gate_verdict_uses_comment_only_bounded_fallback_and_keeps_dispositions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    run, merged, outcome, _ = prepared_run(tmp_path)
+    run, merged, outcome, coverage, _ = prepared_run(tmp_path)
     document = DispositionDocument(
         schema_version=1,
         dispositions=[
@@ -314,7 +346,7 @@ def test_gate_verdict_uses_comment_only_bounded_fallback_and_keeps_dispositions(
     verdict = build_gate_verdict(
         run_id=run.run_id,
         target=target_fixture(),
-        coverage=[],
+        coverage=coverage,
         merged=merged,
         outcome=outcome,
         dispositions=document,
@@ -338,6 +370,7 @@ def test_gate_verdict_uses_comment_only_bounded_fallback_and_keeps_dispositions(
         report_md=render_gate_verdict(verdict),
         merged=merged,
         outcome=outcome,
+        coverage=coverage,
         execute=True,
     )
 

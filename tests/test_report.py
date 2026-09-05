@@ -50,7 +50,13 @@ def target_fixture() -> ResolvedTarget:
     )
 
 
-def coverage_fixture(lane_id: str, *, valid: int, findings: int) -> LaneCoverage:
+def coverage_fixture(
+    lane_id: str,
+    *,
+    valid: int,
+    findings: int,
+    replicas: int = 3,
+) -> LaneCoverage:
     runs = [
         RunCoverage(
             replica=replica,
@@ -59,11 +65,11 @@ def coverage_fixture(lane_id: str, *, valid: int, findings: int) -> LaneCoverage
             findings=findings if replica == 1 else 0,
             invalid_reason=None if replica <= valid else "scripted_invalid",
         )
-        for replica in range(1, 4)
+        for replica in range(1, replicas + 1)
     ]
     return LaneCoverage(
         lane_id=lane_id,
-        dispatched=3,
+        dispatched=replicas,
         valid=valid,
         findings=findings,
         runs=runs,
@@ -187,8 +193,7 @@ def _pattern_merged(*, bodies: tuple[str, str]) -> MergeResult:
     return merge(findings, lane_tiers={"test-ci-integrity": Tier.BASE})
 
 
-def _confirmed_pattern_outcome(
-    merged: MergeResult,
+def _confirmed_outcome(
     *,
     reasons: dict[str, str],
     evidence: dict[str, str],
@@ -203,13 +208,54 @@ def _confirmed_pattern_outcome(
     )
 
 
+def test_report_uses_discovery_replica_count_for_ordinary_item() -> None:
+    # Given a finding from a run configured with one discovery replica.
+    merged = _synthetic_merged()
+    group = merged.groups[0]
+    outcome = _confirmed_outcome(
+        reasons={group.key: "confirmed"},
+        evidence={group.key: "evidence"},
+    )
+
+    # When the report is rendered from persisted discovery coverage.
+    report = render_report(
+        target=target_fixture(),
+        merged=merged,
+        outcome=outcome,
+        coverage=[coverage_fixture("lane", valid=1, findings=3, replicas=1)],
+        budget=None,
+    )
+
+    # Then the agreement denominator describes discovery, not adjudication.
+    assert "복제 동의 1/1 · 판정 CONFIRMED/CONFIRMED/CONFIRMED" in report
+    assert "복제 동의 1/3" not in report
+
+
+def test_report_uses_discovery_replica_count_for_pattern_fold() -> None:
+    # Given a repeated pattern from a run configured with two discovery replicas.
+    merged = _pattern_merged(bodies=("shared `value`", "shared `value`"))
+
+    # When the pattern fold is rendered from persisted discovery coverage.
+    report = render_report(
+        target=target_fixture(),
+        merged=merged,
+        outcome=None,
+        coverage=[coverage_fixture("test-ci-integrity", valid=2, findings=2, replicas=2)],
+        budget=None,
+    )
+
+    # Then its denominator is the configured discovery count.
+    assert "### test-ci/critical-flaw — 2개 위치 (반복 패턴)" in report
+    assert "복제 동의 1/2 · 판정 미판정" in report
+    assert "복제 동의 1/3" not in report
+
+
 def test_pattern_fold_renders_each_member_when_reasons_differ() -> None:
     merged = _pattern_merged(
         bodies=("representative A with `shared`", "representative B with `shared`")
     )
     by_file = {group.file: group for group in merged.groups}
-    outcome = _confirmed_pattern_outcome(
-        merged,
+    outcome = _confirmed_outcome(
         reasons={
             by_file["a.ts"].key: "first reason",
             by_file["b.ts"].key: " second reason ",
@@ -237,8 +283,7 @@ def test_pattern_fold_renders_one_reason_when_all_members_match() -> None:
         bodies=("representative A with `shared`", "representative B with `shared`")
     )
     by_file = {group.file: group for group in merged.groups}
-    outcome = _confirmed_pattern_outcome(
-        merged,
+    outcome = _confirmed_outcome(
         reasons={
             by_file["a.ts"].key: " same reason ",
             by_file["b.ts"].key: "same reason",
