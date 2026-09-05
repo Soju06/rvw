@@ -13,4 +13,4 @@
 
 - [x] 3.1 Synchronize main lane-registry spec/context with the verified single-file contract and delta.
 - [x] 3.2 Independently inspect all implementation changes and run every bare verification gate.
-- [ ] 3.3 Commit/push rvw and create a PR; make one bori lane-only commit and push its existing PR branch.
+- [x] 3.3 Commit/push rvw and create a PR; make one bori lane-only commit and push its existing PR branch.
