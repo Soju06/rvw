@@ -12,6 +12,41 @@ on:
         required: false
         type: string
         default: ""
+      timeout_minutes:
+        description: Maximum duration of the review job
+        required: false
+        type: number
+        default: 90
+      publish:
+        description: Publication mode (none or github-comment)
+        required: false
+        type: string
+        default: github-comment
+      replicas:
+        description: Discovery replicas per lane
+        required: false
+        type: number
+        default: 1
+      adjudicate_replicas:
+        description: Adjudication replicas
+        required: false
+        type: number
+        default: 3
+      concurrency:
+        description: Maximum concurrent runtime executions
+        required: false
+        type: number
+        default: 8
+      deadline:
+        description: Per-execution runtime deadline in seconds
+        required: false
+        type: number
+        default: 600
+      discovery_mode:
+        description: Discovery mode (agentic or inline)
+        required: false
+        type: string
+        default: agentic
     secrets:
       CODEX_API_KEY:
         description: Codex provider credential
@@ -28,16 +63,25 @@ jobs:
   review:
     name: rvw review
     runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
       RVW_IMAGE: ${{ inputs.image }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PUBLISH: ${{ inputs.publish }}
+      REPLICAS: ${{ inputs.replicas }}
+      ADJUDICATE_REPLICAS: ${{ inputs.adjudicate_replicas }}
+      CONCURRENCY: ${{ inputs.concurrency }}
+      DEADLINE: ${{ inputs.deadline }}
+      DISCOVERY_MODE: ${{ inputs.discovery_mode }}
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
       CODEX_BASE_URL: ${{ secrets.CODEX_BASE_URL || inputs.codex_base_url }}
       GITHUB_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out immutable PR head
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
@@ -57,14 +101,21 @@ jobs:
           git remote remove rvw-base
 
       - name: Run pinned rvw image
+        id: review
         run: |
-          docker pull "$RVW_IMAGE"
+          mkdir -p "$GITHUB_WORKSPACE/result"
+          if ! docker pull "$RVW_IMAGE"; then
+            printf 'exit_code=3\n' >> "$GITHUB_OUTPUT"
+            exit 3
+          fi
+          review_exit=0
           docker run --rm \
             --read-only \
             --tmpfs /root:rw,nosuid,nodev,size=64m \
             --tmpfs /tmp:rw,nosuid,nodev,size=2g \
             --workdir /workspace \
             --volume "$GITHUB_WORKSPACE/checkout:/workspace:ro" \
+            --volume "$GITHUB_WORKSPACE/result:/result:rw" \
             --env CODEX_API_KEY \
             --env CODEX_BASE_URL \
             --env GITHUB_TOKEN \
@@ -72,4 +123,75 @@ jobs:
             --env GIT_CONFIG_COUNT=1 \
             --env GIT_CONFIG_KEY_0=safe.directory \
             --env GIT_CONFIG_VALUE_0=/workspace \
-            "$RVW_IMAGE" auto --target "$PR_NUMBER" --repo-dir /workspace
+            "$RVW_IMAGE" run --target "$PR_URL" \
+            --base-ref "$BASE_SHA" --head-ref "$HEAD_SHA" \
+            --repo-dir /workspace --out /result \
+            --policy auto --publish "$PUBLISH" \
+            --replicas "$REPLICAS" --adjudicate-replicas "$ADJUDICATE_REPLICAS" \
+            --concurrency "$CONCURRENCY" --deadline "$DEADLINE" \
+            --discovery-mode "$DISCOVERY_MODE" --json || review_exit=$?
+          case "$review_exit" in
+            0|1|2|3) ;;
+            *) review_exit=3 ;;
+          esac
+          printf 'exit_code=%s\n' "$review_exit" >> "$GITHUB_OUTPUT"
+          exit "$review_exit"
+
+      - name: Make retained artifacts readable by the runner
+        if: always()
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/result" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/result"
+          fi
+
+      - name: Render canonical review summary
+        if: always()
+        env:
+          REVIEW_EXIT_CODE: ${{ steps.review.outputs.exit_code }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["GITHUB_WORKSPACE"]) / "result"
+          lines = ["## rvw review", ""]
+          contract_failed = False
+          code = os.environ.get("REVIEW_EXIT_CODE") or "unavailable"
+          try:
+              process = json.loads((root / "process.json").read_text())
+              expected_status = {0: "pass", 1: "block", 2: "invalid", 3: "infra_failed"}
+              if (type(process["schema_version"]) is not int or process["schema_version"] != 1
+                      or type(process["exit_code"]) is not int
+                      or process["exit_code"] != int(code)
+                      or process["status"] != expected_status[int(code)]):
+                  raise ValueError("process contract disagrees with observed exit")
+              lines.append(f"Status: **{process['status']}** (exit {process['exit_code']}).")
+              failure = process.get("failure")
+              if failure:
+                  lines.append(f"Reason: `{failure['code']}` — {failure['detail']}")
+          except (OSError, ValueError, KeyError, TypeError):
+              contract_failed = True
+              lines.append(f"Infrastructure failure: process.json unavailable or invalid (exit {code}).")
+          try:
+              summary = json.loads((root / "summary.json").read_text())
+              if (type(summary["schema_version"]) is not int or summary["schema_version"] != 1
+                      or not isinstance(summary["markdown"], str)):
+                  raise ValueError("summary contract is invalid")
+              lines.extend(["", summary["markdown"]])
+          except (OSError, ValueError, KeyError, TypeError):
+              contract_failed = True
+              lines.append("Infrastructure failure: summary.json unavailable or invalid; see retained diagnostics.")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write("\n".join(lines) + "\n")
+          raise SystemExit(3 if contract_failed else 0)
+          PY
+
+      - name: Retain review artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rvw-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: result/
+          if-no-files-found: warn
+          include-hidden-files: true

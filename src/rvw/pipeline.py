@@ -105,6 +105,7 @@ async def execute_pipeline(
     on_warning: MessageSink | None = None,
     rule_source_warning: str | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
+    run_handle: RunHandle | None = None,
 ) -> PipelineArtifacts | None:
     """Execute and persist DISCOVER, MERGE, ADJUDICATE, and REPORT."""
 
@@ -123,7 +124,7 @@ async def execute_pipeline(
                 "missing-checkout", "agentic discovery requires a provisioned checkout"
             )
         verify_checkout(repo_dir, base_sha=target.base_sha, head_sha=target.head_sha)
-    run = RunStore(out_root).create(target)
+    run = run_handle or RunStore(out_root).create(target)
     if on_warning is not None and (warning := stale_install_warning()) is not None:
         on_warning(warning)
     run.save_target(target)

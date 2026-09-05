@@ -171,10 +171,10 @@ def _pr_base_sha(number: int, repo: str, cwd: Path) -> str:
 
 def _resolve_pr(number: int, cwd: Path, repo_from_url: str | None = None) -> ResolvedTarget:
     repo = repo_from_url or _repo_name(cwd)
-    raw = _run(["gh", "pr", "view", str(number), "--json", _PR_FIELDS], cwd)
+    raw = _run(["gh", "pr", "view", str(number), "--repo", repo, "--json", _PR_FIELDS], cwd)
     metadata = _PrView.model_validate_json(raw)
-    diff = _run(["gh", "pr", "diff", str(number)], cwd)
-    names = _run(["gh", "pr", "diff", str(number), "--name-only"], cwd)
+    diff = _run(["gh", "pr", "diff", str(number), "--repo", repo], cwd)
+    names = _run(["gh", "pr", "diff", str(number), "--repo", repo, "--name-only"], cwd)
     return ResolvedTarget(
         kind="pr",
         repo=repo,

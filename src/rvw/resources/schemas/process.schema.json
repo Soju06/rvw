@@ -1,0 +1,359 @@
+{
+  "$defs": {
+    "ArtifactEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "size_bytes"
+      ],
+      "title": "ArtifactEntry",
+      "type": "object"
+    },
+    "EffectivePolicySource": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "anyOf": [
+            {
+              "enum": [
+                "explicit",
+                "repository",
+                "external",
+                "package"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "title": "EffectivePolicySource",
+      "type": "object"
+    },
+    "ProcessFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "detail"
+      ],
+      "title": "ProcessFailure",
+      "type": "object"
+    },
+    "ProcessTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repo"
+        },
+        "pr": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pr"
+        },
+        "base": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base"
+        },
+        "head": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Head"
+        }
+      },
+      "title": "ProcessTarget",
+      "type": "object"
+    },
+    "RuntimeSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "replicas": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Replicas",
+          "type": "integer"
+        },
+        "adjudicate_replicas": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Adjudicate Replicas",
+          "type": "integer"
+        },
+        "concurrency": {
+          "default": 8,
+          "minimum": 1,
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "deadline": {
+          "default": 600,
+          "maximum": 1800,
+          "minimum": 1,
+          "title": "Deadline",
+          "type": "integer"
+        },
+        "discovery_mode": {
+          "default": "agentic",
+          "enum": [
+            "agentic",
+            "inline"
+          ],
+          "title": "Discovery Mode",
+          "type": "string"
+        },
+        "publish": {
+          "default": "none",
+          "enum": [
+            "none",
+            "github-comment"
+          ],
+          "title": "Publish",
+          "type": "string"
+        },
+        "host_concurrency": {
+          "default": 12,
+          "minimum": 0,
+          "title": "Host Concurrency",
+          "type": "integer"
+        },
+        "sandbox": {
+          "default": "read-only",
+          "enum": [
+            "read-only",
+            "danger-full-access"
+          ],
+          "title": "Sandbox",
+          "type": "string"
+        }
+      },
+      "title": "RuntimeSettings",
+      "type": "object"
+    },
+    "SDKObservations": {
+      "additionalProperties": false,
+      "properties": {
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Code"
+        },
+        "signal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signal"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        }
+      },
+      "title": "SDKObservations",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "target": {
+      "$ref": "#/$defs/ProcessTarget"
+    },
+    "status": {
+      "default": "infra_failed",
+      "enum": [
+        "pass",
+        "block",
+        "invalid",
+        "infra_failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "exit_code": {
+      "default": 3,
+      "enum": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "title": "Exit Code",
+      "type": "integer"
+    },
+    "duration_ms": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Duration Ms",
+      "type": "integer"
+    },
+    "command": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Command",
+      "type": "array"
+    },
+    "effective_policy": {
+      "$ref": "#/$defs/EffectivePolicySource"
+    },
+    "lane_sources": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Lane Sources",
+      "type": "object"
+    },
+    "runtime": {
+      "$ref": "#/$defs/RuntimeSettings"
+    },
+    "failure": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProcessFailure"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactEntry"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "sdk_observations": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SDKObservations"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "run_id",
+    "command"
+  ],
+  "title": "ProcessResult",
+  "type": "object"
+}

@@ -26,7 +26,8 @@ def test_worker_validates_target_and_reads_process_result_artifacts() -> None:
     assert 'required(url, "repo")' in routes
     assert 'required(url, "target")' in routes
     assert "/^[0-9a-f]{7,40}$/" in contract
-    assert "`/workspace/result/${name}`" in contract
+    assert "artifactManifest" in routes
+    assert "artifactPath" in routes
     assert "CODEX_BASE_URL: `https://${proxyHost}/backend-api/codex`" in contract
     assert "RVW_CODEX_SANDBOX" not in contract
     assert "env RVW_CODEX_SANDBOX=read-only codex exec" in routes
@@ -35,7 +36,7 @@ def test_worker_validates_target_and_reads_process_result_artifacts() -> None:
 
 
 def test_cloud_codex_template_leaves_runtime_base_url_unconfigured() -> None:
-    template = (ROOT / "cloud/docker/codex-config.toml").read_text(encoding="utf-8")
+    template = (ROOT / "docker/codex-config.toml").read_text(encoding="utf-8")
 
     assert "base_url" not in template
 

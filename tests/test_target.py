@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -93,7 +94,7 @@ def test_resolve_commit_uses_parent_as_base(
     assert resolved.diff == "commit diff\n"
 
 
-def pr_responses(number: int) -> dict[Command, str | Exception]:
+def pr_responses(number: int, repo: str = "octo/widgets") -> dict[Command, str | Exception]:
     metadata = {
         "number": number,
         "title": "Fix widget race",
@@ -108,15 +109,16 @@ def pr_responses(number: int) -> dict[Command, str | Exception]:
             "pr",
             "view",
             str(number),
+            "--repo",
+            repo,
             "--json",
             "number,title,body,headRefOid,headRefName",
         ): json.dumps(metadata),
         # gh pr view --json does NOT expose baseRefOid (live-verified 2026-07-27);
         # the recorded base SHA comes from the REST pulls endpoint instead.
-        ("gh", "api", f"repos/octo/widgets/pulls/{number}", "--jq", ".base.sha"): "base123\n",
-        ("gh", "api", f"repos/acme/rockets/pulls/{number}", "--jq", ".base.sha"): "base123\n",
-        ("gh", "pr", "diff", str(number)): "pr diff\n",
-        ("gh", "pr", "diff", str(number), "--name-only"): "src/widget.py\n",
+        ("gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".base.sha"): "base123\n",
+        ("gh", "pr", "diff", str(number), "--repo", repo): "pr diff\n",
+        ("gh", "pr", "diff", str(number), "--repo", repo, "--name-only"): "src/widget.py\n",
     }
 
 
@@ -139,7 +141,7 @@ def test_resolve_pr_number_populates_pr_metadata(
 
 
 def test_resolve_pr_url_uses_repo_from_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    responses = pr_responses(17)
+    responses = pr_responses(17, "acme/rockets")
     del responses[("gh", "repo", "view", "--json", "nameWithOwner")]
     calls = install_fake_run(monkeypatch, responses)
 
@@ -169,3 +171,42 @@ def test_subprocess_failure_reports_failed_command(
 
     with pytest.raises(TargetResolutionError, match="gh repo view --json nameWithOwner"):
         resolve_target("uncommitted", cwd=tmp_path)
+
+
+def test_pr_url_binds_every_query_despite_unrelated_repository_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GH_REPO", "unrelated/checkout")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], cwd: Path) -> str:
+        assert cwd == tmp_path
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return json.dumps(
+                {
+                    "number": 17,
+                    "title": "Fixture",
+                    "body": "",
+                    "headRefOid": "head123",
+                    "headRefName": "fixture",
+                }
+            )
+        if cmd[:3] == ["gh", "pr", "diff"]:
+            return "fixture.py\n" if "--name-only" in cmd else "fixture diff\n"
+        if cmd[:2] == ["gh", "api"]:
+            return "base123\n"
+        pytest.fail(f"unexpected target query: {cmd}")
+
+    monkeypatch.setattr(target_module, "_run", fake_run)
+    resolved = resolve_target("https://github.com/acme/rockets/pull/17", cwd=tmp_path)
+
+    assert resolved.repo == "acme/rockets"
+    assert len(calls) == 4
+    for cmd in calls:
+        if cmd[:2] == ["gh", "api"]:
+            assert cmd[2] == "repos/acme/rockets/pulls/17"
+        else:
+            assert "--repo" in cmd, f"PR query is not bound to its repository: {cmd}"
+            assert cmd[cmd.index("--repo") + 1] == "acme/rockets"
+    assert os.environ["GH_REPO"] == "unrelated/checkout"

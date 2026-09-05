@@ -95,3 +95,9 @@ If Codex exits 0 and writes conforming JSON but its run log is truncated before 
 ## Historical deltas
 
 ADR-004 said arbitrary out-of-enum IDs would be coerced to `<lane>/other`. The current implementation instead prevents them through the generated schema and rejects any value outside the declared set plus `/other`; it does not rewrite an arbitrary returned string. ADR-004 also described `Finding` as the runtime contract, while the implementation now has the narrower `RuntimeFinding`/`RuntimeLaneOutput` wire types and enriches them downstream.
+
+## Process boundary evidence (2026-09-05)
+
+At the v0.11.5 (`613201f`) audit baseline, Python produced runtime logs and strict stage artifacts but no top-level process envelope, process log, or environment diagnostic. App generated `{exitCode, signal, durationMs, command}` directly into R2, and `signal` was always null (`cloud/worker/src/review-job.ts:632–706`, `cloud/worker/src/review-job-observability.ts:12–44`, baseline lines; `/tmp/rvw-surfaces-analysis.md`). A Python-owned version-1 process envelope now separates policy/invalid/infra classification from `run.json` engine completeness and `outcome.json` adjudication. Initialization is deliberately failure-shaped until execution finalizes, preserving truthful evidence on interruption.
+
+The audit corrected an isolation assumption: host defaults read-only, while both container commands select danger-full-access. The root Actions container uses read-only mounts; the App-generated script had no corresponding mount enforcement (`Dockerfile:25`, `cloud/worker/src/review-job.ts:118–128`, `cloud/worker/src/sandbox-auth.ts:115`, baseline lines). Configuration diagnostics now record the effective selector. Historical Cloudflare read-only probe success remains measurement evidence, not a claim about the production command's selected mode.

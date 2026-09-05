@@ -1,3 +1,5 @@
+import {artifactManifest} from "./artifacts";
+
 export type JobState =
   | "queued"
   | "provisioning"
@@ -62,64 +64,12 @@ export interface ReviewResultMapping {
   reason: string;
 }
 
-interface AutoPayload {
-  verdict: "PASS" | "BLOCK";
+export interface ProcessResult {
+  schema_version: 1;
   run_id: string;
-}
-
-function parseAutoPayload(output: string): AutoPayload | null {
-  try {
-    const value: unknown = JSON.parse(output);
-    if (typeof value !== "object" || value === null) return null;
-    const record = value as Record<string, unknown>;
-    if (
-      (record.verdict !== "PASS" && record.verdict !== "BLOCK") ||
-      typeof record.run_id !== "string" ||
-      record.run_id.length === 0
-    ) {
-      return null;
-    }
-    return {verdict: record.verdict, run_id: record.run_id};
-  } catch {
-    return null;
-  }
-}
-
-export function checkConclusionForResult(
-  exitCode: number | null,
-  output: string,
-): ReviewResultMapping {
-  const payload = parseAutoPayload(output);
-  if (exitCode === 0 && payload?.verdict === "PASS") {
-    return {
-      terminalState: "completed",
-      conclusion: "success",
-      reason: "rvw auto passed",
-    };
-  }
-  if (exitCode === 1 && payload?.verdict === "BLOCK") {
-    return {
-      terminalState: "completed",
-      conclusion: "failure",
-      reason: "rvw auto found a blocking result",
-    };
-  }
-  return {
-    terminalState: "failed",
-    conclusion: "neutral",
-    reason: payload
-      ? `rvw auto exit ${exitCode === null ? "unknown" : exitCode} did not match ${payload.verdict}`
-      : "rvw auto result was missing or unparseable",
-  };
-}
-
-export interface ArtifactSummary {
-  lanesDispatched: number;
-  lanesValid: number;
-  uncovered: number;
-  findings: number;
-  findingsBySeverity: Record<string, number>;
-  verdicts: Record<string, number>;
+  status: "pass" | "block" | "invalid" | "infra_failed";
+  exit_code: number;
+  failure: {code: string; detail: string} | null;
 }
 
 function recordValue(value: unknown, label: string): Record<string, unknown> {
@@ -129,67 +79,132 @@ function recordValue(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function nonNegativeInteger(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new Error(`${label} artifact field must be a non-negative integer`);
+function fields(value: Record<string, unknown>, names: string[], label: string): void {
+  if (Object.keys(value).some((key) => !names.includes(key)) || names.some((key) => !(key in value))) {
+    throw new Error(`${label} artifact fields are missing or unsupported`);
   }
-  return value;
 }
 
-export function summarizeArtifacts(discoverJson: string, outcomeJson: string): ArtifactSummary {
-  let discoverValue: unknown;
-  let outcomeValue: unknown;
+function integer(value: unknown, minimum = 0): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum;
+}
+
+function nullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+export function parseProcessResult(output: string): ProcessResult {
+  const value = recordValue(JSON.parse(output), "process");
+  fields(value, ["schema_version", "run_id", "target", "status", "exit_code", "duration_ms",
+    "command", "effective_policy", "lane_sources", "runtime", "failure", "artifacts", "sdk_observations"], "process");
+  if (value.schema_version !== 1 || typeof value.run_id !== "string" || !value.run_id ||
+      !["pass", "block", "invalid", "infra_failed"].includes(value.status as string) ||
+      !integer(value.duration_ms) || !Array.isArray(value.command) ||
+      value.command.some((part) => typeof part !== "string")) {
+    throw new Error("process artifact has an unsupported schema or status");
+  }
+  const target = recordValue(value.target, "process target");
+  fields(target, ["repo", "pr", "base", "head"], "process target");
+  if (![target.repo, target.base, target.head].every(nullableString) ||
+      !(target.pr === null || integer(target.pr, 1))) throw new Error("process target is invalid");
+  const policy = recordValue(value.effective_policy, "process policy");
+  fields(policy, ["source", "path"], "process policy");
+  if (![null, "explicit", "repository", "external", "package"].includes(policy.source as string | null) ||
+      !nullableString(policy.path)) throw new Error("process policy is invalid");
+  if (Object.values(recordValue(value.lane_sources, "lane sources")).some((count) => !integer(count))) {
+    throw new Error("process lane sources are invalid");
+  }
+  const runtime = recordValue(value.runtime, "process runtime");
+  fields(runtime, ["replicas", "adjudicate_replicas", "concurrency", "deadline", "discovery_mode",
+    "publish", "host_concurrency", "sandbox"], "process runtime");
+  if (["replicas", "adjudicate_replicas", "concurrency", "deadline"].some((key) => !integer(runtime[key], 1)) ||
+      Number(runtime.deadline) > 1800 || !integer(runtime.host_concurrency) ||
+      !["agentic", "inline"].includes(runtime.discovery_mode as string) ||
+      !["none", "github-comment"].includes(runtime.publish as string) ||
+      !["read-only", "danger-full-access"].includes(runtime.sandbox as string)) {
+    throw new Error("process runtime settings are invalid");
+  }
+  artifactManifest(output);
+  if (value.sdk_observations !== null) {
+    const observed = recordValue(value.sdk_observations, "SDK observations");
+    fields(observed, ["exit_code", "signal", "duration_ms", "command"], "SDK observations");
+    if (!(observed.exit_code === null || (typeof observed.exit_code === "number" && Number.isSafeInteger(observed.exit_code))) ||
+        !(observed.duration_ms === null || integer(observed.duration_ms)) ||
+        !nullableString(observed.signal) || !nullableString(observed.command)) throw new Error("SDK observations are invalid");
+  }
+  const status = value.status as ProcessResult["status"];
+  const exitCodes = {pass: 0, block: 1, invalid: 2, infra_failed: 3};
+  if (value.exit_code !== exitCodes[status]) throw new Error("process status and exit code disagree");
+  let failure: ProcessResult["failure"] = null;
+  if (value.failure !== null) {
+    const reason = recordValue(value.failure, "process failure");
+    fields(reason, ["code", "detail"], "process failure");
+    if (typeof reason.code !== "string" || !reason.code || typeof reason.detail !== "string" || !reason.detail) {
+      throw new Error("process failure fields must be non-empty strings");
+    }
+    failure = {code: reason.code, detail: reason.detail};
+  }
+  if (["invalid", "infra_failed"].includes(status) !== (failure !== null)) {
+    throw new Error("process status and failure disagree");
+  }
+  return {schema_version: 1, run_id: value.run_id, status, exit_code: value.exit_code, failure};
+}
+
+export function checkConclusionForResult(
+  exitCode: number | null,
+  output: string,
+): ReviewResultMapping {
   try {
-    discoverValue = JSON.parse(discoverJson);
-    outcomeValue = JSON.parse(outcomeJson);
+    const payload = parseProcessResult(output);
+    if (exitCode !== null && exitCode !== payload.exit_code) {
+      throw new Error(`SDK exit ${exitCode} disagrees with process exit ${payload.exit_code}`);
+    }
+    if (payload.status === "pass") {
+      return {terminalState: "completed", conclusion: "success", reason: "rvw run passed"};
+    }
+    if (payload.status === "block") {
+      return {terminalState: "completed", conclusion: "failure", reason: "rvw run found a blocking result"};
+    }
+    return {terminalState: "failed", conclusion: "neutral", reason: payload.failure === null
+      ? `rvw run ${payload.status}` : `${payload.failure.code}: ${payload.failure.detail}`};
   } catch (error) {
-    throw new Error("review artifact JSON is unparseable", {cause: error});
+    return {terminalState: "failed", conclusion: "neutral", reason:
+      `rvw process result was missing or invalid: ${error instanceof Error ? error.message : String(error)}`};
   }
-  const discover = recordValue(discoverValue, "discover");
-  const outcome = recordValue(outcomeValue, "outcome");
-  if (!Array.isArray(discover.coverage) || !Array.isArray(discover.findings)) {
-    throw new Error("discover artifact must contain coverage and findings arrays");
-  }
-  const verdictMap = recordValue(outcome.verdicts, "outcome verdicts");
+}
 
-  let lanesDispatched = 0;
-  let lanesValid = 0;
-  let coverageFindings = 0;
-  let uncovered = 0;
-  for (const itemValue of discover.coverage) {
-    const item = recordValue(itemValue, "coverage");
-    lanesDispatched += nonNegativeInteger(item.dispatched, "coverage dispatched");
-    lanesValid += nonNegativeInteger(item.valid, "coverage valid");
-    coverageFindings += nonNegativeInteger(item.findings, "coverage findings");
-    if (!Array.isArray(item.uncovered)) {
-      throw new Error("coverage artifact uncovered field must be an array");
+export interface ArtifactSummary {
+  schema_version: 1;
+  lanes: {dispatched: number; valid: number; uncovered: number};
+  markdown: string;
+}
+
+/** Consume Python summary facts; no discovery/adjudication recount lives here. */
+export function parseArtifactSummary(output: string): ArtifactSummary {
+  const value = recordValue(JSON.parse(output), "summary");
+  fields(value, ["schema_version", "lanes", "findings", "verdicts", "blockers", "markdown"], "summary");
+  for (const [key, names] of [["findings", ["blocker", "warning", "suggestion"]],
+    ["verdicts", ["CONFIRMED", "REJECTED", "UNCERTAIN"]]] as const) {
+    const counts = recordValue(value[key], `summary ${key}`);
+    fields(counts, [...names], `summary ${key}`);
+    if (Object.values(counts).some((count) => !integer(count))) throw new Error(`summary ${key} counts are invalid`);
+  }
+  if (!Array.isArray(value.blockers) || value.blockers.some((item) => typeof item !== "string")) {
+    throw new Error("summary blockers must be strings");
+  }
+  const lanes = recordValue(value.lanes, "summary lanes");
+  fields(lanes, ["dispatched", "valid", "uncovered"], "summary lanes");
+  if (value.schema_version !== 1 || typeof value.markdown !== "string") {
+    throw new Error("summary artifact has an unsupported schema");
+  }
+  for (const field of ["dispatched", "valid", "uncovered"]) {
+    if (typeof lanes[field] !== "number" || !Number.isSafeInteger(lanes[field]) || lanes[field] < 0) {
+      throw new Error(`summary lanes ${field} must be a non-negative integer`);
     }
-    uncovered += item.uncovered.length;
   }
-
-  const findingsBySeverity: Record<string, number> = {};
-  for (const findingValue of discover.findings) {
-    const finding = recordValue(findingValue, "finding");
-    if (typeof finding.severity !== "string" || finding.severity.length === 0) {
-      throw new Error("finding artifact severity must be a string");
-    }
-    findingsBySeverity[finding.severity] = (findingsBySeverity[finding.severity] ?? 0) + 1;
-  }
-
-  const verdicts: Record<string, number> = {};
-  for (const verdict of Object.values(verdictMap)) {
-    if (typeof verdict !== "string" || verdict.length === 0) {
-      throw new Error("outcome artifact verdict must be a string");
-    }
-    verdicts[verdict] = (verdicts[verdict] ?? 0) + 1;
-  }
-
-  return {
-    lanesDispatched,
-    lanesValid,
-    uncovered,
-    findings: Math.max(discover.findings.length, coverageFindings),
-    findingsBySeverity,
-    verdicts,
-  };
+  const dispatched = lanes.dispatched as number;
+  const valid = lanes.valid as number;
+  const uncovered = lanes.uncovered as number;
+  if (valid === 0 || valid > dispatched) throw new Error("review coverage has no valid lanes or exceeds dispatched lanes");
+  return {schema_version: 1, lanes: {dispatched, valid, uncovered}, markdown: value.markdown};
 }

@@ -11,7 +11,7 @@ import rvw.cli as cli_module
 import rvw.publish as publish_module
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import apply_diff_budget
-from rvw.discover import DiscoverResult, EnrichedFinding
+from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage, RunCoverage
 from rvw.merge import merge
 from rvw.sample import SampleReport, SampleSiteVariance
 from rvw.schema import Tier, Verdict
@@ -20,6 +20,13 @@ from rvw.target import ResolvedTarget
 
 runner = CliRunner()
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def offline_run_resolution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _: target())
+    monkeypatch.setattr(cli_module, "provision_checkout", lambda **_: Path.cwd())
+    monkeypatch.setattr(cli_module, "DEFAULT_RUN_ROOT", tmp_path / "contract")
 
 
 def policy_file(tmp_path: Path, publish_state: str = "comment") -> Path:
@@ -80,7 +87,27 @@ def fixture_artifacts(tmp_path: Path, *, adjudicated: bool) -> cli_module._Pipel
     return cli_module._PipelineArtifacts(
         run=run,
         target=target(),
-        discovered=DiscoverResult(lane_results={}, findings=findings, coverage=[]),
+        discovered=DiscoverResult(
+            lane_results={},
+            findings=findings,
+            coverage=[
+                LaneCoverage(
+                    lane_id="fixture",
+                    dispatched=1,
+                    valid=1,
+                    findings=len(findings),
+                    runs=[
+                        RunCoverage(
+                            replica=1,
+                            chunk=1,
+                            valid=True,
+                            findings=len(findings),
+                            invalid_reason=None,
+                        )
+                    ],
+                )
+            ],
+        ),
         merged=merged,
         outcome=outcome,
         report_md="# report\n",
@@ -124,16 +151,11 @@ def test_auto_json_verdict_and_exit_mapping(
     )
     assert result.exit_code == exit_code, result.stdout
     payload = json.loads(result.stdout)
-    assert payload["verdict"] == verdict
-    assert set(payload) == {
-        "run_id",
-        "verdict",
-        "blocking",
-        "dropped",
-        "promoted",
-        "considered",
-        "report_path",
-    }
+    assert payload["status"] == verdict.lower()
+    assert payload["exit_code"] == exit_code
+    assert payload["schema_version"] == 1
+    assert payload["target"]["repo"] == "owner/repo"
+    assert payload["effective_policy"]["source"] == "explicit"
 
 
 def test_auto_policy_none_skips_publish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

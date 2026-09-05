@@ -76,3 +76,9 @@ Stack publication closes the stale-anchor gap only for its composed command:
 all captured base/head refs and SHAs and every direct edge are checked before
 `--execute`, and the review payload names the captured tip commit. Standalone
 ordinary `publish` retains the historical behavior described above.
+
+## Shared result evidence (2026-09-05)
+
+The `/tmp/rvw-surfaces-analysis.md` audit at v0.11.5 (`613201f`) found three incompatible artifact lifetimes: host retained stage directories; Actions deleted `/tmp` with its container and uploaded nothing; App copied four stage names by parsing stdout and exported seven hardcoded names. `target.json`, `run.json`, and runtime subtrees were omitted (`.github/workflows/rvw-review.yml:62–75`, `cloud/worker/src/review-job.ts:130–150,709–730`, `cloud/worker/src/artifacts.ts:1–17`, baseline lines). The explicit artifact directory and recursive file manifest remove the stdout/copy dependency and retain partial stages and runtime evidence.
+
+App also independently counted findings/coverage using a maximum of two totals and did not reject zero VALID coverage (`cloud/worker/src/review-job-contract.ts:116–195`, `cloud/worker/src/review-job.ts:178–204`, baseline lines). Python `summary.json` now supplies lane counts, uncovered lane-hunks, merged finding severity counts, adjudication verdict counts, policy-blocking identifiers, and common Markdown for both adapters. Empty counts require interpretation alongside `process.json`; they cannot certify successful execution. Manifest self-size is stabilized before final bytes are written.
