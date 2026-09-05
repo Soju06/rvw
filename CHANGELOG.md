@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.0](https://github.com/Soju06/rvw/compare/v0.11.5...v0.12.0) (2026-09-05)
+
+
+### Features
+
+* **lanes:** scope review rules and add scope lint ([#69](https://github.com/Soju06/rvw/issues/69)) ([418dd04](https://github.com/Soju06/rvw/commit/418dd042ac204db50b408fd79ce59f2169b53466))
+* unify policy-gated review execution across CLI Actions and App ([#70](https://github.com/Soju06/rvw/issues/70)) ([b06b7ca](https://github.com/Soju06/rvw/commit/b06b7ca0d40b7931f0aa888a32a2242cf46059fc))
+
 ## [0.11.5](https://github.com/Soju06/rvw/compare/v0.11.4...v0.11.5) (2026-09-04)
 
 
