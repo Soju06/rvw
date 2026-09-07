@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/Soju06/rvw/compare/v0.13.0...v0.14.0) (2026-09-07)
+
+
+### Features
+
+* presentation config, i18n catalogs, and a human publication view ([#79](https://github.com/Soju06/rvw/issues/79)) ([836f592](https://github.com/Soju06/rvw/commit/836f592925f34ad1acbb374cf0388b14254061b4))
+
 ## [0.13.0](https://github.com/Soju06/rvw/compare/v0.12.0...v0.13.0) (2026-09-07)
 
 
