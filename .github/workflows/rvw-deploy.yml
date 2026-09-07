@@ -184,8 +184,32 @@ jobs:
           if [ -z "$worker_name" ]; then worker_name="rvw-cloud-${RVW_ENVIRONMENT}"; fi
           printf 'RVW_WORKER_NAME=%s\n' "$worker_name" >> "$GITHUB_ENV"
           printf 'RVW_VERSION=%s\n' "${RVW_REF#v}" >> "$GITHUB_ENV"
+          # Cloudflare container applications are account-scoped by name and
+          # bound to one Durable Object namespace, so wrangler.jsonc declares a
+          # distinct application per environment (env.<name>.containers[].name is
+          # rvw-sandbox-<name>). Resolve the SELECTED environment's entry and fail
+          # closed instead of falling back to the top-level dev entry: a shared
+          # name made the first prod deploy fail while spike held it (2026-09-07).
+          container_name=$(python3 - "$RVW_ENVIRONMENT" <<'PY'
+          import json
+          import re
+          import sys
+
+          environment = sys.argv[1]
+          text = open("wrangler.jsonc", encoding="utf-8").read()
+          config = json.loads(re.sub(r"//[^\n]*", "", text))
+          containers = config.get("env", {}).get(environment, {}).get("containers")
+          if not containers:
+              sys.exit(f"wrangler.jsonc env.{environment} declares no containers")
+          name = containers[0].get("name", "")
+          if not name.endswith(f"-{environment}"):
+              sys.exit(f"container application {name!r} is not scoped to environment {environment!r}")
+          print(name)
+          PY
+          )
+          printf 'RVW_CONTAINER_NAME=%s\n' "$container_name" >> "$GITHUB_ENV"
           npx wrangler containers list --json 2>/dev/null \
-            | jq -r '.. | objects | .image_digest? // .imageDigest? // empty' 2>/dev/null \
+            | jq -r --arg name "$container_name" '.. | objects | select(.name? == $name) | .image_digest? // .imageDigest? // empty' 2>/dev/null \
             | grep -E '^sha256:[0-9a-f]{64}$' | head -n 1 > /tmp/rvw-previous-digest || true
           npx wrangler deploy --env "$RVW_ENVIRONMENT" \
             --name "$worker_name" \
@@ -217,10 +241,10 @@ jobs:
           if [ -s /tmp/rvw-expected-digest ]; then expected_digest=$(cat /tmp/rvw-expected-digest); fi
           previous_digest=""
           if [ -s /tmp/rvw-previous-digest ]; then previous_digest=$(cat /tmp/rvw-previous-digest); fi
-          # Container application name is declared in wrangler.jsonc
-          # (containers[].name, same across envs); read it instead of assuming.
-          container_name=$(python3 -c 'import json,re,sys; s=re.sub(r"//[^\n]*","",open("wrangler.jsonc").read()); d=json.loads(s); e=sys.argv[1]; c=(d.get("env",{}).get(e,{}).get("containers") or d.get("containers")); print(c[0]["name"])' "$RVW_ENVIRONMENT")
-          test -n "$container_name"
+          # The container application name differs per environment
+          # (rvw-sandbox-<environment>); the Deploy Worker step resolved the
+          # selected environment's entry from wrangler.jsonc and exported it.
+          container_name="${RVW_CONTAINER_NAME:?container application name was not resolved}"
           worker_url="${RVW_WORKER_URL:-}"
           if [ -z "$worker_url" ]; then worker_url="https://${RVW_WORKER_NAME}.workers.dev"; fi
           while [ "$(date +%s)" -lt "$deadline" ]; do

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -64,6 +66,83 @@ def test_wrangler_environments_have_no_deployer_identity_defaults() -> None:
     for environment in ("spike", "prod"):
         assert "GITHUB_APP_ID" not in config["env"][environment]["vars"]
         assert "CODEX_PROXY_HOST" not in config["env"][environment]["vars"]
+
+
+def test_wrangler_container_application_names_are_environment_scoped() -> None:
+    config = json.loads((ROOT / "cloud/wrangler.jsonc").read_text(encoding="utf-8"))
+
+    # Cloudflare container applications are account-scoped by name and bound to
+    # one Durable Object namespace, so spike and prod can only coexist in one
+    # account when every environment declares its own application name.
+    containers_by_environment = {config["vars"]["RVW_ENV"]: config["containers"]}
+    for environment in ("spike", "prod"):
+        containers_by_environment[environment] = config["env"][environment]["containers"]
+
+    names: list[str] = []
+    for environment, containers in containers_by_environment.items():
+        assert len(containers) == 1
+        container = containers[0]
+        assert container["class_name"] == "RvwSandbox"
+        assert container["name"] == f"rvw-sandbox-{environment}"
+        assert container["name"].endswith(f"-{environment}")
+        names.append(container["name"])
+    assert len(set(names)) == len(names) == 3
+
+
+def _deploy_workflow_container_resolver() -> str:
+    workflow = cast(
+        dict[str, Any],
+        yaml.safe_load((ROOT / ".github/workflows/rvw-deploy.yml").read_text(encoding="utf-8")),
+    )
+    steps = workflow["jobs"]["deploy"]["steps"]
+    deploy_step = next(step for step in steps if step.get("name") == "Deploy Worker")
+    script = cast(str, deploy_step["run"])
+    start_marker = "<<'PY'\n"
+    start = script.index(start_marker) + len(start_marker)
+    end = script.index("\nPY\n", start)
+    return script[start:end]
+
+
+def test_reusable_deploy_workflow_resolves_selected_environment_container() -> None:
+    text = (ROOT / ".github/workflows/rvw-deploy.yml").read_text(encoding="utf-8")
+    assert "same across envs" not in text
+    assert 'or d.get("containers")' not in text
+    assert "RVW_CONTAINER_NAME" in text
+
+    # The rollout wait consumes the name resolved before deploy; it must not
+    # re-derive or hardcode one.
+    workflow = cast(dict[str, Any], yaml.safe_load(text))
+    steps = workflow["jobs"]["deploy"]["steps"]
+    wait_step = next(step for step in steps if step["name"].startswith("Wait for container"))
+    wait_script = cast(str, wait_step["run"])
+    assert "${RVW_CONTAINER_NAME:?" in wait_script
+    assert "python3" not in wait_script
+    assert 'jq -r --arg name "$container_name"' in wait_script
+    assert "rvw-sandbox" not in wait_script.replace("(rvw-sandbox-<environment>)", "")
+
+    resolver = _deploy_workflow_container_resolver()
+    for environment in ("spike", "prod"):
+        result = subprocess.run(
+            [sys.executable, "-", environment],
+            check=True,
+            capture_output=True,
+            cwd=ROOT / "cloud",
+            input=resolver,
+            text=True,
+        )
+        assert result.stdout.strip() == f"rvw-sandbox-{environment}"
+
+    # The top-level entry is local development only; the workflow must refuse
+    # to fall back to it for an environment that declares no containers.
+    missing = subprocess.run(
+        [sys.executable, "-", "dev"],
+        capture_output=True,
+        cwd=ROOT / "cloud",
+        input=resolver,
+        text=True,
+    )
+    assert missing.returncode != 0
+    assert "declares no containers" in missing.stderr
 
 
 def test_cloud_runbook_treats_app_manifest_as_deployer_template() -> None:
