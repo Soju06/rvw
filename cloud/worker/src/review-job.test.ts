@@ -1,11 +1,15 @@
 import {processFixture, summaryFixture} from "./review-contract-fixtures";
+import type {PresentationConfig} from "./presentation";
+import type {UpdateCheckRunInput} from "./github-app";
 import type {Process} from "@cloudflare/sandbox";
 import {beforeEach, describe, expect, it, vi} from "vitest";
 
 const mocks = vi.hoisted(() => ({
   sandboxFor: vi.fn(), configureOutbound: vi.fn(),
   getInstallationToken: vi.fn(async () => "installation-placeholder"),
-  clearInstallationToken: vi.fn(), updateCheckRun: vi.fn(async (_token: string, _request: {summary: string}) => {}),
+  getPresentationConfig: vi.fn(async (): Promise<{presentation: PresentationConfig; failure?: string}> => ({presentation: {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko" as const, footer: null}, failure: undefined as string | undefined})),
+  createCheckRun: vi.fn(async () => ({id: 42})),
+  clearInstallationToken: vi.fn(), updateCheckRun: vi.fn(async (_token: string, _request: UpdateCheckRunInput) => {}),
 }));
 vi.mock("cloudflare:workers", () => ({DurableObject: class {
   constructor(protected ctx: unknown, protected env: unknown) {}
@@ -18,7 +22,7 @@ vi.mock("./sandbox", () => ({
   readTextFile: async (sandbox: {readFile(path: string): Promise<{content: string}>}, path: string) =>
     (await sandbox.readFile(path)).content,
 }));
-vi.mock("./github-app", () => ({...mocks, createCheckRun: vi.fn(async () => ({id: 42}))}));
+vi.mock("./github-app", async (importOriginal) => ({...await importOriginal<typeof import("./github-app")>(), ...mocks}));
 
 import {RvwReviewJob} from "./review-job";
 import {idempotencyKey, type ReviewJobMessage} from "./webhook";
@@ -209,4 +213,106 @@ it("reports a manifest size mismatch and keeps the Check neutral", async () => {
   await test.job.alarm();
   expect(test.record()).toMatchObject({conclusion: "neutral", artifactContractInvalid: true});
   expect(test.record().reason).toContain("manifest was invalid or inconsistent");
+});
+
+it("resolves bootstrap config before creating a check and allocating a sandbox", async () => {
+  const test = setup("provisioning");
+  delete test.record().checkRunId;
+  delete test.record().sandboxId;
+  delete test.record().processId;
+  await expect(test.job.start(message)).rejects.toThrow("process failed to start");
+  expect(mocks.getPresentationConfig).toHaveBeenCalledWith("installation-placeholder", {
+    owner: message.owner, repo: message.repo, baseSha: message.baseSha,
+  });
+  expect(mocks.getPresentationConfig.mock.invocationCallOrder[0]).toBeLessThan(mocks.createCheckRun.mock.invocationCallOrder[0]);
+  expect(mocks.createCheckRun.mock.invocationCallOrder[0]).toBeLessThan(mocks.sandboxFor.mock.invocationCallOrder[0]);
+  expect(mocks.createCheckRun).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({presentation: expect.objectContaining({short_name: "VOOY Review"})}));
+});
+it.each(["timeout", "superseded", "queue"])("uses localized human-only summary for %s", async (path) => {
+  const test = setup(path === "queue" ? "provisioning" : "running");
+  test.record().presentation = {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko", footer: null};
+  if (path === "timeout") await test.job.alarm();
+  else if (path === "superseded") await test.job.supersede(message.jobId, "superseded by private-job");
+  else await test.job.failStart(message, "Queue retries exhausted: stderr private-job");
+  const output = mocks.updateCheckRun.mock.calls[0][1];
+  expect(output.name).toBe("VOOY Review");
+  expect(output.title).toBe("VOOY Review System · 검토 미완료");
+  expect(output.summary).toMatch(/[가-힣]/);
+  expect(output.summary).not.toMatch(/private-job|stderr|Artifacts|\d/);
+  expect(output.text).toContain(message.jobId);
+});
+it.each([false, true])("renames the final check from Python and discloses bootstrap invalidity %s", async (bootstrapInvalid) => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.record().presentation = {display_name: "rvw", short_name: "rvw", locale: "en", footer: null};
+  if (bootstrapInvalid) test.record().presentationConfigFailure = "presentation_config_invalid";
+  const presentation = {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko", footer: null};
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 0} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({presentation})));
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture({presentation, markdown: "검토를 마쳤습니다. 수정이 필요한 문제 1건, 확인이 필요한 항목 2건."})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const output = mocks.updateCheckRun.mock.calls[0][1];
+  expect(output.name).toBe("VOOY Review");
+  expect(output.title).toBe("VOOY Review System · 검토 완료");
+  expect(output.summary).toBe("검토를 마쳤습니다. 수정이 필요한 문제 1건, 확인이 필요한 항목 2건." +
+    (bootstrapInvalid ? "\n\n저장소의 표시 설정이 올바르지 않습니다." : ""));
+  expect(output.text).toContain('"valid": 1');
+  expect(output.text).toContain(message.jobId);
+});
+it("reports invalid bootstrap configuration in the final neutral check", async () => {
+  const test = setup("running");
+  test.record().presentationConfigFailure = "presentation_config_invalid";
+  await test.job.alarm();
+  const output = mocks.updateCheckRun.mock.calls[0][1];
+  expect(output.summary).toBe("The repository presentation configuration is invalid.");
+  expect(output.text).toContain("presentation_config_invalid");
+});
+it("keeps Python branding when a missing summary makes the check neutral", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  const presentation = {display_name: "Resolved name", short_name: "Resolved", locale: "en", footer: null};
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 0} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({presentation})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  expect(mocks.updateCheckRun.mock.calls[0][1]).toMatchObject({name: "Resolved", conclusion: "neutral"});
+});
+it("persists a malformed bootstrap diagnostic before creating the default check", async () => {
+  const test = setup("provisioning");
+  delete test.record().checkRunId;
+  mocks.getPresentationConfig.mockResolvedValueOnce({presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null}, failure: "presentation_config_invalid"});
+  await expect(test.job.start(message)).rejects.toThrow("process failed to start");
+  expect(test.record().presentationConfigFailure).toBe("presentation_config_invalid");
+  expect(test.storage.put.mock.invocationCallOrder[0]).toBeLessThan(mocks.createCheckRun.mock.invocationCallOrder[0]);
+});
+it("keeps the localized outcome counts on language mismatch and records fallback facts in text", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  const presentation = {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko", footer: null};
+  const publication = {publication_failure: "publication_language_mismatch", language_fallback_used: false};
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 3} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({presentation, ...publication, status: "infra_failed", exit_code: 3,
+    failure: {code: "publication_language_mismatch", detail: "Untranslated prose must never reach this summary"}})));
+  const markdown = "검토를 마쳤습니다. 수정이 필요한 문제 1건, 확인이 필요한 항목 2건.";
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture({presentation, ...publication, markdown})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const output = mocks.updateCheckRun.mock.calls[0][1];
+  expect(output).toMatchObject({name: "VOOY Review", conclusion: "neutral", summary: markdown});
+  expect(output.text).toContain('"publication_failure": "publication_language_mismatch"');
+  expect(output.text).toContain('"language_fallback_used": false');
+  expect(output.summary).not.toContain("Untranslated prose");
+});
+it("retains process language-fallback facts when summary is missing", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 0} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({publication_failure: "publication_language_mismatch", language_fallback_used: true})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const output = mocks.updateCheckRun.mock.calls[0][1];
+  expect(output.conclusion).toBe("neutral");
+  expect(output.text).toContain('"publication_failure": "publication_language_mismatch"');
+  expect(output.text).toContain('"language_fallback_used": true');
 });

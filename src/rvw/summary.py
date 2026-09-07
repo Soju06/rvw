@@ -11,7 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rvw.adjudicate import AdjudicationAttempt, AdjudicationOutcome
 from rvw.discover import DiscoverResult
 from rvw.merge import MergeResult
+from rvw.presentation import PresentationConfig
 from rvw.provenance import BuildProvenance, current_build_provenance
+from rvw.publication import publication_summary
 from rvw.runtimes import RunDiagnostic
 
 
@@ -206,6 +208,9 @@ class SDKObservations(ContractModel):
 
 
 class ProcessResult(ContractModel):
+    publication_failure: str | None = Field(default=None, min_length=1)
+    language_fallback_used: bool = False
+    presentation: PresentationConfig = Field(default_factory=PresentationConfig)
     schema_version: Literal[1] = 1
     run_id: str
     target: ProcessTarget = Field(default_factory=ProcessTarget)
@@ -254,6 +259,9 @@ class VerdictCounts(ContractModel):
 
 
 class ExecutionSummary(ContractModel):
+    publication_failure: str | None = Field(default=None, min_length=1)
+    language_fallback_used: bool = False
+    presentation: PresentationConfig = Field(default_factory=PresentationConfig)
     schema_version: Literal[1] = 1
     lanes: SummaryLanes = Field(default_factory=SummaryLanes)
     findings: FindingCounts = Field(default_factory=FindingCounts)
@@ -267,6 +275,7 @@ def execution_summary(
     merged: MergeResult,
     outcome: AdjudicationOutcome | None,
     blockers: list[str],
+    presentation: PresentationConfig | None = None,
 ) -> ExecutionSummary:
     """Compute presentation facts once for every review adapter."""
     lanes = SummaryLanes(
@@ -278,13 +287,13 @@ def execution_summary(
     findings = FindingCounts(**{key: counts[key] for key in ("blocker", "warning", "suggestion")})
     votes = Counter(v.value for v in outcome.verdicts.values()) if outcome else Counter()
     verdicts = VerdictCounts(**{key: votes[key] for key in ("CONFIRMED", "REJECTED", "UNCERTAIN")})
-    markdown = (
-        f"Lanes: {lanes.valid}/{lanes.dispatched} valid; {lanes.uncovered} uncovered hunks.\n\n"
-        f"Findings: {findings.blocker} blocker, {findings.warning} warning, "
-        f"{findings.suggestion} suggestion.\n\n"
-        f"Verdicts: {verdicts.CONFIRMED} confirmed, {verdicts.REJECTED} rejected, "
-        f"{verdicts.UNCERTAIN} uncertain.\n\nPolicy blockers: {len(blockers)}."
-    )
+    presentation = presentation or PresentationConfig()
+    markdown = publication_summary(merged, outcome, discovered.coverage, presentation)
     return ExecutionSummary(
-        lanes=lanes, findings=findings, verdicts=verdicts, blockers=blockers, markdown=markdown
+        presentation=presentation or PresentationConfig(),
+        lanes=lanes,
+        findings=findings,
+        verdicts=verdicts,
+        blockers=blockers,
+        markdown=markdown,
     )

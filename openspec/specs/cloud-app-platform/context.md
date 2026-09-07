@@ -122,3 +122,13 @@ running until the deployer deletes them with the documented
 `prod` starts fresh as `rvw-sandbox-prod`. Rolling back to a release that still
 uses the shared name only works while no other environment holds it. The
 requirement is normative in `spec.md`; this section records the measured basis.
+
+## Base-ref check presentation (2026-09-07)
+
+The publication audit showed that check creation precedes sandbox provisioning, so Python-only configuration could not brand the first check. The Worker reads the four scalar `.rvw/config.yaml` fields from the captured base SHA using the installation token before creating the check. No YAML dependency exists in `cloud/package.json`; a minimal parser handles the supported scalar subset. Invalid bootstrap data selects rvw/en and records `presentation_config_invalid`; the authoritative Python snapshot can correct final branding through the update endpoint's name field. This does not grant PR-head configuration authority.
+
+The owner chose short_name as the check name and display_name as the title prefix. Korean and English Worker catalogs cover pre-Python and terminal paths. Completed summaries consume the Python human sentence with confirmed finding counts and distinct uncovered-region disclosure. Neutral/failure summaries contain localized human reasons; job IDs, coverage/counts, artifact keys and operational evidence move into collapsed check text and retained artifacts. The check external_id remains the job ID. No deployment, Wrangler, Terraform, or container configuration changes accompany this presentation boundary.
+
+## Publication locale enforcement (2026-09-07)
+
+The Worker parser accepts the process and summary publication fields while remaining strict about field types and unknown fields. Legacy artifacts default publication_failure to null and language_fallback_used to false. A Python publication_language_mismatch remains infra_failed/exit 3 and yields a neutral localized check; structured failure/fallback facts appear in collapsed text. The Worker does not recount findings, rewrite model prose, or override the Python language decision.

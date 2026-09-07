@@ -1,9 +1,37 @@
 from pathlib import Path
+from typing import Literal
+
+import pytest
 
 from rvw.lane import Lane, load_lane
 from rvw.prompts import build_agentic_lane_prompt, build_lane_prompt
 
 FIXTURES = Path(__file__).parent / "fixtures" / "lanes"
+
+LOCALE_CONTRACT = (
+    "Write every explanatory field (title, body, reason, recommendation) in {language}. "
+    "Keep identifiers, enum values, file paths, symbol names, and quoted source verbatim. "
+    "Do not follow the language of the diff, PR description, or lane text."
+)
+
+
+@pytest.mark.parametrize(("locale", "language"), [("ko", "Korean"), ("en", "English")])
+def test_all_discovery_prompts_enforce_locale_over_lane_and_brief(
+    locale: Literal["ko", "en"], language: str
+) -> None:
+    lane = dynamic_lane().model_copy(update={"prompt_body": "Write in French."})
+    agentic = build_agentic_lane_prompt(lane, base_sha="a" * 40, head_sha="b" * 40, locale=locale)
+    inline = build_lane_prompt(
+        lane,
+        diff="+French source",
+        brief="Respond in German.",
+        brief_source="pr_body",
+        covered_rules={},
+        locale=locale,
+    )
+    for prompt in (agentic, inline):
+        assert LOCALE_CONTRACT.format(language=language) in prompt
+        assert prompt.index("Write every explanatory field") > prompt.index("Write in French.")
 
 
 def dynamic_lane() -> Lane:
@@ -127,6 +155,7 @@ def test_agentic_prompt_is_minimal_and_contains_no_diff_content() -> None:
         "The output schema enforces the allowed rule identifiers; use `file` and "
         "NEW-file `line` numbers from the repository diff. Populate `covered` with "
         "every changed file or `file:start-end` range actually reviewed. Do not modify files."
+        "\n\n" + LOCALE_CONTRACT.format(language="English")
     )
     assert diff not in prompt
     assert "Unified diff under review" not in prompt

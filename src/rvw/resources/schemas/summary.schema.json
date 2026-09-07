@@ -25,6 +25,50 @@
       "title": "FindingCounts",
       "type": "object"
     },
+    "PresentationConfig": {
+      "additionalProperties": false,
+      "description": "Base-ref presentation snapshot, safe to retain in strict run contracts.",
+      "properties": {
+        "display_name": {
+          "default": "rvw",
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "short_name": {
+          "default": "rvw",
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Short Name",
+          "type": "string"
+        },
+        "locale": {
+          "default": "en",
+          "enum": [
+            "ko",
+            "en"
+          ],
+          "title": "Locale",
+          "type": "string"
+        },
+        "footer": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Footer"
+        }
+      },
+      "title": "PresentationConfig",
+      "type": "object"
+    },
     "SummaryLanes": {
       "additionalProperties": false,
       "properties": {
@@ -78,6 +122,27 @@
   },
   "additionalProperties": false,
   "properties": {
+    "publication_failure": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Publication Failure"
+    },
+    "language_fallback_used": {
+      "default": false,
+      "title": "Language Fallback Used",
+      "type": "boolean"
+    },
+    "presentation": {
+      "$ref": "#/$defs/PresentationConfig"
+    },
     "schema_version": {
       "const": 1,
       "default": 1,

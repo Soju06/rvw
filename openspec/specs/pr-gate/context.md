@@ -77,3 +77,11 @@ Before this capability, checkout ownership and anchor freshness were external co
 At v0.11.5 (`613201f`), the surface audit found default policy resolution at the captured base commit followed by `~/.hermes/review/policies/auto.yaml`, while only the App image installed that external fallback (`src/rvw/cli.py:1705–1708`, `src/rvw/policy.py:87–93`, `cloud/Dockerfile:46–47`, baseline lines; `/tmp/rvw-surfaces-analysis.md`). Actions hid the home directory behind tmpfs and had no fallback install. The common policy-gated command therefore ships the same values as `rvw:resources/policies/auto-default.yaml`, after explicit, base-commit, and deprecated external precedence. Malformed selected content remains an error; a missing registry no longer prevents a routine review.
 
 Policy execution remains separate from the human disposition gate. `run` evaluates the existing YAML promote/drop/block rules and records source provenance; `gate` continues its artifact-backed disposition, owner authorization, and inheritance behavior.
+
+## Human gate publication (2026-09-07)
+
+The publication audit identified run IDs, actors and inheritance tiers in gate prose. The localized publication view now retains PASS/BLOCK, actionable findings and human disposition reasons, while `gate-verdict.json` remains the complete anchored decision evidence. Display changes do not affect accepted/must-fix decisions, owner checks, inheritance matching, resumed-run protection, or bounded COMMENT publication. The saved presentation snapshot determines chrome for both initial and resumed publication.
+
+## Publication locale enforcement (2026-09-07)
+
+Gate publication shares the publication language boundary, including completed-run republishing. Disposition reasons remain human prose subject to the selected locale; actor/inheritance facts stay in structured verdict JSON. The locale check does not reopen completed verdicts, rerun adjudication or change owner authorization.

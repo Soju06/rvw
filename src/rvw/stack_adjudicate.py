@@ -7,13 +7,14 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
 from rvw.diffbudget import reviewed_diff
 from rvw.dispatch import DEFAULT_CONCURRENCY, DEFAULT_DEADLINE_SECONDS
 from rvw.hostslots import HostSlotGate, host_slot
+from rvw.prompts import language_output_contract
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.stack import FindingLineage, Presence, PresenceObservation
 from rvw.target import ResolvedTarget
@@ -116,6 +117,7 @@ def build_presence_prompt(
     target: ResolvedTarget,
     expanded: bool,
     retry_invalid_reasons: Sequence[str] = (),
+    locale: Literal["ko", "en"] = "en",
 ) -> str:
     """Render immutable origin claims for verification at one descendant HEAD."""
 
@@ -179,6 +181,7 @@ def build_presence_prompt(
             parts.extend([f"### Body {index}", body])
     reviewed = reviewed_diff(target.diff)
     parts.extend(["# Descendant unified diff", "```diff", reviewed.text, "```"])
+    parts.append(language_output_contract(locale))
     return "\n\n".join(parts)
 
 
@@ -251,6 +254,7 @@ async def adjudicate_presence(
     deadline_seconds: int = DEFAULT_DEADLINE_SECONDS,
     concurrency: int = DEFAULT_CONCURRENCY,
     host_gate: HostSlotGate | None = None,
+    locale: Literal["ko", "en"] = "en",
 ) -> PresenceOutcome:
     """Recheck all earlier lineages once at a descendant PR head."""
 
@@ -302,6 +306,7 @@ async def adjudicate_presence(
             target=target,
             expanded=expanded,
             retry_invalid_reasons=retry_invalid_reasons,
+            locale=locale,
         )
         lineage_ids = list(_batch_lineage_ids(selected).values())
         schema = presence_schema(lineage_ids)

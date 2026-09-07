@@ -2,7 +2,7 @@
 
 ## Purpose and scope
 
-This capability makes the review inspectable before any network action and translates persisted artifacts into a Korean Markdown report and GitHub COMMENT review. Normative behavior is in [spec.md](spec.md).
+This capability makes the review inspectable before any network action and translates persisted artifacts into a localized diagnostic Markdown report and GitHub COMMENT review. Normative behavior is in [spec.md](spec.md).
 
 ## Key decisions and measured basis
 
@@ -12,11 +12,11 @@ This capability makes the review inspectable before any network action and trans
 - The coverage table makes a zero-finding valid lane distinguishable from an all-INVALID lane and from a lane that never activated.
 - Persisted coverage keeps exact replica-chunk entries for fail-closed validation, while the report derives readable per-lane dispatched and valid totals. Diff-budget output also exposes the number and file placement of prompt chunks.
 - `run.json` is the shared strict status contract for persistence, CLI JSON, and Markdown. It records running, complete, degraded, or failed state, structured failed-lane executions, exact coverage totals, an optional run-level infrastructure error, and the immutable build identity that produced the run.
-- Only `## 종합` is author-written. Finding identity, votes, evidence, folds, coverage, and diff-budget accounting remain machine-generated.
+- Only the localized synthesis section is author-written. Finding identity, votes, evidence, folds, coverage, and diff-budget accounting remain machine-generated.
 - PR #1119 supplied concrete scale: 39/39 discovery runs produced 21 findings, merge produced 13 groups, and folds rendered five review items. DISCOVER took about 410s and ADJUDICATE about 197s.
 - That run excluded 2,846,073 generated characters (about 2.84 MB) and reviewed 26,195 source characters, making the exclusion accounting a material report fact rather than a hidden prompt optimization.
 - One rejected inline anchor causes GitHub to reject the entire review with 422. Bulk body fallback bounds publication at two API calls instead of probing N comments.
-- Gate verdicts are rendered from persisted typed artifacts rather than handwritten aggregate prose. Their finding table retains the public group key and disposition even when a CONFIRMED finding is also emitted as an inline comment.
+- Gate verdicts are rendered from persisted typed artifacts. Structured JSON retains public finding identity, dispositions and provenance; the publication view retains actionable findings and human reasons.
 - Stack runs keep a separate strict manifest, incremental ordinary member-run
   references, lineage observations, and deterministic Markdown report. Partial
   member references survive operational failure, while only a complete run can
@@ -29,7 +29,7 @@ This capability makes the review inspectable before any network action and trans
 
 ## Constraints
 
-- Reports are rendered in Korean headings and prose labels.
+- Report headings and prose labels come from complete Korean/English catalogs selected by the presentation snapshot. Missing configuration defaults to English.
 - Pattern folding applies only when every member is included in the rendered verdict subset.
 - Only CONFIRMED, anchorable, line-bearing groups become inline comments.
 - Dry-run results use the same `commented` state model even though no review URL exists.
@@ -42,7 +42,7 @@ This capability makes the review inspectable before any network action and trans
 
 - Ordinary `publish` can still use a moved PR head; `gate` closes this failure mode by revalidating both base and head before reaching publication.
 - GitHub errors without a recognizable status code cannot trigger the 422 fallback.
-- If the report heading structure is manually changed, body removal for inline findings may not find `## 확정 발견 (CONFIRMED)`.
+- Publication derives its selected findings from structured artifacts, so editing diagnostic report headings does not change finding selection.
 - A run can legitimately lack `outcome.json`; the report then renders findings as unadjudicated and publication creates no inline comments.
 - A degraded run can retain valid findings; every report and machine summary marks those results partial and keeps normalized reasons and available diagnostics for the failed executions.
 - The current code has no ADR-012 pre-publication guard for open state, head match, merge state, or BEHIND/DIRTY status.
@@ -58,7 +58,7 @@ The first payload for two confirmed anchorable findings has this shape:
 ```json
 {
   "event": "COMMENT",
-  "body": "...non-inline report content...",
+  "body": "...human publication content...",
   "comments": [
     {"path": "src/a.py", "line": 12, "side": "RIGHT", "body": "..."},
     {"path": "src/b.py", "line": 8, "side": "RIGHT", "body": "..."}
@@ -66,7 +66,7 @@ The first payload for two confirmed anchorable findings has this shape:
 }
 ```
 
-If that call returns 422, rvw makes one final call with no `comments` array and appends both items beneath `### 앵커 실패 항목` in the body.
+If that call returns 422, rvw makes one final call with no `comments` array and appends both items beneath the localized anchor-fallback heading in the body.
 
 ## Historical deltas
 
@@ -82,3 +82,19 @@ ordinary `publish` retains the historical behavior described above.
 The `/tmp/rvw-surfaces-analysis.md` audit at v0.11.5 (`613201f`) found three incompatible artifact lifetimes: host retained stage directories; Actions deleted `/tmp` with its container and uploaded nothing; App copied four stage names by parsing stdout and exported seven hardcoded names. `target.json`, `run.json`, and runtime subtrees were omitted (`.github/workflows/rvw-review.yml:62–75`, `cloud/worker/src/review-job.ts:130–150,709–730`, `cloud/worker/src/artifacts.ts:1–17`, baseline lines). The explicit artifact directory and recursive file manifest remove the stdout/copy dependency and retain partial stages and runtime evidence.
 
 App also independently counted findings/coverage using a maximum of two totals and did not reject zero VALID coverage (`cloud/worker/src/review-job-contract.ts:116–195`, `cloud/worker/src/review-job.ts:178–204`, baseline lines). Python `summary.json` now supplies lane counts, uncovered lane-hunks, merged finding severity counts, adjudication verdict counts, policy-blocking identifiers, and common Markdown for both adapters. Empty counts require interpretation alongside `process.json`; they cannot certify successful execution. Manifest self-size is stabilized before final bytes are written.
+
+## Locale catalogs (2026-09-07)
+
+The owner requested first-class i18n after the publication audit found Korean renderer headings combined with model explanations in multiple languages. Python catalogs own ordinary report, publication, gate, and stack chrome; Worker catalogs own bootstrap and terminal check chrome. Catalog migration preserves diagnostic content selection. Key parity, formatting argument compatibility, and a renderer Hangul-literal scan catch drift. The configured locale selects chrome; it does not translate code quotations, identifiers, or finding facts.
+
+## Human publication split (2026-09-07)
+
+The publication audit found run identifiers, SHA/timestamp headers, finding identities, replica votes, fold detail, coverage/budget tables, and generator footers reaching GitHub through diagnostic Markdown. The owner requested a separate human view. `report.md` remains diagnostic evidence, alongside the original structured stage files; publication is reconstructed from their findings rather than transformed by stripping report sections. It retains source locations, localized severity, short lane rule tags, titles, impact/correction, verbatim evidence, and configured footer. Rejected findings are absent. Uncertain findings remain separate and partial coverage has a short honest disclosure.
+
+Diagnostic summary severity counters continue to include all merged groups. The localized human completion sentence counts confirmed blockers and confirmed warnings/suggestions only, and its coverage sentence counts distinct uncovered regions rather than summing repeated lane-hunk receipts. The Worker consumes that Python Markdown without recounting. Structured lane counters and policy blockers remain available in summary JSON and collapsed check text. Gate publication retains PASS/BLOCK and disposition reasons while JSON preserves actor and inheritance provenance. Stack diagnostic reports retain origin runs and timelines; stack publication focuses on findings and current presence.
+
+## Publication locale enforcement (2026-09-07)
+
+The locale gate evaluates rendered ordinary, inline, fallback, gate, and stack documents together before publication. It excludes code fences, inline code, URLs, path/identifier tokens, numbers and punctuation, then skips prose with fewer than 12 letters. Korean requires at least 60 percent Hangul; English requires at least 90 percent Latin and zero Hangul. Ambiguous language fails closed.
+
+One prose-only rewrite uses the existing tool-less runtime with a 60-second deadline and exact segment-count validation. Immutable Markdown framing, finding count, severity/verdict labels, anchors, rule tags and evidence fences are compared after reconstruction. A failed rewrite leaves original diagnostic artifacts intact; without opt-in it removes any stale publish payload and records publication_language_mismatch. Explicit CLI/policy fallback uses the original prose and records language_fallback_used. The publication.json artifact records rewrite attempts separately from adjudication outcome.json.

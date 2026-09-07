@@ -19,6 +19,7 @@ from rvw.discover import DiscoverResult
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import MergeResult
+from rvw.presentation import PresentationConfig
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Verdict
@@ -26,6 +27,12 @@ from rvw.store import RunStore
 from rvw.target import ResolvedTarget
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def offline_presentation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The target fixtures use synthetic SHAs, so no repository config can be read."""
+    monkeypatch.setattr(cli_module, "load_repo_presentation", lambda *_, **__: PresentationConfig())
 
 
 def test_review_rejects_invalid_host_concurrency_before_pipeline(
@@ -456,12 +463,12 @@ async def test_shared_pipeline_propagates_split_replicas_concurrency_and_deadlin
     assert stage_calls == [("discover", 2, 3, 37), ("adjudicate", 5, 3, 37)]
 
 
-async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
+async def test_shared_pipeline_threads_locale_without_expanded_runtime(
     tmp_path: Path,
     registry_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The optional expanded runtime must not change the default callback contract."""
+    """Locale is mandatory while the optional expanded runtime stays optional."""
 
     runtime = cast(Runtime, FakeRuntime())
     received_runtime: Runtime | None = None
@@ -480,6 +487,7 @@ async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
         concurrency: int,
         deadline_seconds: int,
         host_gate: HostSlotGate | None,
+        locale: str,
     ) -> AdjudicationOutcome:
         nonlocal received_runtime
         del (
@@ -492,6 +500,7 @@ async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
             deadline_seconds,
             host_gate,
         )
+        assert locale == "ko"
         received_runtime = runtime
         return AdjudicationOutcome(
             verdicts={},
@@ -508,6 +517,7 @@ async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
     monkeypatch.setattr(pipeline_module, "discover", fake_discover)
 
     await pipeline_module.execute_pipeline(
+        presentation=PresentationConfig(locale="ko"),
         registry=registry,
         lanes_root=lanes_root,
         target=pr_target(),
@@ -579,7 +589,7 @@ def test_review_end_to_end_writes_all_stages_and_json_shape(
     }
     assert payload["build"] == summary["build"]
     assert str(summary["build"]["build_id"]) in (run_dir / "report.md").read_text()
-    assert "## 확정 발견 (CONFIRMED)" in (run_dir / "report.md").read_text()
+    assert "## Confirmed findings (CONFIRMED)" in (run_dir / "report.md").read_text()
 
 
 def test_review_json_and_report_expose_degraded_failed_lane(
@@ -816,7 +826,7 @@ def test_without_repo_dir_skips_adjudication_and_renders_unadjudicated(
     assert "--repo-dir" in result.stderr
     run_dir = next(out_root.iterdir())
     assert not (run_dir / "outcome.json").exists()
-    assert "## 발견 (미판정)" in (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "## Findings (not adjudicated)" in (run_dir / "report.md").read_text(encoding="utf-8")
 
 
 def test_new_run_emits_stale_install_warning_once(
@@ -907,7 +917,9 @@ def test_adjudicate_run_reuses_persisted_artifacts_and_rewrites_outcome_report(
     assert (run_dir / "discover.json").read_bytes() == discover_before
     assert (run_dir / "outcome.json").is_file()
     assert (run_dir / "report.md").read_bytes() != report_before
-    assert "## 확정 발견 (CONFIRMED)" in (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "## Confirmed findings (CONFIRMED)" in (run_dir / "report.md").read_text(
+        encoding="utf-8"
+    )
     assert json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["build"] == build_before
 
 

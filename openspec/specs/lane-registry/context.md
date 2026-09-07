@@ -84,3 +84,7 @@ are not evidence that scope keyword lint is a semantic review oracle.
 
 `doctor` continues reporting run health. Symbol predicates, a fifth policy tier,
 package-boundary activation, and registry conflict inference are not implemented.
+
+## Presentation snapshot (2026-09-07)
+
+The publication audit `/tmp/rvw-publication-audit.md` identifies the common base reader as the trust boundary. Its older citations were re-resolved against v0.13.0: `_repo_sources` and `load_repo_policy` are in `src/rvw/registry.py`; the same anchoring boundary now applies to presentation. A PR cannot change its own review language or displayed identity by changing head content. The owner selected short_name as the check name, independently of display_name in prose. The external registry remains untouched. Snapshot persistence makes report/publish replay independent of later configuration changes. Missing historical snapshots use the documented defaults.

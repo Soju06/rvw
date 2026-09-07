@@ -13,6 +13,7 @@ from rvw.discover import DiscoverResult
 from rvw.merge import MergeResult
 from rvw.pipeline import PipelineArtifacts
 from rvw.policy import PolicyNotFound
+from rvw.presentation import PresentationConfig
 from rvw.store import RunStore
 from rvw.summary import CoverageTotals, ReviewStatus, RunSummary
 from rvw.target import ResolvedTarget
@@ -22,6 +23,7 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def isolated_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "load_repo_presentation", lambda *_, **__: PresentationConfig())
     monkeypatch.setattr(cli, "DEFAULT_RUN_ROOT", tmp_path / "runs")
     monkeypatch.setattr(cli, "provision_checkout", lambda **_: Path.cwd())
 
@@ -282,6 +284,9 @@ def test_versioned_schema_resources_match_python_contract() -> None:
         assert schema["additionalProperties"] is False
     assert set(ProcessResult.model_fields) == {
         "schema_version",
+        "presentation",
+        "publication_failure",
+        "language_fallback_used",
         "run_id",
         "target",
         "status",

@@ -1,4 +1,4 @@
-"""Deterministic machine-rendered Korean review reports."""
+"""Deterministic localized diagnostic review reports."""
 
 from __future__ import annotations
 
@@ -10,32 +10,36 @@ from rvw import __version__
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport
 from rvw.discover import LaneCoverage
+from rvw.i18n import Locale, t
 from rvw.merge import CollapseGroup, MergeResult, PatternFold, RegionFold
+from rvw.presentation import PresentationConfig
 from rvw.provenance import current_build_provenance
 from rvw.schema import Verdict
 from rvw.summary import ReviewStatus, RunSummary
 from rvw.target import ResolvedTarget
 
-_SYNTHESIS_PLACEHOLDER = "_(종합은 오케스트레이터가 작성합니다 — rvw report --synthesis 로 주입)_"
 
-
-def _target_label(target: ResolvedTarget) -> str:
+def _target_label(target: ResolvedTarget, *, locale: Locale = "en") -> str:
     if target.kind == "pr":
         return f"PR#{target.pr_number}"
     if target.kind == "commit":
-        return f"commit {target.head_sha[:9]}"
-    return "uncommitted"
+        return t("target.commit", locale, p0=target.head_sha[:9])
+    return t("target.uncommitted", locale)
 
 
-def _region_label(fold: RegionFold, groups: dict[str, CollapseGroup]) -> str:
+def _region_label(
+    fold: RegionFold, groups: dict[str, CollapseGroup], *, locale: Locale = "en"
+) -> str:
     lines = [line for key in fold.group_keys if (line := groups[key].line) is not None]
-    return f"(인접: {fold.file} L{min(lines)}\N{EN DASH}{max(lines)})"
+    return t("report.region", locale, p0=fold.file, p1=min(lines), p2=max(lines))
 
 
-def _votes(outcome: AdjudicationOutcome | None, key: str) -> str:
+def _votes(outcome: AdjudicationOutcome | None, key: str, *, locale: Locale = "en") -> str:
     if outcome is None:
-        return "미판정"
-    return "/".join(verdict.value for verdict in outcome.replica_votes.get(key, [])) or "없음"
+        return t("report.unadjudicated", locale)
+    return "/".join(verdict.value for verdict in outcome.replica_votes.get(key, [])) or t(
+        "common.none", locale
+    )
 
 
 def render_group_item(
@@ -43,23 +47,29 @@ def render_group_item(
     outcome: AdjudicationOutcome | None,
     *,
     region_labels: Sequence[str] = (),
+    locale: Locale = "en",
 ) -> str:
     """Render one non-folded finding item for reports and inline publication."""
 
-    line = group.line if group.line is not None else "unknown"
+    line = group.line if group.line is not None else t("common.unknown", locale)
     suffix = "" if not region_labels else f" {' '.join(region_labels)}"
     parts = [
         f"### [{group.severity.value}] {group.rule_id} — {group.file}:{line}{suffix}",
-        f"Finding ID: `{group.key}`",
-        f"복제 동의 {group.agreement}/3 · 판정 {_votes(outcome, group.key)}",
+        t("report.finding_id", locale, p0=group.key),
+        t(
+            "report.agreement",
+            locale,
+            p0=group.agreement,
+            p1=_votes(outcome, group.key, locale=locale),
+        ),
     ]
     if outcome is not None:
         reason = outcome.reasons.get(group.key, "")
         evidence = outcome.evidence.get(group.key, "")
         if reason:
-            parts.append(f"판정 사유: {reason}")
+            parts.append(t("report.reason", locale, p0=reason))
         if evidence:
-            parts.extend(["근거:", f"```\n{evidence}\n```"])
+            parts.extend([t("report.evidence", locale), f"```\n{evidence}\n```"])
     if group.bodies:
         parts.append(group.bodies[0])
     return "\n\n".join(parts)
@@ -71,6 +81,8 @@ def _render_pattern_item(
     outcome: AdjudicationOutcome | None,
     priority_index: dict[str, int],
     region_labels: Sequence[str],
+    *,
+    locale: Locale = "en",
 ) -> str:
     representative = groups[fold.group_keys[0]]
     members = sorted(
@@ -88,33 +100,45 @@ def _render_pattern_item(
     differing_content = len(set(member_content.values())) > 1
 
     suffix = "" if not region_labels else f" {' '.join(region_labels)}"
-    parts = [f"### {fold.rule_id} — {fold.repetition}개 위치 (반복 패턴){suffix}"]
+    parts = [t("report.pattern", locale, p0=fold.rule_id, p1=fold.repetition, p2=suffix)]
     parts.extend(
         (
-            f"- `{member.file}:{member.line if member.line is not None else 'unknown'}` "
-            f"— Finding ID: `{member.key}`"
+            t(
+                "report.pattern_member",
+                locale,
+                p0=member.file,
+                p1=member.line if member.line is not None else t("common.unknown", locale),
+                p2=member.key,
+            )
         )
         for member in members
     )
     if fold.shared_identifiers:
         identifiers = ", ".join(f"`{identifier}`" for identifier in fold.shared_identifiers)
-        parts.append(f"공유 식별자: {identifiers}")
-    parts.append(f"복제 동의 {highest.agreement}/3 · 판정 {_votes(outcome, highest.key)}")
+        parts.append(t("report.shared_identifiers", locale, p0=identifiers))
+    parts.append(
+        t(
+            "report.agreement",
+            locale,
+            p0=highest.agreement,
+            p1=_votes(outcome, highest.key, locale=locale),
+        )
+    )
 
     if differing_content:
         for member in members:
-            line = member.line if member.line is not None else "unknown"
+            line = member.line if member.line is not None else t("common.unknown", locale)
             parts.append(f"**{member.file}:{line}** — {member_content[member.key]}")
             if outcome is not None and (evidence := outcome.evidence.get(member.key, "").strip()):
-                parts.extend(["근거:", f"```\n{evidence}\n```"])
+                parts.extend([t("report.evidence", locale), f"```\n{evidence}\n```"])
     else:
         if outcome is not None:
             reason = member_content[highest.key]
             evidence = outcome.evidence.get(highest.key, "")
             if reason:
-                parts.append(f"판정 사유: {reason}")
+                parts.append(t("report.reason", locale, p0=reason))
             if evidence:
-                parts.extend(["근거:", f"```\n{evidence}\n```"])
+                parts.extend([t("report.evidence", locale), f"```\n{evidence}\n```"])
         if representative.bodies:
             parts.append(representative.bodies[0])
     return "\n\n".join(parts)
@@ -132,6 +156,8 @@ def _folded_items(
     merged: MergeResult,
     outcome: AdjudicationOutcome | None,
     included: set[str],
+    *,
+    locale: Locale = "en",
 ) -> list[str]:
     groups = {group.key: group for group in merged.groups}
     priority_index = {group.key: index for index, group in enumerate(merged.groups)}
@@ -186,7 +212,7 @@ def _folded_items(
 
     labels_by_unit: dict[str, list[str]] = {unit_id: [] for unit_id in units}
     for fold in merged.region_folds:
-        label = _region_label(fold, groups)
+        label = _region_label(fold, groups, locale=locale)
         for unit_id in dict.fromkeys(
             unit_by_key[key] for key in fold.group_keys if key in unit_by_key
         ):
@@ -199,27 +225,35 @@ def _folded_items(
             labels = labels_by_unit[unit.id]
             if unit.pattern is not None:
                 rendered.append(
-                    _render_pattern_item(unit.pattern, groups, outcome, priority_index, labels)
+                    _render_pattern_item(
+                        unit.pattern, groups, outcome, priority_index, labels, locale=locale
+                    )
                 )
             else:
                 rendered.append(
-                    render_group_item(groups[unit.keys[0]], outcome, region_labels=labels)
+                    render_group_item(
+                        groups[unit.keys[0]], outcome, region_labels=labels, locale=locale
+                    )
                 )
     return rendered
 
 
-def _confirmed_items(merged: MergeResult, outcome: AdjudicationOutcome) -> list[str]:
+def _confirmed_items(
+    merged: MergeResult, outcome: AdjudicationOutcome, *, locale: Locale = "en"
+) -> list[str]:
     confirmed = {
         group.key for group in merged.groups if outcome.verdicts.get(group.key) is Verdict.CONFIRMED
     }
-    return _folded_items(merged, outcome, confirmed)
+    return _folded_items(merged, outcome, confirmed, locale=locale)
 
 
-def _unadjudicated_items(merged: MergeResult) -> list[str]:
-    return _folded_items(merged, None, {group.key for group in merged.groups})
+def _unadjudicated_items(merged: MergeResult, *, locale: Locale = "en") -> list[str]:
+    return _folded_items(merged, None, {group.key for group in merged.groups}, locale=locale)
 
 
-def _unresolved_items(merged: MergeResult, outcome: AdjudicationOutcome) -> list[str]:
+def _unresolved_items(
+    merged: MergeResult, outcome: AdjudicationOutcome, *, locale: Locale = "en"
+) -> list[str]:
     groups = {group.key: group for group in merged.groups}
     items: list[str] = []
     for key in outcome.unresolved:
@@ -227,18 +261,19 @@ def _unresolved_items(merged: MergeResult, outcome: AdjudicationOutcome) -> list
         if group is None:
             continue
         items.append(
-            f"{render_group_item(group, outcome)}\n\n"
-            "확장 컨텍스트 재검증에서도 미확정 — 수동 확인 필요"
+            t("report.unresolved_note", locale, p0=render_group_item(group, outcome, locale=locale))
         )
     return items
 
 
-def _rejected_items(merged: MergeResult, outcome: AdjudicationOutcome) -> list[str]:
+def _rejected_items(
+    merged: MergeResult, outcome: AdjudicationOutcome, *, locale: Locale = "en"
+) -> list[str]:
     items: list[str] = []
     for group in merged.groups:
         if outcome.verdicts.get(group.key) is not Verdict.REJECTED:
             continue
-        line = group.line if group.line is not None else "unknown"
+        line = group.line if group.line is not None else t("common.unknown", locale)
         evidence = outcome.evidence.get(group.key, "")
         items.append(
             "\n".join(
@@ -246,7 +281,7 @@ def _rejected_items(merged: MergeResult, outcome: AdjudicationOutcome) -> list[s
                     "<details>",
                     f"<summary>{group.rule_id} — {group.file}:{line}</summary>",
                     "",
-                    f"Finding ID: `{group.key}`",
+                    t("report.finding_id", locale, p0=group.key),
                     "",
                     f"```\n{evidence}\n```",
                     "</details>",
@@ -260,11 +295,13 @@ def _coverage_section(
     coverage: Sequence[LaneCoverage],
     budget: DiffBudgetReport | None,
     outcome: AdjudicationOutcome | None,
+    *,
+    locale: Locale = "en",
 ) -> str:
     lines = [
-        "## 커버리지",
+        t("report.coverage_heading", locale),
         "",
-        "| 레인 | 발사 | 유효 | 발견 | 미커버 |",
+        t("report.coverage_columns", locale),
         "| --- | ---: | ---: | ---: | ---: |",
     ]
     for item in coverage:
@@ -274,51 +311,64 @@ def _coverage_section(
             f"{len(item.uncovered)} |"
         )
     lines.append(
-        "| 합계 | "
-        f"{sum(item.dispatched for item in coverage)} | "
-        f"{sum(item.valid for item in coverage)} | "
-        f"{sum(item.findings for item in coverage)} | "
-        f"{sum(len(item.uncovered) for item in coverage)} |"
+        t(
+            "report.coverage_total",
+            locale,
+            p0=sum(item.dispatched for item in coverage),
+            p1=sum(item.valid for item in coverage),
+            p2=sum(item.findings for item in coverage),
+            p3=sum(len(item.uncovered) for item in coverage),
+        )
     )
     uncovered = [item for item in coverage if item.uncovered]
     if uncovered:
-        lines.extend(["", "미커버 헝크:"])
+        lines.extend(["", t("report.uncovered", locale)])
         for item in uncovered:
             lane_id = item.lane_id.replace("`", "\\`")
             escaped_hunk_ids = [hunk_id.replace("`", "\\`") for hunk_id in item.uncovered]
             hunk_ids = ", ".join(f"`{hunk_id}`" for hunk_id in escaped_hunk_ids)
             lines.append(f"- `{lane_id}`: {hunk_ids}")
     if budget is not None:
-        excluded = ", ".join(budget.excluded_files) or "없음"
+        excluded = ", ".join(budget.excluded_files) or t("common.none", locale)
         lines.extend(
             [
                 "",
-                f"diff 예산: {budget.kept_chars:,}자 유지 / {budget.excluded_chars:,}자 제외 "
-                f"({excluded}) / {budget.chunk_count}청크",
+                t(
+                    "report.budget",
+                    locale,
+                    p0=budget.kept_chars,
+                    p1=budget.excluded_chars,
+                    p2=excluded,
+                    p3=budget.chunk_count,
+                ),
             ]
         )
     if outcome is not None and outcome.coerced_rejections > 0:
-        lines.extend(["", f"근거 없는 기각 교정: {outcome.coerced_rejections}건"])
+        lines.extend(["", t("report.coerced", locale, p0=outcome.coerced_rejections)])
     return "\n".join(lines)
 
 
-def _status_section(summary: RunSummary | None) -> str:
+def _status_section(summary: RunSummary | None, *, locale: Locale = "en") -> str:
     if summary is None:
         return ""
     if summary.status is ReviewStatus.DEGRADED:
-        label = "partial review — one or more lane executions failed"
+        label = t("report.status.degraded", locale)
     elif summary.status is ReviewStatus.FAILED:
-        label = "failed review — results are incomplete"
+        label = t("report.status.failed", locale)
     elif summary.status is ReviewStatus.COMPLETE:
-        label = "complete review"
+        label = t("report.status.complete", locale)
     else:
-        label = "review still running"
-    lines = ["## 실행 상태", "", f"status: `{summary.status.value}` — {label}"]
+        label = t("report.status.running", locale)
+    lines = [
+        t("report.status_heading", locale),
+        "",
+        t("report.status", locale, p0=summary.status.value, p1=label),
+    ]
     if summary.failed_lanes:
-        lines.extend(["", "failed lanes:"])
+        lines.extend(["", t("report.failed_lanes", locale)])
         for lane in summary.failed_lanes:
             details = ", ".join(
-                f"`{failure.reason}` (replica {failure.replica}, chunk {failure.chunk})"
+                t("report.failure", locale, p0=failure.reason, p1=failure.replica, p2=failure.chunk)
                 for failure in lane.failures
             )
             lines.append(f"- `{lane.lane_id}`: {details}")
@@ -326,8 +376,13 @@ def _status_section(summary: RunSummary | None) -> str:
         lines.extend(
             [
                 "",
-                f"run error: `{summary.error.stage}/{summary.error.reason}` — "
-                f"{summary.error.message}",
+                t(
+                    "report.run_error",
+                    locale,
+                    p0=summary.error.stage,
+                    p1=summary.error.reason,
+                    p2=summary.error.message,
+                ),
             ]
         )
     return "\n".join(lines)
@@ -342,42 +397,69 @@ def render_report(
     budget: DiffBudgetReport | None,
     synthesis: str | None = None,
     summary: RunSummary | None = None,
+    locale: Locale = "en",
+    presentation: PresentationConfig | None = None,
 ) -> str:
     """Render one report without reading or writing external state."""
 
+    if presentation is not None:
+        locale = presentation.locale
+    display_name = presentation.display_name if presentation is not None else "rvw"
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     parts = [
-        f"# rvw 리뷰 — {target.repo} {_target_label(target)}",
-        f"head: `{target.head_sha}`  \nUTC timestamp: {timestamp}",
+        t(
+            "report.header",
+            locale,
+            p0=target.repo,
+            p1=_target_label(target, locale=locale),
+            display_name=display_name,
+        ),
+        t("report.metadata", locale, p0=target.head_sha, p1=timestamp),
     ]
-    status_section = _status_section(summary)
+    status_section = _status_section(summary, locale=locale)
     if status_section:
         parts.append(status_section)
-    parts.extend(["## 종합", synthesis if synthesis is not None else _SYNTHESIS_PLACEHOLDER])
+    parts.extend(
+        [
+            t("report.synthesis_heading", locale),
+            synthesis if synthesis is not None else t("report.synthesis_placeholder", locale),
+        ]
+    )
 
     if outcome is None:
-        items = _unadjudicated_items(merged)
-        parts.extend(["## 발견 (미판정)", "\n\n".join(items) if items else "_없음_"])
-    else:
-        confirmed_items = _confirmed_items(merged, outcome)
+        items = _unadjudicated_items(merged, locale=locale)
         parts.extend(
             [
-                "## 확정 발견 (CONFIRMED)",
-                "\n\n".join(confirmed_items) if confirmed_items else "_없음_",
+                t("report.unadjudicated_heading", locale),
+                "\n\n".join(items) if items else t("report.empty", locale),
             ]
         )
-        unresolved_items = _unresolved_items(merged, outcome)
+    else:
+        confirmed_items = _confirmed_items(merged, outcome, locale=locale)
+        parts.extend(
+            [
+                t("report.confirmed_heading", locale),
+                "\n\n".join(confirmed_items) if confirmed_items else t("report.empty", locale),
+            ]
+        )
+        unresolved_items = _unresolved_items(merged, outcome, locale=locale)
         if unresolved_items:
-            parts.extend(["## 검증 미확정", "\n\n".join(unresolved_items)])
-        rejected_items = _rejected_items(merged, outcome)
+            parts.extend([t("report.uncertain_heading", locale), "\n\n".join(unresolved_items)])
+        rejected_items = _rejected_items(merged, outcome, locale=locale)
         if rejected_items:
-            parts.extend(["## 기각 (REJECTED)", "\n\n".join(rejected_items)])
+            parts.extend([t("report.rejected_heading", locale), "\n\n".join(rejected_items)])
 
     build = summary.build if summary is not None else current_build_provenance()
     parts.extend(
         [
-            _coverage_section(coverage, budget, outcome),
-            f"_generated by rvw {__version__} · build {build.build_id}_",
+            _coverage_section(coverage, budget, outcome, locale=locale),
+            t(
+                "report.footer",
+                locale,
+                p0=__version__,
+                p1=build.build_id,
+                display_name=display_name,
+            ),
         ]
     )
     return "\n\n".join(parts) + "\n"

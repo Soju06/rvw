@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -251,6 +252,7 @@ async def discover(
     host_gate: HostSlotGate | None = None,
     mode: DiscoveryMode = DiscoveryMode.AGENTIC,
     repo_dir: Path | None = None,
+    locale: Literal["ko", "en"] = "en",
 ) -> DiscoverResult:
     """Run all activated lanes in one dispatch call and enrich valid findings."""
 
@@ -279,6 +281,7 @@ async def discover(
                     brief=effective_brief,
                     brief_source=effective_brief_source,
                     covered_rules=covered_rules,
+                    locale=locale,
                     chunk_context=build_chunk_context(
                         chunk=chunk.index,
                         chunk_count=len(chunks),
@@ -311,6 +314,7 @@ async def discover(
                     lane,
                     base_sha=target.base_sha,
                     head_sha=target.head_sha,
+                    locale=locale,
                 ),
                 replica=replica,
                 workdir=repo_dir,

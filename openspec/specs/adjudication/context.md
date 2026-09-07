@@ -44,3 +44,7 @@ No verdict has a strict majority, so `abc` receives the expanded pass at twice t
 ## Historical deltas
 
 ADR-007 required verdict evidence to quote source. The implementation strongly prompts for verbatim quotes but enforces only non-empty evidence for REJECTED votes. ADR-008 proposed capping expansion to directly referenced symbols; the current prompt permits enclosing code, definitions, callers, and relevant tests without a mechanical traversal cap.
+
+## Publication locale enforcement (2026-09-07)
+
+The resolved presentation locale follows ordinary adjudication and every expanded, retry and stack-presence variant. Prompts require explanatory fields in Korean or English independently of lane/diff/PR language and preserve verbatim source evidence. This changes language instructions only: candidate isolation, majority voting, missing-item uncertainty, rejection evidence, bounded expansion and replica counts retain their existing semantics. Publication checking is separate from factual adjudication and never rewrites outcome.json.

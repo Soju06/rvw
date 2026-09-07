@@ -1,11 +1,11 @@
-"""Reusable execution and loading for the ordinary rvw review pipeline."""
+"""Reusable execution and loading for the ordinary review pipeline."""
 
 from __future__ import annotations
 
 import json
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rvw.adjudicate import AdjudicationInfrastructureError, AdjudicationOutcome
@@ -15,6 +15,7 @@ from rvw.dispatch import DEFAULT_DEADLINE_SECONDS
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import MergeResult, merge
+from rvw.presentation import PresentationConfig
 from rvw.provenance import stale_install_warning
 from rvw.registry import EffectiveRegistry, Registry
 from rvw.report import render_report
@@ -43,6 +44,7 @@ class PipelineArtifacts:
     report_md: str
     report_path: Path
     summary: RunSummary | None = None
+    presentation: PresentationConfig = field(default_factory=PresentationConfig)
 
 
 class PipelineInfrastructureError(RuntimeError):
@@ -106,6 +108,7 @@ async def execute_pipeline(
     rule_source_warning: str | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
     run_handle: RunHandle | None = None,
+    presentation: PresentationConfig | None = None,
 ) -> PipelineArtifacts | None:
     """Execute and persist DISCOVER, MERGE, ADJUDICATE, and REPORT."""
 
@@ -128,6 +131,8 @@ async def execute_pipeline(
     if on_warning is not None and (warning := stale_install_warning()) is not None:
         on_warning(warning)
     run.save_target(target)
+    presentation = presentation or PresentationConfig()
+    run.save_presentation(presentation)
     if rule_source_warning:
         (run.dir / "metadata.json").write_text(
             json.dumps({"rule_source_warning": rule_source_warning}, ensure_ascii=False) + "\n",
@@ -135,6 +140,7 @@ async def execute_pipeline(
         )
     brief = dynamic_brief.read_text(encoding="utf-8") if dynamic_brief is not None else None
     discovered = await discover(
+        locale=presentation.locale,
         registry=registry,
         lanes_root=lanes_root,
         target=target,
@@ -177,6 +183,7 @@ async def execute_pipeline(
         try:
             outcome = await adjudicator(
                 merged,
+                locale=presentation.locale,
                 target=target,
                 runtime=adjudication_runtime,
                 repo_dir=repo_dir,
@@ -196,6 +203,7 @@ async def execute_pipeline(
             )
             failed_summary = summarize_run(run.run_id, discovered, error=error, build=build)
             report_md = render_report(
+                presentation=presentation,
                 target=target,
                 merged=merged,
                 outcome=None,
@@ -215,11 +223,13 @@ async def execute_pipeline(
                 report_md=report_md,
                 report_path=run.dir / "report.md",
                 summary=failed_summary,
+                presentation=presentation,
             )
             raise PipelineInfrastructureError(artifacts) from exc
         run.save_outcome(outcome)
 
     report_md = render_report(
+        presentation=presentation,
         target=target,
         merged=merged,
         outcome=outcome,
@@ -242,6 +252,7 @@ async def execute_pipeline(
         report_md=report_md,
         report_path=report_path,
         summary=summary,
+        presentation=presentation,
     )
 
 
@@ -272,6 +283,7 @@ def load_pipeline_artifacts(
         report_md=report_md,
         report_path=run.dir / "report.md",
         summary=summary,
+        presentation=run.load_presentation(),
     )
 
 

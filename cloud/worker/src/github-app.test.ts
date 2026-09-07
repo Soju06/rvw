@@ -192,3 +192,43 @@ describe("Check Runs", () => {
     ).rejects.toMatchObject({status: 503, retryable: true});
   });
 });
+
+it("reads bootstrap presentation with installation authorization at the base SHA", async () => {
+  const {getPresentationConfig} = await import("./github-app");
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(String(input)).toBe(`https://api.github.com/repos/acme/rvw/contents/.rvw/config.yaml?ref=${"b".repeat(40)}`);
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer ghs_scoped");
+    return Response.json({type: "file", encoding: "base64", content: btoa("short_name: VOOY Review\nlocale: ko")});
+  });
+  expect(await getPresentationConfig("ghs_scoped", {owner: "acme", repo: "rvw", baseSha: "b".repeat(40)}, fetcher)).toMatchObject({presentation: {short_name: "VOOY Review", locale: "ko"}});
+});
+it.each(["missing", "malformed", "symlink"])("uses safe bootstrap defaults for %s config", async (kind) => {
+  const {getPresentationConfig} = await import("./github-app");
+  const fetcher = vi.fn(async () => kind === "missing" ? new Response("", {status: 404}) : Response.json({
+    type: kind === "symlink" ? "symlink" : "file", encoding: "base64", content: btoa("locale: fr"),
+  }));
+  expect(await getPresentationConfig("token", {owner: "a", repo: "b", baseSha: "base"}, fetcher)).toEqual({
+    presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null},
+    ...(kind === "missing" ? {} : {failure: "presentation_config_invalid"}),
+  });
+});
+it("uses configured bootstrap names and puts the job id only in structured text", async () => {
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({name: "VOOY Review", external_id: "job-private", output: {
+      title: "VOOY Review System · 검토 중", summary: "검토 중입니다.",
+    }});
+    expect(body.output.summary).not.toContain("job-private");
+    expect(body.output.text).toContain("job-private");
+    return Response.json({id: 42});
+  });
+  await createCheckRun("token", {owner: "a", repo: "b", headSha: "head", jobId: "job-private",
+    presentation: {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko", footer: null}}, fetcher);
+});
+it("updates a check name and diagnostic text", async () => {
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(JSON.parse(String(init?.body))).toMatchObject({name: "New review", output: {text: "diagnostics"}});
+    return Response.json({id: 42});
+  });
+  await updateCheckRun("token", {owner: "a", repo: "b", checkRunId: 42, conclusion: "success", title: "Done", summary: "Complete", name: "New review", text: "diagnostics"}, fetcher);
+});

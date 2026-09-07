@@ -20,7 +20,9 @@ from rvw.adjudicate import AdjudicationOutcome
 from rvw.checkout import provision_checkout
 from rvw.discover import LaneCoverage
 from rvw.hunks import hunk_sha256_by_id
+from rvw.i18n import Locale, t
 from rvw.merge import CollapseGroup, MergeResult
+from rvw.presentation import PresentationConfig
 from rvw.schema import Severity, Verdict
 from rvw.target import ResolvedTarget
 
@@ -83,7 +85,7 @@ class GatePlan(BaseModel):
     @classmethod
     def _lanes_must_be_unique(cls, value: list[str]) -> list[str]:
         if len(value) != len(set(value)):
-            raise ValueError("gate plan lane IDs must be unique")
+            raise ValueError(t("gate.error.gate_plan_lane_IDs_must", "en"))
         return value
 
 
@@ -104,7 +106,7 @@ class DispositionRecord(BaseModel):
     @classmethod
     def _reason_must_be_nonblank(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("disposition reason must be nonblank")
+            raise ValueError(t("gate.error.disposition_reason_must_be_nonblank", "en"))
         return value.strip()
 
 
@@ -227,7 +229,9 @@ def load_dispositions(path: Path) -> DispositionDocument:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        raise ValueError(f"could not load dispositions from {path}: {exc}") from exc
+        raise ValueError(
+            t("gate.error.could_not_load_dispositions_from", "en", p0=path, p1=exc)
+        ) from exc
     return DispositionDocument.model_validate(raw)
 
 
@@ -253,28 +257,38 @@ def validate_coverage(
     chunk_count: int,
 ) -> list[LaneCoverage]:
     if replicas < 1:
-        raise GateInvariantError("expected replicas must be positive")
+        raise GateInvariantError(t("gate.error.expected_replicas_must_be_positive", "en"))
     if chunk_count < 1:
-        raise GateInvariantError("expected chunk_count must be positive")
+        raise GateInvariantError(t("gate.error.expected_chunk_count_must_be_positive", "en"))
     if not coverage:
-        raise GateInvariantError("coverage must be nonempty")
+        raise GateInvariantError(t("gate.error.coverage_must_be_nonempty", "en"))
 
     coverage_ids = [item.lane_id for item in coverage]
     duplicates = sorted(lane_id for lane_id, count in Counter(coverage_ids).items() if count > 1)
     if duplicates:
-        raise GateInvariantError(f"duplicate coverage lanes: {', '.join(duplicates)}")
+        raise GateInvariantError(
+            t("gate.error.duplicate_coverage_lanes", "en", p0=", ".join(duplicates))
+        )
 
     planned = set(planned_lane_ids)
     actual = set(coverage_ids)
     missing = sorted(planned - actual)
     unexpected = sorted(actual - planned)
     if not planned:
-        detail = f"; unexpected coverage lanes: {', '.join(unexpected)}" if unexpected else ""
-        raise GateInvariantError(f"planned lane set must be nonempty{detail}")
+        detail = (
+            t("gate.error.unexpected_coverage_lanes", "en", p0=", ".join(unexpected))
+            if unexpected
+            else ""
+        )
+        raise GateInvariantError(t("gate.error.planned_lane_set_must_be", "en", p0=detail))
     if missing:
-        raise GateInvariantError(f"missing planned coverage lanes: {', '.join(missing)}")
+        raise GateInvariantError(
+            t("gate.error.missing_planned_coverage_lanes", "en", p0=", ".join(missing))
+        )
     if unexpected:
-        raise GateInvariantError(f"unexpected coverage lanes: {', '.join(unexpected)}")
+        raise GateInvariantError(
+            t("gate.error.unexpected_coverage_lanes_10", "en", p0=", ".join(unexpected))
+        )
 
     by_lane = {item.lane_id: item for item in coverage}
     ordered: list[LaneCoverage] = []
@@ -286,9 +300,7 @@ def validate_coverage(
     for lane_id in planned_lane_ids:
         item = by_lane[lane_id]
         if item.dispatched <= 0:
-            raise GateInvariantError(
-                f"lane {lane_id} dispatched {item.dispatched}; expected positive runs"
-            )
+            raise GateInvariantError(t("gate.error.lane", "en", p0=lane_id, p1=item.dispatched))
         actual_runs = {(run.replica, run.chunk) for run in item.runs}
         missing_runs = sorted(expected_runs - actual_runs, key=lambda value: (value[1], value[0]))
         unexpected_runs = sorted(
@@ -296,25 +308,33 @@ def validate_coverage(
         )
         if missing_runs:
             detail = ", ".join(
-                f"replica {replica} chunk {chunk}" for replica, chunk in missing_runs
+                t("gate.error.replica", "en", p0=replica, p1=chunk)
+                for replica, chunk in missing_runs
             )
-            raise GateInvariantError(f"lane {lane_id} missing planned coverage runs: {detail}")
+            raise GateInvariantError(t("gate.error.lane_13", "en", p0=lane_id, p1=detail))
         if unexpected_runs:
             detail = ", ".join(
-                f"replica {replica} chunk {chunk}" for replica, chunk in unexpected_runs
+                t("gate.error.replica", "en", p0=replica, p1=chunk)
+                for replica, chunk in unexpected_runs
             )
-            raise GateInvariantError(f"lane {lane_id} has unexpected coverage runs: {detail}")
+            raise GateInvariantError(t("gate.error.lane_14", "en", p0=lane_id, p1=detail))
         expected_count = replicas * chunk_count
         if item.dispatched != expected_count:
             raise GateInvariantError(
-                f"lane {lane_id} dispatched {item.dispatched}; expected {expected_count} runs"
+                t("gate.error.lane_15", "en", p0=lane_id, p1=item.dispatched, p2=expected_count)
             )
         invalid_runs = [run for run in item.runs if not run.valid]
         if invalid_runs:
             run = invalid_runs[0]
             raise GateInvariantError(
-                f"lane {lane_id} replica {run.replica} chunk {run.chunk} invalid: "
-                f"{run.invalid_reason}"
+                t(
+                    "gate.error.lane_16",
+                    "en",
+                    p0=lane_id,
+                    p1=run.replica,
+                    p2=run.chunk,
+                    p3=run.invalid_reason,
+                )
             )
         ordered.append(item)
     return ordered
@@ -334,14 +354,15 @@ def _actionable(
         if orphan:
             details.append(f"orphan={','.join(orphan)}")
         raise GateInvariantError(
-            "adjudication outcome keys must exactly match merged finding keys: "
-            + "; ".join(details)
+            t("gate.error.adjudication_outcome_keys_must_exactly", "en") + "; ".join(details)
         )
     actionable: list[tuple[CollapseGroup, Verdict]] = []
     for group in merged.groups:
         verdict = outcome.verdicts.get(group.key)
         if verdict is None:
-            raise GateInvariantError(f"missing adjudication verdict for finding {group.key}")
+            raise GateInvariantError(
+                t("gate.error.missing_adjudication_verdict_for_finding", "en", p0=group.key)
+            )
         if verdict in {Verdict.CONFIRMED, Verdict.UNCERTAIN}:
             actionable.append((group, verdict))
     return actionable
@@ -353,14 +374,20 @@ def _dispositions_by_id(
     ids = [record.finding_id for record in document.dispositions]
     duplicates = sorted(finding_id for finding_id, count in Counter(ids).items() if count > 1)
     if duplicates:
-        raise GateInvariantError(f"duplicate disposition finding IDs: {', '.join(duplicates)}")
+        raise GateInvariantError(
+            t("gate.error.duplicate_disposition_finding_IDs", "en", p0=", ".join(duplicates))
+        )
     actual_ids = set(ids)
     unknown = sorted(actual_ids - expected_ids)
     if unknown:
-        raise GateInvariantError(f"unknown disposition finding IDs: {', '.join(unknown)}")
+        raise GateInvariantError(
+            t("gate.error.unknown_disposition_finding_IDs", "en", p0=", ".join(unknown))
+        )
     missing = sorted(expected_ids - actual_ids)
     if missing:
-        raise GateInvariantError(f"missing disposition finding IDs: {', '.join(missing)}")
+        raise GateInvariantError(
+            t("gate.error.missing_disposition_finding_IDs", "en", p0=", ".join(missing))
+        )
     return {record.finding_id: record for record in document.dispositions}
 
 
@@ -368,7 +395,7 @@ def _body_sha256(group: CollapseGroup) -> str:
     """Digest the complete order-insensitive body set for a collapsed finding."""
 
     if not group.bodies:
-        raise GateInvariantError(f"collapsed finding {group.key} must contain at least one body")
+        raise GateInvariantError(t("gate.error.collapsed_finding", "en", p0=group.key))
     body_digests = (hashlib.sha256(body.encode()).digest() for body in sorted(group.bodies))
     return hashlib.sha256(b"".join(body_digests)).hexdigest()
 
@@ -531,9 +558,12 @@ def _validate_inherited_from(
             or matched.inherited_from != inherited_run_id
         ):
             raise GateInvariantError(
-                "inherited_from_unbound: "
-                f"finding {finding_id} claims {record.inherited_from!r} without a matching "
-                "selected inheritance source"
+                t(
+                    "gate.error.inherited_from_unbound",
+                    "en",
+                    p0=finding_id,
+                    p1=record.inherited_from,
+                )
             )
 
 
@@ -552,7 +582,7 @@ def build_gate_verdict(
     inheritance_summary: InheritanceSummary | None = None,
 ) -> GateVerdict:
     if target.kind != "pr" or target.pr_number is None or target.base_sha is None:
-        raise GateInvariantError("gate verdict requires a PR target with base and head anchors")
+        raise GateInvariantError(t("gate.error.gate_verdict_requires_a_PR", "en"))
 
     actionable = _actionable(merged, outcome)
     expected_ids = {group.key for group, _ in actionable}
@@ -575,9 +605,13 @@ def build_gate_verdict(
             accepted_blocker = True
             if actor_permission != "admin" or not actor:
                 raise GateInvariantError(
-                    "accepted_blocker_owner_unverified: "
-                    f"finding_id={group.key} actor={actor or '<none>'} "
-                    f"permission={actor_permission or '<none>'}; repository admin required"
+                    t(
+                        "gate.error.accepted_blocker_owner_unverified",
+                        "en",
+                        p0=group.key,
+                        p1=actor or "<none>",
+                        p2=actor_permission or "<none>",
+                    )
                 )
         findings.append(
             GateFinding(
@@ -680,16 +714,21 @@ def _cell(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
-def render_gate_verdict(verdict: GateVerdict) -> str:
+def render_gate_verdict(
+    verdict: GateVerdict, *, locale: Locale = "en", presentation: PresentationConfig | None = None
+) -> str:
+    if presentation is not None:
+        locale = presentation.locale
+    display_name = presentation.display_name if presentation is not None else "rvw"
     lines = [
-        f"# rvw gate — {verdict.verdict}",
+        t("gate.header", locale, p0=verdict.verdict, display_name=display_name),
         "",
-        f"Run ID: `{verdict.run_id}`",
-        f"Target: `{verdict.repo}#{verdict.pr_number}`",
-        f"Base SHA: `{verdict.anchor.base_sha}`",
-        f"Head SHA: `{verdict.anchor.head_sha}`",
+        t("gate.run", locale, p0=verdict.run_id),
+        t("gate.target", locale, p0=verdict.repo, p1=verdict.pr_number),
+        t("gate.base", locale, p0=verdict.anchor.base_sha),
+        t("gate.head", locale, p0=verdict.anchor.head_sha),
         "",
-        "## Verdict counts",
+        t("gate.counts_heading", locale),
         "",
         "| CONFIRMED | REJECTED | UNCERTAIN |",
         "| ---: | ---: | ---: |",
@@ -698,9 +737,9 @@ def render_gate_verdict(verdict: GateVerdict) -> str:
             f"{verdict.counts['UNCERTAIN']} |"
         ),
         "",
-        "## Lane validity",
+        t("gate.validity_heading", locale),
         "",
-        "| Lane | Dispatched | Valid | Findings | Uncovered |",
+        t("report.coverage_columns", locale),
         "| --- | ---: | ---: | ---: | ---: |",
     ]
     lines.extend(
@@ -710,19 +749,16 @@ def render_gate_verdict(verdict: GateVerdict) -> str:
     )
     uncovered = [item for item in verdict.coverage if item.uncovered]
     if uncovered:
-        lines.extend(["", "Uncovered hunks:"])
+        lines.extend(["", t("report.uncovered", locale)])
         for item in uncovered:
             hunk_ids = ", ".join(f"`{_cell(hunk_id)}`" for hunk_id in item.uncovered)
             lines.append(f"- `{_cell(item.lane_id)}`: {hunk_ids}")
     lines.extend(
         [
             "",
-            "## Gate findings",
+            t("gate.findings_heading", locale),
             "",
-            (
-                "| Finding ID | Severity | Verdict | Disposition | Inherited from | "
-                "Inheritance tier | Demotion reason | Reason |"
-            ),
+            (t("gate.findings_columns", locale)),
             "| --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
@@ -738,40 +774,61 @@ def render_gate_verdict(verdict: GateVerdict) -> str:
         for item in verdict.findings
     )
     if not verdict.findings:
-        lines.append("| — | — | — | — | — | — | — | No actionable findings |")
+        lines.append(t("gate.empty", locale))
     if verdict.actor is not None:
-        lines.extend(["", f"Verified blocker-acceptance actor: `{verdict.actor}`"])
+        lines.extend(["", t("gate.actor", locale, p0=verdict.actor)])
     if verdict.inheritance_summary is not None:
         summary = verdict.inheritance_summary
-        reasons = (
-            ", ".join(f"{reason}={count}" for reason, count in summary.reasons.items()) or "none"
+        reasons = ", ".join(f"{reason}={count}" for reason, count in summary.reasons.items()) or t(
+            "common.none", locale
         )
         lines.extend(
             [
                 "",
-                "## Inheritance summary",
+                t("gate.inheritance_heading", locale),
                 "",
-                f"Source run: `{summary.source_run_id}`",
+                t("gate.source_run", locale, p0=summary.source_run_id),
                 (
-                    f"Carried: {summary.carried}; sticky: {summary.sticky}; "
-                    f"prefilled: {summary.prefilled}; "
-                    f"blank: {summary.blank}; reasons: {reasons}"
+                    t(
+                        "gate.inheritance",
+                        locale,
+                        p0=summary.carried,
+                        p1=summary.sticky,
+                        p2=summary.prefilled,
+                        p3=summary.blank,
+                        p4=reasons,
+                    )
                 ),
             ]
         )
     if verdict.failures:
-        lines.extend(["", "## Failures", "", *(f"- {_cell(item)}" for item in verdict.failures)])
+        lines.extend(
+            [
+                "",
+                t("gate.failures_heading", locale),
+                "",
+                *(f"- {_cell(item)}" for item in verdict.failures),
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
-def save_gate_verdict(run_dir: Path, verdict: GateVerdict) -> tuple[Path, Path]:
+def save_gate_verdict(
+    run_dir: Path,
+    verdict: GateVerdict,
+    *,
+    locale: Locale = "en",
+    presentation: PresentationConfig | None = None,
+) -> tuple[Path, Path]:
     json_path = run_dir / "gate-verdict.json"
     markdown_path = run_dir / "gate-verdict.md"
     json_path.write_text(
         f"{json.dumps(verdict.model_dump(mode='json'), ensure_ascii=False, indent=2, sort_keys=True)}\n",
         encoding="utf-8",
     )
-    markdown_path.write_text(render_gate_verdict(verdict), encoding="utf-8")
+    markdown_path.write_text(
+        render_gate_verdict(verdict, locale=locale, presentation=presentation), encoding="utf-8"
+    )
     return json_path, markdown_path
 
 
@@ -833,7 +890,7 @@ def _authorization_error_detail(exc: OSError | subprocess.CalledProcessError) ->
     if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
         stderr = str(exc.stderr).strip()
         if stderr:
-            detail = f"{detail}; stderr: {stderr}"
+            detail = t("gate.error.", "en", p0=detail, p1=stderr)
     return _redact_subprocess_diagnostic(detail)
 
 
@@ -852,17 +909,24 @@ def query_pull_request(
             merged=raw["merged"],
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(f"invalid pull-request state returned for {repo}#{pr_number}") from exc
+        raise ValueError(
+            t("gate.error.invalid_pull_request_state_returned_for", "en", p0=repo, p1=pr_number)
+        ) from exc
 
 
 def verify_pull_request(anchor: GateAnchor, current: PullRequestState) -> None:
     if current.state != "open" or current.merged:
-        raise GateInvariantError("pull request must remain open and unmerged")
+        raise GateInvariantError(t("gate.error.pull_request_must_remain_open", "en"))
     if current.base_sha != anchor.base_sha or current.head_sha != anchor.head_sha:
         raise GateInvariantError(
-            "stale pull request anchor: "
-            f"expected {anchor.base_sha}/{anchor.head_sha}, "
-            f"found {current.base_sha}/{current.head_sha}"
+            t(
+                "gate.error.stale_pull_request_anchor",
+                "en",
+                p0=anchor.base_sha,
+                p1=anchor.head_sha,
+                p2=current.base_sha,
+                p3=current.head_sha,
+            )
         )
 
 
@@ -883,7 +947,7 @@ def github_actor_permission(
         raise GitHubAuthorizationError(
             step="actor_lookup",
             actor=None,
-            detail="GitHub returned an empty authenticated actor",
+            detail=t("gate.error.GitHub_returned_an_empty_authenticated", "en"),
         )
     try:
         permission = run(
@@ -905,7 +969,7 @@ def github_actor_permission(
         raise GitHubAuthorizationError(
             step="permission_lookup",
             actor=actor,
-            detail="GitHub returned an empty repository permission",
+            detail=t("gate.error.GitHub_returned_an_empty_repository", "en"),
         )
     return actor, permission
 

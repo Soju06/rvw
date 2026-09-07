@@ -88,18 +88,26 @@ from rvw.pipeline import (
     verdict_counts,
 )
 from rvw.policy import PolicyNotFound, evaluate, resolve_auto_policy
+from rvw.presentation import WORKTREE_RULE_WARNING, PresentationConfig, PresentationConfigInvalid
 from rvw.provenance import current_build_provenance, version_label
-from rvw.publish import PublishError, publish_body_review, publish_review
+from rvw.publish import (
+    PublicationLanguageMismatch,
+    PublishError,
+    publish_body_review,
+    publish_review,
+)
 from rvw.registry import (
     EffectiveRegistry,
     Registry,
     load_effective_registry,
     load_registry,
+    load_repo_presentation,
 )
 from rvw.report import render_report
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.sample import SampleReport, sample_lane
 from rvw.schema import Severity, Tier, Verdict, finding_schema, lane_output_schema
+from rvw.special_publication import render_stack_publication
 from rvw.stack import (
     FindingLineage,
     MemberRunRef,
@@ -134,6 +142,7 @@ from rvw.store import (
 )
 from rvw.summary import (
     EffectivePolicySource,
+    ExecutionSummary,
     ProcessFailure,
     ProcessTarget,
     ReviewStatus,
@@ -155,11 +164,12 @@ _PLAN_REPLICAS = 1
 _PLAN_ADJUDICATE_REPLICAS = 3
 DEFAULT_RUN_ROOT = Path("/tmp/rvw")
 
+_CLI_COMMAND = "rvw"
 _EXAMPLES: dict[str, list[str]] = {
     "review": [
-        "rvw review --target 123",
-        "rvw review --target 123 --pause --dynamic-brief /tmp/brief.md",
-        "rvw review --target HEAD --json",
+        f"{_CLI_COMMAND} review --target 123",
+        f"{_CLI_COMMAND} review --target 123 --pause --dynamic-brief /tmp/brief.md",
+        f"{_CLI_COMMAND} review --target HEAD --json",
     ],
     "plan": ["rvw plan --target 123 --json"],
     "gate": [
@@ -629,6 +639,7 @@ def review(
         Option("--allow-worktree-rules", help="Read .rvw rules from the working tree (non-SoT)."),
     ] = False,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     host_gate = _command_host_gate()
     try:
@@ -649,8 +660,18 @@ def review(
                 allow_worktree_rules=allow_worktree_rules,
                 host_gate=host_gate,
                 discovery_mode=discovery_mode,
+                allow_language_fallback=allow_language_fallback,
             )
         )
+    except PublicationLanguageMismatch as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
+    except PresentationConfigInvalid as exc:
+        if json_output:
+            _write_json({"error": exc.reason, "reason": exc.reason, "detail": str(exc)})
+        else:
+            _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_USER_ERROR) from exc
     except EmptyReviewDiffError as exc:
         _empty_review_failure(exc, json_output=json_output)
     except CheckoutVerificationError as exc:
@@ -704,6 +725,7 @@ async def _review_pipeline(
     allow_worktree_rules: bool = False,
     host_gate: HostSlotGate | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
+    allow_language_fallback: bool = False,
 ) -> None:
     resolved_target: ResolvedTarget | None = None
     if publish:
@@ -752,6 +774,7 @@ async def _review_pipeline(
     payload_path: Path | None = None
     if artifacts.target.kind == "pr" and artifacts.target.pr_number is not None:
         publication = publish_review(
+            allow_language_fallback=allow_language_fallback,
             run=artifacts.run,
             repo=artifacts.target.repo,
             pr_number=artifacts.target.pr_number,
@@ -795,29 +818,36 @@ async def _execute_pipeline(
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
     run_handle: RunHandle | None = None,
     lane_sources: dict[str, int] | None = None,
+    presentation: PresentationConfig | None = None,
 ) -> _PipelineArtifacts | None:
     """Execute and persist common review stages without publishing or rendering CLI output."""
     target = resolved_target or _resolve_cli_target(target_spec)
-    if registry_root.expanduser() == DEFAULT_REGISTRY_ROOT:
-        registry = load_effective_registry(
-            target,
-            cwd=Path.cwd(),
-            external_root=registry_root,
-            allow_worktree_rules=allow_worktree_rules,
-        )
-        lanes_root = Path(".")
-    else:
-        registry, lanes_root = _load_registry_root(registry_root)
-    active_lanes = _load_active_lanes(registry, lanes_root, target)
-    if lane_sources is not None and isinstance(registry, EffectiveRegistry):
-        active_ids = {lane.id for lane in active_lanes}
-        for source in registry.sources:
-            if source.lane.id in active_ids:
-                lane_sources[source.source] = lane_sources.get(source.source, 0) + 1
 
     async def execute_with_checkout(checkout: Path | None) -> _PipelineArtifacts | None:
+        source_dir = Path.cwd() if allow_worktree_rules else (checkout or Path.cwd())
+        resolved_presentation = presentation or load_repo_presentation(
+            target, cwd=source_dir, allow_worktree_rules=allow_worktree_rules
+        )
+        if registry_root.expanduser() == DEFAULT_REGISTRY_ROOT:
+            registry = load_effective_registry(
+                target,
+                cwd=source_dir,
+                external_root=registry_root,
+                allow_worktree_rules=allow_worktree_rules,
+            )
+            lanes_root = Path(".")
+        else:
+            registry, lanes_root = _load_registry_root(registry_root)
+        active_lanes = _load_active_lanes(registry, lanes_root, target)
+        if lane_sources is not None and isinstance(registry, EffectiveRegistry):
+            active_ids = {lane.id for lane in active_lanes}
+            for source in registry.sources:
+                if source.lane.id in active_ids:
+                    lane_sources[source.source] = lane_sources.get(source.source, 0) + 1
+
         return await execute_pipeline(
             run_handle=run_handle,
+            presentation=resolved_presentation,
             registry=registry,
             lanes_root=lanes_root,
             target=target,
@@ -843,12 +873,7 @@ async def _execute_pipeline(
             on_pause=lambda message: _console.print(message, markup=False),
             on_warning=lambda message: _error_console.print(message, markup=False),
             host_gate=host_gate,
-            rule_source_warning=(
-                "WARNING: .rvw rules loaded from the working tree via "
-                "--allow-worktree-rules; this run is non-SoT."
-                if allow_worktree_rules
-                else None
-            ),
+            rule_source_warning=(WORKTREE_RULE_WARNING if allow_worktree_rules else None),
             discovery_mode=discovery_mode,
         )
 
@@ -1120,6 +1145,7 @@ def _gate_invariant_failure(
             str(exc),
             inheritance_summary=inheritance_summary,
         ),
+        presentation=artifacts.presentation,
     )
     _error_console.print(str(exc), markup=False)
     raise typer.Exit(EXIT_NOT_FOUND) from exc
@@ -1147,6 +1173,7 @@ def gate(
     execute: Annotated[bool, Option("--execute")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     """Run or resume a fail-closed, artifact-backed pull-request gate."""
 
@@ -1183,6 +1210,7 @@ def gate(
             json_output=json_output,
             host_gate=host_gate,
             discovery_mode=discovery_mode,
+            allow_language_fallback=allow_language_fallback,
         )
     )
 
@@ -1204,6 +1232,7 @@ async def _gate_pipeline(
     json_output: bool,
     host_gate: HostSlotGate | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
+    allow_language_fallback: bool = False,
 ) -> None:
     artifacts: _PipelineArtifacts
     plan: GatePlan
@@ -1350,7 +1379,9 @@ async def _gate_pipeline(
             _error_console.print(message, markup=False)
             raise typer.Exit(EXIT_SYSTEM_ERROR)
         verdict_path = artifacts.run.dir / "gate-verdict.json"
-        rendered_markdown = render_gate_verdict(republish_verdict)
+        rendered_markdown = render_gate_verdict(
+            republish_verdict, presentation=artifacts.presentation
+        )
         try:
             cached_markdown = artifacts.run._load_contained_text(
                 "gate-verdict.md",
@@ -1374,6 +1405,7 @@ async def _gate_pipeline(
             execute=True,
             republish=True,
             json_output=json_output,
+            allow_language_fallback=allow_language_fallback,
         )
         return
     if inherit_run_id is not None and inherited_verdict is None:
@@ -1471,6 +1503,7 @@ async def _gate_pipeline(
                     inheritance_summary=inheritance_summary,
                     kind="pause",
                 ),
+                presentation=artifacts.presentation,
             )
             summary_text = ""
             if inheritance_summary is not None:
@@ -1548,6 +1581,7 @@ async def _gate_pipeline(
                         inheritance_summary=inheritance_summary,
                         actor=actor,
                     ),
+                    presentation=artifacts.presentation,
                 )
                 _error_console.print(message, markup=False)
                 raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
@@ -1574,7 +1608,9 @@ async def _gate_pipeline(
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
 
-    verdict_path, markdown_path = save_gate_verdict(artifacts.run.dir, verdict)
+    verdict_path, markdown_path = save_gate_verdict(
+        artifacts.run.dir, verdict, presentation=artifacts.presentation
+    )
     verdict_markdown = markdown_path.read_text(encoding="utf-8")
     _publish_gate_verdict(
         artifacts=artifacts,
@@ -1586,6 +1622,7 @@ async def _gate_pipeline(
         execute=execute,
         republish=False,
         json_output=json_output,
+        allow_language_fallback=allow_language_fallback,
     )
 
 
@@ -1652,12 +1689,15 @@ def _publish_gate_verdict(
     execute: bool,
     republish: bool,
     json_output: bool,
+    allow_language_fallback: bool = False,
 ) -> None:
     if target.pr_number is None:
         raise GateInvariantError("gate publication requires a pull-request number")
     attempted_at = datetime.now(UTC).isoformat()
     try:
         publication = publish_review(
+            allow_language_fallback=allow_language_fallback,
+            gate_verdict=verdict,
             run=artifacts.run,
             repo=target.repo,
             pr_number=target.pr_number,
@@ -1735,6 +1775,7 @@ def auto(
     base_ref: Annotated[str | None, Option("--base-ref")] = None,
     head_ref: Annotated[str | None, Option("--head-ref")] = None,
     out: Annotated[Path | None, Option("--out")] = None,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     """Compatibility alias of run, using the policy's publication preference."""
     if allow_approve:
@@ -1753,6 +1794,7 @@ def auto(
         base_ref,
         head_ref,
         out,
+        allow_language_fallback,
     )
 
 
@@ -1775,6 +1817,7 @@ def run_command(
     ] = _PLAN_ADJUDICATE_REPLICAS,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
     json_output: Annotated[bool, Option("--json")] = False,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     """Execute a policy-gated review and persist the shared result contract."""
     _run_command(
@@ -1791,6 +1834,7 @@ def run_command(
         base_ref,
         head_ref,
         out,
+        allow_language_fallback,
     )
 
 
@@ -1808,6 +1852,7 @@ def _run_command(
     base_ref: str | None,
     head_ref: str | None,
     out: Path | None,
+    allow_language_fallback: bool = False,
 ) -> None:
     started = time.monotonic()
     runtime = RuntimeSettings(
@@ -1844,6 +1889,8 @@ def _run_command(
         runtime=runtime,
         root=DEFAULT_RUN_ROOT,
     )
+    if allow_language_fallback:
+        process.command.append("--allow-language-fallback")
     stage = "configuration"
     artifacts: PipelineArtifacts | None = None
 
@@ -1914,6 +1961,13 @@ def _run_command(
                             destination=Path(temporary) / "checkout",
                         )
                     stack.enter_context(chdir(repo_dir))
+                stage = "configuration"
+                process.presentation = load_repo_presentation(resolved, cwd=Path.cwd())
+                run.save_presentation(process.presentation)
+                write_artifact_json(
+                    run.dir / "summary.json",
+                    ExecutionSummary(presentation=process.presentation).model_dump(mode="json"),
+                )
                 stage = "policy"
                 effective = resolve_auto_policy(
                     resolved,
@@ -1948,6 +2002,7 @@ def _run_command(
                         discovery_mode=discovery_mode,
                         run_handle=run,
                         lane_sources=process.lane_sources,
+                        presentation=process.presentation,
                     )
                 )
                 if artifacts is None:
@@ -1961,6 +2016,7 @@ def _run_command(
                             artifacts.merged,
                             artifacts.outcome,
                             [],
+                            presentation=process.presentation,
                         ).model_dump(mode="json"),
                     )
                     detail = (
@@ -1975,6 +2031,7 @@ def _run_command(
                         artifacts.merged,
                         artifacts.outcome,
                         decision.blocking,
+                        presentation=process.presentation,
                     ).model_dump(mode="json"),
                 )
                 stage = "publication"
@@ -1982,7 +2039,10 @@ def _run_command(
                     if resolved.kind != "pr" or resolved.pr_number is None:
                         stage = "configuration"
                         raise ValueError("github-comment publication requires a PR target")
-                    publish_review(
+                    publication = publish_review(
+                        allow_language_fallback=(
+                            allow_language_fallback or effective.policy.allow_language_fallback
+                        ),
                         run=run,
                         repo=resolved.repo,
                         pr_number=resolved.pr_number,
@@ -1991,6 +2051,7 @@ def _run_command(
                         outcome=artifacts.outcome,
                         execute=True,
                     )
+                    process.language_fallback_used = publication.language_fallback_used
                 process.status = "block" if decision.verdict == "BLOCK" else "pass"
                 process.exit_code = 1 if decision.verdict == "BLOCK" else 0
                 process.failure = None
@@ -2023,6 +2084,12 @@ def _run_command(
                 )
             )
             code = "invalid_target" if invalid else "target_resolution_failed"
+        if isinstance(exc, PublicationLanguageMismatch):
+            code = exc.reason
+            process.publication_failure = exc.reason
+        if isinstance(exc, PresentationConfigInvalid):
+            code = exc.reason
+            invalid = True
         if isinstance(exc, PolicyNotFound):
             code = "policy_not_found"
         if isinstance(exc, EmptyReviewDiffError):
@@ -2058,11 +2125,22 @@ def _run_command(
                         merged,
                         artifacts.outcome if artifacts else None,
                         [],
+                        presentation=process.presentation,
                     ).model_dump(mode="json"),
                 )
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
         process.duration_ms = max(0, int((time.monotonic() - started) * 1000))
+        with diagnostic_attempt("summary.json"):
+            summary_path = run.dir / "summary.json"
+            final_summary = ExecutionSummary.model_validate_json(summary_path.read_text())
+            if process.publication_failure is not None or process.language_fallback_used:
+                final_summary.publication_failure = process.publication_failure
+                final_summary.language_fallback_used = process.language_fallback_used
+                write_artifact_json(summary_path, final_summary.model_dump(mode="json"))
+            else:
+                process.publication_failure = final_summary.publication_failure
+                process.language_fallback_used = final_summary.language_fallback_used
         with (
             diagnostic_attempt("run.log"),
             (run.dir / "run.log").open("a", encoding="utf-8") as log,
@@ -2205,6 +2283,7 @@ async def _adjudicate_existing_run(
     try:
         outcome = await adjudicate(
             merged,
+            locale=run.load_presentation().locale,
             target=target,
             runtime=CodexRuntime(),
             repo_dir=repo_dir,
@@ -2226,6 +2305,7 @@ async def _adjudicate_existing_run(
 
     summary = summarize_run(run.run_id, discovered, build=build)
     report_md = render_report(
+        presentation=run.load_presentation(),
         target=target,
         merged=merged,
         outcome=outcome,
@@ -2249,6 +2329,7 @@ def report_command(
     try:
         run = RunStore(out_root).open(run_id)
         target = run.load_target()
+        run.load_presentation()
         discovered = run.load_discover()
         merged = run.load_merge()
         outcome = _optional_outcome(run)
@@ -2265,6 +2346,7 @@ def report_command(
         summary = summarize_run(run.run_id, discovered)
     synthesis_text = synthesis.read_text(encoding="utf-8") if synthesis is not None else None
     report_md = render_report(
+        presentation=run.load_presentation(),
         target=target,
         merged=merged,
         outcome=outcome,
@@ -2282,10 +2364,12 @@ def publish_command(
     run_id: Annotated[str, Option("--run")],
     execute: Annotated[bool, Option("--execute")] = False,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     try:
         run = RunStore(out_root).open(run_id)
         target = run.load_target()
+        run.load_presentation()
     except InvalidRunId as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_USER_ERROR) from exc
@@ -2307,15 +2391,20 @@ def publish_command(
     except StageMissing as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_NOT_FOUND) from exc
-    result = publish_review(
-        run=run,
-        repo=target.repo,
-        pr_number=target.pr_number,
-        report_md=report_md,
-        merged=merged,
-        outcome=outcome,
-        execute=execute,
-    )
+    try:
+        result = publish_review(
+            allow_language_fallback=allow_language_fallback,
+            run=run,
+            repo=target.repo,
+            pr_number=target.pr_number,
+            report_md=report_md,
+            merged=merged,
+            outcome=outcome,
+            execute=execute,
+        )
+    except PublicationLanguageMismatch as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
     if execute:
         _console.print(str(result.review_url), markup=False, soft_wrap=True)
     else:
@@ -2488,6 +2577,7 @@ async def _stack_review_pipeline(
             if lineages:
                 presence = await adjudicate_presence(
                     lineages,
+                    locale=artifacts.presentation.locale,
                     pr_number=member.number,
                     member_order=numbers,
                     target=target,
@@ -2524,8 +2614,11 @@ async def _stack_review_pipeline(
     current = resolve_stack(numbers, cwd=Path.cwd(), repo=manifest.repo)
     verify_manifest(manifest, current)
     verify_lineages(manifest, lineages)
-    report_md = render_stack_report(manifest, member_runs, lineages)
+    report_md = render_stack_report(
+        manifest, member_runs, lineages, presentation=artifacts.presentation
+    )
     handle.save_report(report_md)
+    RunHandle(handle.run_id, handle.dir).save_presentation(artifacts.presentation)
     handle.require_complete()
 
     payload = {
@@ -2553,6 +2646,7 @@ def stack_publish(
     execute: Annotated[bool, Option("--execute")] = False,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     """Write or execute one body-only COMMENT review against the stack tip."""
 
@@ -2560,7 +2654,12 @@ def stack_publish(
         handle = StackStore(out_root).open(run_id)
         handle.require_complete()
         manifest = handle.load_manifest()
-        report_md = handle.load_report()
+        handle.load_report()
+        members = handle.load_member_runs()
+        presentation = RunHandle(handle.run_id, handle.dir).load_presentation()
+        report_md = render_stack_publication(
+            manifest, members, handle.load_lineages(), presentation=presentation
+        )
         if execute:
             numbers = [member.number for member in manifest.members]
             current = resolve_stack(
@@ -2571,11 +2670,13 @@ def stack_publish(
             verify_manifest(manifest, current)
         tip = manifest.members[-1]
         result = publish_body_review(
+            allow_language_fallback=allow_language_fallback,
             run_dir=handle.dir,
             repo=manifest.repo,
             pr_number=tip.number,
             commit_id=tip.head_sha,
             body=report_md,
+            locale=presentation.locale,
             execute=execute,
         )
     except (StackRunNotFound, StackStageMissing) as exc:

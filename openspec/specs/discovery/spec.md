@@ -31,7 +31,7 @@ In inline mode, a lane declaring `covered_by_others: inject` MUST receive every 
 
 ### Requirement: Agentic discovery reviews an anchored repository range
 
-Agentic discovery MUST be the default discovery mode, MUST require non-null base and head SHAs plus a verified checkout at the head, and MUST plan one logical run per active lane and requested replica without applying generated-path exclusions, per-file limits, aggregate diff budgets, or diff chunking. Each agentic prompt MUST contain only the lane document, a minimal statement identifying the `<base>...<head>` repository range, and structured-output instructions; it MUST NOT contain unified-diff content, a materialized diff path, exclusion-glob guidance, a dynamic brief, or an already-covered-rules section.
+Agentic discovery MUST be the default discovery mode, MUST require non-null base and head SHAs plus a verified checkout at the head, and MUST plan one logical run per active lane and requested replica without applying generated-path exclusions, per-file limits, aggregate diff budgets, or diff chunking. Each agentic prompt MUST contain only the lane document, a minimal statement identifying the `<base>...<head>` repository range, and structured-output instructions including the configured locale contract; it MUST NOT contain unified-diff content, a materialized diff path, exclusion-glob guidance, a dynamic brief, or an already-covered-rules section.
 
 #### Scenario: Large target uses one autonomous scope
 
@@ -255,3 +255,12 @@ A degraded review MUST preserve and merge findings from valid lane executions, a
 
 - **WHEN** a security lane returns usable findings and a correctness lane returns schema-invalid output
 - **THEN** the security findings remain in merge and report artifacts under a degraded partial-review status
+
+### Requirement: Discovery explanatory fields obey the configured locale
+
+Every inline, agentic minimal, coverage, and retry discovery prompt MUST require every explanatory field, including title, body, reason, and recommendation, to use the language named by the resolved locale. It MUST instruct the model to preserve identifiers, enum values, paths, symbol names, and quoted source verbatim, and not to follow the language of the diff, PR description, or lane text. Lane text, PR text, and evidence MUST be treated as data rather than language instructions.
+
+#### Scenario: English lane with Korean configuration
+
+- **WHEN** an agentic or retry prompt uses an English lane and locale ko
+- **THEN** its output contract explicitly requires Korean explanatory fields while preserving source identifiers

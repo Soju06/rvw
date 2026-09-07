@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from rvw import __version__
+from rvw.i18n import Locale, t
+from rvw.presentation import PresentationConfig
 from rvw.stack import FindingLineage, MemberRunRef, StackManifest
 
 
@@ -22,20 +24,26 @@ def render_stack_report(
     manifest: StackManifest,
     member_runs: Sequence[MemberRunRef],
     lineages: Sequence[FindingLineage],
+    *,
+    locale: Locale = "en",
+    presentation: PresentationConfig | None = None,
 ) -> str:
     """Render PR-local ordinary results and cross-head lineage history separately."""
 
+    if presentation is not None:
+        locale = presentation.locale
+    display_name = presentation.display_name if presentation is not None else "rvw"
     run_by_pr = {item.pr_number: item for item in member_runs}
     lines = [
-        "# rvw stacked PR 리뷰",
+        t("stack.header", locale, display_name=display_name),
         "",
-        f"Stack run ID: `{manifest.run_id}`",
-        f"Repository: `{manifest.repo}`",
-        f"Tip: PR #{manifest.members[-1].number} @ `{manifest.members[-1].head_sha}`",
+        t("stack.run", locale, p0=manifest.run_id),
+        t("stack.repository", locale, p0=manifest.repo),
+        t("stack.tip", locale, p0=manifest.members[-1].number, p1=manifest.members[-1].head_sha),
         "",
-        "## 스택 멤버",
+        t("stack.members_heading", locale),
         "",
-        "| PR | Title | Base | Head |",
+        t("stack.members_columns", locale),
         "| ---: | --- | --- | --- |",
     ]
     lines.extend(
@@ -46,19 +54,19 @@ def render_stack_report(
         )
         for member in manifest.members
     )
-    lines.extend(["", "## PR별 로컬 리뷰"])
+    lines.extend(["", t("stack.local_heading", locale)])
     for member in manifest.members:
         run = run_by_pr.get(member.number)
-        lines.extend(["", f"### PR #{member.number} 로컬 결과", ""])
+        lines.extend(["", t("stack.local_result", locale, p0=member.number), ""])
         if run is None:
-            lines.append("ordinary review artifact missing")
+            lines.append(t("stack.missing", locale))
             continue
         lines.extend(
             [
-                f"Run: `{run.run_id}`",
-                f"Report: `{run.report_path}`",
+                t("stack.member_run", locale, p0=run.run_id),
+                t("stack.member_report", locale, p0=run.report_path),
                 "",
-                "| Verdict | Count |",
+                t("stack.verdict_columns", locale),
                 "| --- | ---: |",
                 f"| CONFIRMED | {run.verdict_counts['CONFIRMED']} |",
                 f"| REJECTED | {run.verdict_counts['REJECTED']} |",
@@ -66,11 +74,11 @@ def render_stack_report(
             ]
         )
 
-    lines.extend(["", "## Stack tip 발견 계보", ""])
+    lines.extend(["", t("stack.lineage_heading", locale), ""])
     if not lineages:
-        lines.append("추적할 actionable finding이 없습니다.")
+        lines.append(t("stack.empty", locale))
     for lineage in lineages:
-        location = f"{lineage.file}:{lineage.line if lineage.line is not None else 'unknown'}"
+        location = f"{lineage.file}:{lineage.line if lineage.line is not None else t('common.unknown', locale)}"
         pr_timeline = " → ".join(
             f"PR #{observation.pr_number}" for observation in lineage.observations
         )
@@ -81,21 +89,26 @@ def render_stack_report(
             [
                 f"### {_state_label(lineage)} — `{lineage.rule_id}`",
                 "",
-                f"- Lineage: `{lineage.lineage_id}`",
-                f"- Origin: PR #{lineage.origin_pr}, run `{lineage.origin_run_id}`, "
-                f"finding `{lineage.origin_finding_id}`",
-                f"- Origin location: `{location}`",
-                f"- Severity: `{lineage.severity.value}`",
-                f"- PR timeline: {pr_timeline}",
-                f"- Presence: {presence_timeline}",
+                t("stack.lineage", locale, p0=lineage.lineage_id),
+                t(
+                    "stack.origin",
+                    locale,
+                    p0=lineage.origin_pr,
+                    p1=lineage.origin_run_id,
+                    p2=lineage.origin_finding_id,
+                ),
+                t("stack.location", locale, p0=location),
+                t("stack.severity", locale, p0=lineage.severity.value),
+                t("stack.timeline", locale, p0=pr_timeline),
+                t("stack.presence", locale, p0=presence_timeline),
                 "",
-                "#### 원본 claim",
+                t("stack.claim_heading", locale),
                 "",
                 *lineage.bodies,
                 "",
-                "#### Head별 근거",
+                t("stack.evidence_heading", locale),
                 "",
-                "| PR | Presence | Votes | Reason | Evidence |",
+                t("stack.evidence_columns", locale),
                 "| ---: | --- | --- | --- | --- |",
             ]
         )
@@ -109,7 +122,7 @@ def render_stack_report(
         )
         lines.append("")
 
-    lines.extend(["---", "", f"Generated by rvw {__version__}."])
+    lines.extend(["---", "", t("stack.footer", locale, p0=__version__, display_name=display_name)])
     return "\n".join(lines).rstrip() + "\n"
 
 

@@ -154,3 +154,54 @@ it("rejects incompatible failure and unknown process fields", () => {
     expect(checkConclusionForResult(null, JSON.stringify(processFixture(overrides))).conclusion).toBe("neutral");
   }
 });
+
+it("consumes the resolved presentation snapshot from process and summary", () => {
+  const presentation = {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko", footer: null};
+  expect(checkConclusionForResult(0, JSON.stringify(processFixture({presentation}))).conclusion).toBe("success");
+  expect(parseArtifactSummary(JSON.stringify(summaryFixture({presentation})))).toMatchObject({presentation});
+});
+it.each([
+  null,
+  {display_name: "", short_name: "rvw", locale: "en", footer: null},
+  {display_name: "rvw", short_name: "rvw", locale: "fr", footer: null},
+  {display_name: "rvw", short_name: "rvw\nname", locale: "en", footer: null},
+  {display_name: "rvw", short_name: "rvw", locale: "en", footer: null, extra: true},
+])("rejects malformed presentation snapshots %#", (presentation) => {
+  expect(checkConclusionForResult(0, JSON.stringify(processFixture({presentation}))).conclusion).toBe("neutral");
+  expect(() => parseArtifactSummary(JSON.stringify(summaryFixture({presentation})))).toThrow();
+});
+
+it("defaults legacy process and summary contracts without presentation", () => {
+  const process: Record<string, unknown> = processFixture();
+  const summary: Record<string, unknown> = summaryFixture();
+  delete process.presentation;
+  delete summary.presentation;
+  expect(checkConclusionForResult(0, JSON.stringify(process)).conclusion).toBe("success");
+  expect(parseArtifactSummary(JSON.stringify(summary)).presentation).toEqual({
+    display_name: "rvw", short_name: "rvw", locale: "en", footer: null,
+  });
+});
+
+it("accepts strict language publication facts from Python", () => {
+  const presentation = {display_name: "VOOY", short_name: "Review", locale: "ko", footer: null};
+  const process = processFixture({presentation, status: "infra_failed", exit_code: 3,
+    failure: {code: "publication_language_mismatch", detail: "language"},
+    publication_failure: "publication_language_mismatch", language_fallback_used: false});
+  expect(checkConclusionForResult(3, JSON.stringify(process)).reasonCode).toBe("publication_language_mismatch");
+  const summary = summaryFixture({presentation, publication_failure: null, language_fallback_used: true});
+  expect(parseArtifactSummary(JSON.stringify(summary))).toMatchObject({language_fallback_used: true});
+  expect(() => parseArtifactSummary(JSON.stringify({...summary, language_fallback_used: "true"}))).toThrow();
+  expect(() => parseArtifactSummary(JSON.stringify({...summary, publication_failure: ""}))).toThrow();
+});
+
+it("accepts and preserves publication language outcome facts", () => {
+  const publication = {publication_failure: "publication_language_mismatch", language_fallback_used: true};
+  expect(checkConclusionForResult(0, JSON.stringify(processFixture(publication)))).toMatchObject({conclusion: "success", ...publication});
+  expect(parseArtifactSummary(JSON.stringify(summaryFixture(publication)))).toMatchObject(publication);
+});
+it.each([{publication_failure: 1}, {language_fallback_used: "true"}, {language_fallback_used: null}])(
+  "rejects invalid publication language contract %#", (publication) => {
+    expect(checkConclusionForResult(0, JSON.stringify(processFixture(publication))).conclusion).toBe("neutral");
+    expect(() => parseArtifactSummary(JSON.stringify(summaryFixture(publication)))).toThrow();
+  },
+);

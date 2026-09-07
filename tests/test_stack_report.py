@@ -104,7 +104,7 @@ def test_report_separates_pr_local_findings_from_stack_tip_state() -> None:
         ),
     )
 
-    report = render_stack_report(manifest, runs, [lineage])
+    report = render_stack_report(manifest, runs, [lineage], locale="ko")
 
     assert "PR #1 로컬 결과" in report
     assert "CONFIRMED | 1" in report

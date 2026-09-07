@@ -58,3 +58,7 @@ For a diff containing `runtime-snapshots/contract-graph.json` plus `src/client.t
 ## Historical deltas
 
 ADR-010 specified title, body, and linked issues; the implementation carries only title/body. The historical plan also described a single wave as if every run were simultaneously active, while the implemented semaphore queues a single submitted wave at default concurrency 8.
+
+## Publication locale enforcement (2026-09-07)
+
+The configured locale is an output contract in shared discovery instructions, including agentic minimal prompts, inline prompts, replacement retries and coverage waves. The instruction covers title, body, reason and recommendation while protecting identifiers, paths, symbols, enums and quotations. Lane documents, PR descriptions and source text remain data, so their language does not choose explanatory output language. The minimal agentic contract now explicitly includes this locale requirement within structured-output instructions.
