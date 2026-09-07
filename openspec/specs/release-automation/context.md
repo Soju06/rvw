@@ -6,9 +6,10 @@ This capability governs repository release preparation and publication rather th
 
 ## Key decisions
 
-- Container consumers explicitly pin both the reusable workflow version and either the
-  release image version or its immutable digest. Each pushed release tag publishes the
-  matching image plus mutable `latest`; reproducible callers do not consume `latest`.
+- Container consumers explicitly pin either the release image version or its immutable
+  digest. Each pushed release tag publishes the matching image plus mutable `latest`;
+  reproducible callers do not consume `latest`. The reusable review workflow that once
+  carried a second pin was retired on 2026-09-07 (see the container-ci-packaging context).
 - The 2026-07-28 v0.2.0 incident demonstrated that manually updating `src/rvw/_version.py` while leaving `pyproject.toml` stale can rebuild an already-published distribution. release-please now writes every version surface, with `tests/test_version_sync.py` retaining a regression guard.
 - The release-please manifest starts at the already-published `0.2.0`, so automation proposes only later versions.
 - GitHub does not start a new workflow from a tag or release created with the repository

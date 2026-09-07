@@ -6,10 +6,16 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 
 ## Key decisions and measured basis
 
+- Owner decision (2026-09-07): rvw keeps two review surfaces, the CLI on a host or in
+  the project image and the GitHub App webhook path. The reusable GitHub Actions review
+  workflow was retired because it had no consumers, duplicated the Codex credential into
+  every consumer repository, and could not use the App's egress-proxy credential
+  injection; its measured basis is recorded in the container-ci-packaging context.
 - 2026-09-02: The project image packages Python 3.12, Node 24, Codex 0.152.0,
-  rvw and the common lanes behind one argument-preserving entry point. A protected
-  `pull_request_target` caller invokes `rvw auto` against an immutable head checkout;
-  the 0/1 auto status is the job check and COMMENT remains narrative output.
+  rvw and the common lanes behind one argument-preserving entry point. It was first
+  driven by a protected base-side Actions caller invoking `rvw auto` against an immutable
+  head checkout, with the 0/1 auto status as the job check and COMMENT as narrative
+  output; that caller is retired and the image is now invoked directly or by the App.
 - 2026-09-01: Review, auto, gate, stack review, and plan select agentic discovery by default and expose `inline` as the compatibility path. Sampling stays inline because it compares schema variants over a fixed diff fixture.
 - Owner decisions (2026-07-30 and 2026-08-12): ordinary `review`, `gate`, and `auto` runs keep one discovery replica because lanes x replicas x concurrent rvw instances overloaded `codex-lb`; four concurrent runs were observed demanding up to 64 sessions. Adjudication now defaults independently to three replicas because production reviews dispatched a median of one adjudication run versus eight discovery runs, so majority evidence adds token cost without increasing peak executor sessions.
 - Owner decision (2026-08-06): runtime wave concurrency defaults to eight after concurrent rvw runs saturated the shared `codex-lb` account pool, triggering local `account_stream_cap` overload, 30-second retry sleeps, and lane INVALIDs. Operators can set a positive `--concurrency` value on every command capable of runtime execution.
@@ -37,8 +43,10 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 
 ## Constraints
 
-- Container CI mounts the target repository read-only at `/workspace`; project `.rvw/`
-  policy and lanes continue to resolve from the immutable base-side contract.
+- Direct container runs mount the target checkout read-only at `/workspace` behind a
+  read-only container root, as `docs/container-image.md` shows; the App Sandbox
+  provisions its own checkout and enforces its own boundary. Project `.rvw/` policy and
+  lanes resolve from the captured base commit, not from the pull-request head.
 - `review` does not itself apply the auto YAML policy; `auto` translates compatibility options into the shared `run` policy-gated command.
 - `adjudicate --run` requires persisted target, discovery, and merge inputs and never repeats discovery. A failed attempt may update `run.json` with its error while retaining the previous outcome and report.
 - Agentic execution without `--repo-dir` provisions a checkout used by discovery and adjudication. Inline execution without a checkout can render unadjudicated findings, which a confirmed-only policy does not block.
@@ -98,4 +106,4 @@ A one-replica suggestion is dropped. A two-replica confirmed warning is promoted
 
 The 132-line `/tmp/rvw-surfaces-analysis.md` audit inspected v0.11.5 (`613201f`) and passed all 12 main specifications before its failure injections. A failed review summary plus empty merge returned `review → 3` but `auto → PASS/0`; infrastructure and missing-policy auto injections returned exit 1 with empty stdout (`src/rvw/cli.py:669–676,1666–1686,1709–1756`, `src/rvw/summary.py:106–113`, `src/rvw/adjudicate.py:318–326`, baseline lines). The common `run` boundary now checks execution health before deterministic policy evaluation and reserves 0/1/2/3 for pass/block/invalid/infra.
 
-The audit also found that Actions and App checked out event SHAs without passing them to Python, and that a PR URL did not bind the numbered `gh pr view/diff` calls (`src/rvw/target.py:172–212`, `.github/workflows/rvw-review.yml:39–75`, `cloud/worker/src/sandbox-auth.ts:107–119`, baseline lines). Event adapters now pass both anchors and Python binds repository operations. Host agentic execution already provisioned a checkout when `--repo-dir` was absent; the prior constraint claiming it always skipped adjudication was stale. `run` owns policy-gated automation while `review` retains its existing interactive/pause role.
+The audit also found that Actions and App checked out event SHAs without passing them to Python, and that a PR URL did not bind the numbered `gh pr view/diff` calls (`src/rvw/target.py:172–212`, `.github/workflows/rvw-review.yml:39–75`, `cloud/worker/src/sandbox-auth.ts:107–119`, baseline lines). The App adapter now passes both anchors and Python binds repository operations; the Actions adapter did the same until its 2026-09-07 retirement. Host agentic execution already provisioned a checkout when `--repo-dir` was absent; the prior constraint claiming it always skipped adjudication was stale. `run` owns policy-gated automation while `review` retains its existing interactive/pause role.
