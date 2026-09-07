@@ -1,3 +1,4 @@
+import {t} from "./i18n";
 import {parsePresentation, type PresentationConfig} from "./presentation";
 import {artifactManifest} from "./artifacts";
 
@@ -164,16 +165,16 @@ export function checkConclusionForResult(
       throw new Error(`SDK exit ${exitCode} disagrees with process exit ${payload.exit_code}`);
     }
     if (payload.status === "pass") {
-      return {terminalState: "completed", conclusion: "success", reason: "rvw run passed"};
+      return {terminalState: "completed", conclusion: "success", reason: t("process_passed", "en", {display_name: "rvw"})};
     }
     if (payload.status === "block") {
-      return {terminalState: "completed", conclusion: "failure", reason: "rvw run found a blocking result"};
+      return {terminalState: "completed", conclusion: "failure", reason: t("process_blocked", "en", {display_name: "rvw"})};
     }
     return {terminalState: "failed", conclusion: "neutral", reason: payload.failure === null
-      ? `rvw run ${payload.status}` : `${payload.failure.code}: ${payload.failure.detail}`};
+      ? t("process_status", "en", {display_name: "rvw", status: payload.status}) : `${payload.failure.code}: ${payload.failure.detail}`};
   } catch (error) {
     return {terminalState: "failed", conclusion: "neutral", reason:
-      `rvw process result was missing or invalid: ${error instanceof Error ? error.message : String(error)}`};
+      t("process_invalid", "en", {display_name: "rvw", error: error instanceof Error ? error.message : String(error)})};
   }
 }
 

@@ -201,6 +201,7 @@ async def execute_pipeline(
             )
             failed_summary = summarize_run(run.run_id, discovered, error=error, build=build)
             report_md = render_report(
+                presentation=presentation,
                 target=target,
                 merged=merged,
                 outcome=None,
@@ -226,6 +227,7 @@ async def execute_pipeline(
         run.save_outcome(outcome)
 
     report_md = render_report(
+        presentation=presentation,
         target=target,
         merged=merged,
         outcome=outcome,

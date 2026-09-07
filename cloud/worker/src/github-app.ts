@@ -1,3 +1,4 @@
+import {t} from "./i18n";
 import type {CheckConclusion} from "./review-job-contract";
 
 const GITHUB_API = "https://api.github.com";
@@ -268,7 +269,7 @@ export async function createCheckRun(
         external_id: input.jobId,
         started_at: new Date().toISOString(),
         ...(input.detailsUrl === undefined ? {} : {details_url: input.detailsUrl}),
-        output: {title: "rvw review in progress", summary: `Job ${input.jobId}`},
+        output: {title: t("check_started", "en", {display_name: "rvw"}), summary: t("job", "en", {job_id: input.jobId})},
       }),
     },
     fetcher,

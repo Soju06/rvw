@@ -1,3 +1,4 @@
+import {t} from "./i18n";
 import {DurableObject} from "cloudflare:workers";
 import type {Process} from "@cloudflare/sandbox";
 
@@ -129,9 +130,9 @@ function statusView(record: JobRecord): JobStatus {
 }
 
 function titleFor(mapping: ReviewResultMapping): string {
-  if (mapping.conclusion === "success") return "rvw review passed";
-  if (mapping.conclusion === "failure") return "rvw review found blockers";
-  return "rvw review could not complete";
+  if (mapping.conclusion === "success") return t("check_passed", "en", {display_name: "rvw"});
+  if (mapping.conclusion === "failure") return t("check_blocked", "en", {display_name: "rvw"});
+  return t("check_incomplete", "en", {display_name: "rvw"});
 }
 
 function summaryText(
@@ -141,7 +142,7 @@ function summaryText(
 ): string {
   const lines = [mapping.reason];
   if (summary !== null) lines.push(summary.markdown);
-  lines.push(`Artifacts: job ${jobId}`);
+  lines.push(t("artifacts", "en", {job_id: jobId}));
   return lines.join("\n\n");
 }
 
@@ -425,8 +426,8 @@ export class RvwReviewJob extends DurableObject<Env> {
         repo: record.message.repo,
         checkRunId: record.checkRunId,
         conclusion: "neutral",
-        title: "rvw review could not complete",
-        summary: `${reason}\n\nArtifacts: job ${record.jobId}`,
+        title: t("check_incomplete", "en", {display_name: "rvw"}),
+        summary: `${reason}\n\n${t("artifacts", "en", {job_id: record.jobId})}`,
       });
       return true;
     } catch (error) {
@@ -713,7 +714,7 @@ export class RvwReviewJob extends DurableObject<Env> {
     ]);
     let mapping = checkConclusionForResult(exitCode, processJson ?? "");
     if (record.artifactContractInvalid) {
-      mapping = {terminalState: "failed", conclusion: "neutral", reason: "review artifact manifest was invalid or inconsistent"};
+      mapping = {terminalState: "failed", conclusion: "neutral", reason: t("manifest_invalid")};
     }
     if (overrideReason !== undefined) {
       mapping = {terminalState: "failed", conclusion: "neutral", reason: overrideReason};
@@ -725,7 +726,7 @@ export class RvwReviewJob extends DurableObject<Env> {
     } catch (error) {
       if (mapping.terminalState === "completed") {
         mapping = {terminalState: "failed", conclusion: "neutral",
-          reason: `review summary was invalid: ${errorMessage(error)}`};
+          reason: t("summary_invalid", "en", {error: errorMessage(error)})};
       }
     }
     const token = await this.token(record, config.githubAppId);
@@ -751,7 +752,7 @@ export class RvwReviewJob extends DurableObject<Env> {
 
   private async timeOut(record: JobRecord, config: RequiredConfig): Promise<void> {
     const minutes = deadlineMinutes(this.env.RVW_JOB_DEADLINE_MINUTES);
-    const reason = `rvw review exceeded the ${minutes}-minute hard deadline`;
+    const reason = t("deadline", "en", {display_name: "rvw", minutes});
     record = {
       ...record,
       conclusion: "neutral",
@@ -774,7 +775,7 @@ export class RvwReviewJob extends DurableObject<Env> {
       if (record.checkUpdatePending === true) {
         await this.settleNeutralCheck(
           record,
-          record.reason ?? "rvw review ended without a publishable result",
+          record.reason ?? t("ended", "en", {display_name: "rvw"}),
           config.githubAppId,
         );
       }
@@ -801,13 +802,13 @@ export class RvwReviewJob extends DurableObject<Env> {
       await configureOutbound(sandbox, config.codexProxyHost, token);
       const process = await sandbox.getProcess(record.processId);
       if (process === null) {
-        record = await this.transition(record, "publishing", "Sandbox process record disappeared");
+        record = await this.transition(record, "publishing", t("process_disappeared"));
         await this.finishPublishing(
           record,
           null,
           null,
           config,
-          "Sandbox process record disappeared",
+          t("process_disappeared"),
         );
         return;
       }

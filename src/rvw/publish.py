@@ -2,7 +2,7 @@
 
 Inline-anchor fallback is deliberately bulk and bounded: publication first attempts
 one review containing every inline anchor. If GitHub rejects that review with HTTP
-422, all inline comments move under ``### 앵커 실패 항목`` in the review body and
+422, all inline comments move under ``the inline-anchor fallback section`` in the review body and
 the whole review is retried once. GitHub rejects the complete review when any one
 anchor is invalid, while per-comment probing would cost N API calls; this strategy
 is deterministic and capped at two calls.
@@ -19,6 +19,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from rvw.adjudicate import AdjudicationOutcome
+from rvw.i18n import Locale, t
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.report import render_group_item
 from rvw.schema import Verdict
@@ -26,7 +27,6 @@ from rvw.store import RunHandle
 
 _HTTP_STATUS = re.compile(r"(?:HTTP\s+|status(?: code)?[=: ]+)(?P<status>[1-5][0-9]{2})", re.I)
 _COMMIT_ID = re.compile(r"^[0-9a-f]{40}$")
-_CONFIRMED_HEADING = "## 확정 발견 (CONFIRMED)"
 
 
 class PublishResult(BaseModel):
@@ -88,12 +88,14 @@ def _body_without_inline(
     merged: MergeResult,
     outcome: AdjudicationOutcome | None,
     inline_keys: set[str],
+    *,
+    locale: Locale = "en",
 ) -> str:
-    if not inline_keys or outcome is None or _CONFIRMED_HEADING not in report_md:
+    if not inline_keys or outcome is None or t("report.confirmed_heading", locale) not in report_md:
         return report_md
 
-    start = report_md.index(_CONFIRMED_HEADING)
-    next_section = report_md.find("\n## ", start + len(_CONFIRMED_HEADING))
+    start = report_md.index(t("report.confirmed_heading", locale))
+    next_section = report_md.find("\n## ", start + len(t("report.confirmed_heading", locale)))
     if next_section < 0:
         next_section = len(report_md)
     before = report_md[:start].rstrip()
@@ -106,8 +108,8 @@ def _body_without_inline(
     sections = [before]
     if retained:
         sections.append(
-            f"{_CONFIRMED_HEADING}\n\n"
-            + "\n\n".join(render_group_item(group, outcome) for group in retained)
+            f"{t('report.confirmed_heading', locale)}\n\n"
+            + "\n\n".join(render_group_item(group, outcome, locale=locale) for group in retained)
         )
     if after:
         sections.append(after)
@@ -119,6 +121,7 @@ def _payload(
     body: str,
     inline_groups: list[CollapseGroup],
     outcome: AdjudicationOutcome | None,
+    locale: Locale = "en",
 ) -> dict[str, object]:
     payload: dict[str, object] = {"event": "COMMENT", "body": body}
     if inline_groups:
@@ -127,7 +130,7 @@ def _payload(
                 "path": group.file,
                 "line": group.line,
                 "side": "RIGHT",
-                "body": render_group_item(group, outcome),
+                "body": render_group_item(group, outcome, locale=locale),
             }
             for group in inline_groups
         ]
@@ -138,22 +141,26 @@ def _json_text(payload: dict[str, object]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def _review_url(raw: str) -> str:
+def _review_url(raw: str, *, locale: Locale = "en") -> str:
     try:
         value = json.loads(raw)["html_url"]
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise PublishError("GitHub response did not contain html_url") from exc
+        raise PublishError(t("publish.missing_url", locale)) from exc
     if not isinstance(value, str):
-        raise PublishError("GitHub response html_url was not a string")
+        raise PublishError(t("publish.invalid_url", locale))
     return value
 
 
-def _fallback_body(body: str, groups: list[CollapseGroup], outcome: AdjudicationOutcome) -> str:
+def _fallback_body(
+    body: str, groups: list[CollapseGroup], outcome: AdjudicationOutcome, *, locale: Locale = "en"
+) -> str:
     items = []
     for group in groups:
-        line = group.line if group.line is not None else "unknown"
-        items.append(f"#### `{group.file}:{line}`\n\n{render_group_item(group, outcome)}")
-    return body.rstrip() + "\n\n### 앵커 실패 항목\n\n" + "\n\n".join(items) + "\n"
+        line = group.line if group.line is not None else t("common.unknown", locale)
+        items.append(
+            f"#### `{group.file}:{line}`\n\n{render_group_item(group, outcome, locale=locale)}"
+        )
+    return body.rstrip() + t("publish.fallback_heading", locale) + "\n\n".join(items) + "\n"
 
 
 def publish_review(
@@ -165,13 +172,14 @@ def publish_review(
     merged: MergeResult,
     outcome: AdjudicationOutcome | None,
     execute: bool,
+    locale: Locale = "en",
 ) -> PublishResult:
     """Build or execute one GitHub COMMENT review from persisted run artifacts."""
 
     inline_groups = _confirmed_inline_groups(merged, outcome)
     inline_keys = {group.key for group in inline_groups}
-    body = _body_without_inline(report_md, merged, outcome, inline_keys)
-    payload = _payload(body=body, inline_groups=inline_groups, outcome=outcome)
+    body = _body_without_inline(report_md, merged, outcome, inline_keys, locale=locale)
+    payload = _payload(body=body, inline_groups=inline_groups, outcome=outcome, locale=locale)
     payload_text = _json_text(payload)
 
     if not execute:
@@ -198,20 +206,21 @@ def publish_review(
         if exc.status_code != 422 or not inline_groups or outcome is None:
             raise
         fallback = _payload(
-            body=_fallback_body(body, inline_groups, outcome),
+            body=_fallback_body(body, inline_groups, outcome, locale=locale),
             inline_groups=[],
             outcome=outcome,
+            locale=locale,
         )
         raw = _run(command, _json_text(fallback))
         return PublishResult(
-            review_url=_review_url(raw),
+            review_url=_review_url(raw, locale=locale),
             inline_count=0,
             body_fallback_count=len(inline_groups),
             state="commented",
         )
 
     return PublishResult(
-        review_url=_review_url(raw),
+        review_url=_review_url(raw, locale=locale),
         inline_count=len(inline_groups),
         body_fallback_count=0,
         state="commented",
@@ -226,12 +235,13 @@ def publish_body_review(
     commit_id: str,
     body: str,
     execute: bool,
+    locale: Locale = "en",
 ) -> PublishResult:
     """Persist and optionally send one body-only GitHub COMMENT review."""
 
     if _COMMIT_ID.fullmatch(commit_id) is None:
-        raise ValueError("stack publication commit_id must be a 40-character lowercase SHA")
-    payload = _payload(body=body, inline_groups=[], outcome=None)
+        raise ValueError(t("publish.invalid_commit", locale))
+    payload = _payload(body=body, inline_groups=[], outcome=None, locale=locale)
     payload["commit_id"] = commit_id
     payload_text = _json_text(payload)
     (run_dir / "publish-payload.json").write_text(
@@ -257,7 +267,7 @@ def publish_body_review(
     ]
     raw = _run(command, payload_text)
     return PublishResult(
-        review_url=_review_url(raw),
+        review_url=_review_url(raw, locale=locale),
         inline_count=0,
         body_fallback_count=0,
         state="commented",

@@ -6,9 +6,9 @@
 
 ## 2. Locale catalogs without content-selection changes
 
-- [ ] 2.1 Introduce Python ko/en catalogs and t(), migrate all report/publish/gate/stack renderer chrome while preserving diagnostic content selection.
-- [ ] 2.2 Introduce Worker ko/en catalogs and migrate existing early/final chrome without changing content selection.
-- [ ] 2.3 Add Python formatting/key parity and Hangul-literal guards plus Vitest parity coverage; synchronize catalog specs/context, verify, and commit feat(i18n): move renderer and Worker chrome into ko/en catalogs.
+- [x] 2.1 Introduce Python ko/en catalogs and t(), migrate all report/publish/gate/stack renderer chrome while preserving diagnostic content selection.
+- [x] 2.2 Introduce Worker ko/en catalogs and migrate existing early/final chrome without changing content selection.
+- [x] 2.3 Add Python formatting/key parity and Hangul-literal guards plus Vitest parity coverage; synchronize catalog specs/context, verify, and commit feat(i18n): move renderer and Worker chrome into ko/en catalogs.
 
 ## 3. Human publication and App check presentation
 

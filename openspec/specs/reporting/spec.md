@@ -214,3 +214,12 @@ The final `process.json` artifact manifest MUST enumerate every regular file wri
 
 - **WHEN** review ends before later stage files exist
 - **THEN** the manifest lists the files actually retained, and uploading those files does not require absent later-stage artifacts
+
+### Requirement: Renderer chrome uses complete locale catalogs
+
+Every human-facing chrome string in ordinary, publication, gate, and stack renderers MUST come from a locale catalog selected by the resolved presentation snapshot. Korean and English catalogs MUST have identical key sets and compatible declared formatting arguments; formatting each key MUST succeed. Renderer modules MUST contain no Hangul prose literals outside catalogs. Identifiers, enums, paths, and source code MUST remain unchanged.
+
+#### Scenario: English snapshot is rendered
+
+- **WHEN** an existing run with locale en is rendered
+- **THEN** all renderer chrome is English and the same keys exist in the Korean catalog

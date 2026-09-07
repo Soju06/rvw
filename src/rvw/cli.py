@@ -2249,6 +2249,7 @@ async def _adjudicate_existing_run(
 
     summary = summarize_run(run.run_id, discovered, build=build)
     report_md = render_report(
+        presentation=run.load_presentation(),
         target=target,
         merged=merged,
         outcome=outcome,
@@ -2289,6 +2290,7 @@ def report_command(
         summary = summarize_run(run.run_id, discovered)
     synthesis_text = synthesis.read_text(encoding="utf-8") if synthesis is not None else None
     report_md = render_report(
+        presentation=run.load_presentation(),
         target=target,
         merged=merged,
         outcome=outcome,
@@ -2549,7 +2551,9 @@ async def _stack_review_pipeline(
     current = resolve_stack(numbers, cwd=Path.cwd(), repo=manifest.repo)
     verify_manifest(manifest, current)
     verify_lineages(manifest, lineages)
-    report_md = render_stack_report(manifest, member_runs, lineages)
+    report_md = render_stack_report(
+        manifest, member_runs, lineages, presentation=artifacts.presentation
+    )
     handle.save_report(report_md)
     handle.require_complete()
 

@@ -2,7 +2,7 @@
 
 ## Purpose and scope
 
-This capability makes the review inspectable before any network action and translates persisted artifacts into a Korean Markdown report and GitHub COMMENT review. Normative behavior is in [spec.md](spec.md).
+This capability makes the review inspectable before any network action and translates persisted artifacts into a localized diagnostic Markdown report and GitHub COMMENT review. Normative behavior is in [spec.md](spec.md).
 
 ## Key decisions and measured basis
 
@@ -12,7 +12,7 @@ This capability makes the review inspectable before any network action and trans
 - The coverage table makes a zero-finding valid lane distinguishable from an all-INVALID lane and from a lane that never activated.
 - Persisted coverage keeps exact replica-chunk entries for fail-closed validation, while the report derives readable per-lane dispatched and valid totals. Diff-budget output also exposes the number and file placement of prompt chunks.
 - `run.json` is the shared strict status contract for persistence, CLI JSON, and Markdown. It records running, complete, degraded, or failed state, structured failed-lane executions, exact coverage totals, an optional run-level infrastructure error, and the immutable build identity that produced the run.
-- Only `## 종합` is author-written. Finding identity, votes, evidence, folds, coverage, and diff-budget accounting remain machine-generated.
+- Only the localized synthesis section is author-written. Finding identity, votes, evidence, folds, coverage, and diff-budget accounting remain machine-generated.
 - PR #1119 supplied concrete scale: 39/39 discovery runs produced 21 findings, merge produced 13 groups, and folds rendered five review items. DISCOVER took about 410s and ADJUDICATE about 197s.
 - That run excluded 2,846,073 generated characters (about 2.84 MB) and reviewed 26,195 source characters, making the exclusion accounting a material report fact rather than a hidden prompt optimization.
 - One rejected inline anchor causes GitHub to reject the entire review with 422. Bulk body fallback bounds publication at two API calls instead of probing N comments.
@@ -29,7 +29,7 @@ This capability makes the review inspectable before any network action and trans
 
 ## Constraints
 
-- Reports are rendered in Korean headings and prose labels.
+- Report headings and prose labels come from complete Korean/English catalogs selected by the presentation snapshot. Missing configuration defaults to English.
 - Pattern folding applies only when every member is included in the rendered verdict subset.
 - Only CONFIRMED, anchorable, line-bearing groups become inline comments.
 - Dry-run results use the same `commented` state model even though no review URL exists.
@@ -82,3 +82,7 @@ ordinary `publish` retains the historical behavior described above.
 The `/tmp/rvw-surfaces-analysis.md` audit at v0.11.5 (`613201f`) found three incompatible artifact lifetimes: host retained stage directories; Actions deleted `/tmp` with its container and uploaded nothing; App copied four stage names by parsing stdout and exported seven hardcoded names. `target.json`, `run.json`, and runtime subtrees were omitted (`.github/workflows/rvw-review.yml:62–75`, `cloud/worker/src/review-job.ts:130–150,709–730`, `cloud/worker/src/artifacts.ts:1–17`, baseline lines). The explicit artifact directory and recursive file manifest remove the stdout/copy dependency and retain partial stages and runtime evidence.
 
 App also independently counted findings/coverage using a maximum of two totals and did not reject zero VALID coverage (`cloud/worker/src/review-job-contract.ts:116–195`, `cloud/worker/src/review-job.ts:178–204`, baseline lines). Python `summary.json` now supplies lane counts, uncovered lane-hunks, merged finding severity counts, adjudication verdict counts, policy-blocking identifiers, and common Markdown for both adapters. Empty counts require interpretation alongside `process.json`; they cannot certify successful execution. Manifest self-size is stabilized before final bytes are written.
+
+## Locale catalogs (2026-09-07)
+
+The owner requested first-class i18n after the publication audit found Korean renderer headings combined with model explanations in multiple languages. Python catalogs own ordinary report, publication, gate, and stack chrome; Worker catalogs own bootstrap and terminal check chrome. Catalog migration preserves diagnostic content selection. Key parity, formatting argument compatibility, and a renderer Hangul-literal scan catch drift. The configured locale selects chrome; it does not translate code quotations, identifiers, or finding facts.

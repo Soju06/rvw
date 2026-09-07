@@ -1,3 +1,4 @@
+import {t} from "./i18n";
 import {idempotencyKey, validateReviewJobMessage, type ReviewJobMessage} from "./webhook";
 
 const FINAL_DELIVERY_ATTEMPT = 4;
@@ -20,7 +21,7 @@ export async function consumeReviewJobs(batch: MessageBatch<unknown>, env: Env):
         );
         await env.RVW_REVIEW_JOB.getByName(previousKey).supersede(
           previousKey,
-          `superseded by ${body.jobId}`,
+          t("superseded", "en", {job_id: body.jobId}),
         );
       }
       await env.RVW_REVIEW_JOB.getByName(body.idempotencyKey).start({
@@ -43,7 +44,7 @@ export async function consumeReviewJobs(batch: MessageBatch<unknown>, env: Env):
           const finalBody = validateReviewJobMessage(queuedMessage.body);
           await env.RVW_REVIEW_JOB.getByName(finalBody.idempotencyKey).failStart(
             finalBody,
-            `Queue retries exhausted: ${reason}`,
+            t("queue_exhausted", "en", {error: reason}),
           );
         } catch (finalizeError) {
           console.error(

@@ -586,7 +586,7 @@ def test_review_end_to_end_writes_all_stages_and_json_shape(
     }
     assert payload["build"] == summary["build"]
     assert str(summary["build"]["build_id"]) in (run_dir / "report.md").read_text()
-    assert "## 확정 발견 (CONFIRMED)" in (run_dir / "report.md").read_text()
+    assert "## Confirmed findings (CONFIRMED)" in (run_dir / "report.md").read_text()
 
 
 def test_review_json_and_report_expose_degraded_failed_lane(
@@ -823,7 +823,7 @@ def test_without_repo_dir_skips_adjudication_and_renders_unadjudicated(
     assert "--repo-dir" in result.stderr
     run_dir = next(out_root.iterdir())
     assert not (run_dir / "outcome.json").exists()
-    assert "## 발견 (미판정)" in (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "## Findings (not adjudicated)" in (run_dir / "report.md").read_text(encoding="utf-8")
 
 
 def test_new_run_emits_stale_install_warning_once(
@@ -914,7 +914,7 @@ def test_adjudicate_run_reuses_persisted_artifacts_and_rewrites_outcome_report(
     assert (run_dir / "discover.json").read_bytes() == discover_before
     assert (run_dir / "outcome.json").is_file()
     assert (run_dir / "report.md").read_bytes() != report_before
-    assert "## 확정 발견 (CONFIRMED)" in (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "## Confirmed findings (CONFIRMED)" in (run_dir / "report.md").read_text(encoding="utf-8")
     assert json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["build"] == build_before
 
 

@@ -97,6 +97,7 @@ def prepared_run(tmp_path: Path) -> tuple[RunHandle, MergeResult, AdjudicationOu
     merged = merged_fixture()
     outcome = outcome_fixture(merged)
     report = render_report(
+        locale="ko",
         target=target,
         merged=merged,
         outcome=outcome,
@@ -119,6 +120,7 @@ def test_dry_run_writes_exact_split_payload_without_calling_gh(
     monkeypatch.setattr(publish_module, "_run", forbidden_run)
 
     result = publish_review(
+        locale="ko",
         run=run,
         repo="owner/repo",
         pr_number=42,
@@ -142,6 +144,7 @@ def test_dry_run_writes_exact_split_payload_without_calling_gh(
         "body": payload["comments"][0]["body"],
     }
     assert "INLINE-ONLY-BODY" in payload["comments"][0]["body"]
+    assert "판정 사유: reason CONFIRMED" in payload["comments"][0]["body"]
     assert result.review_url is None
     assert result.inline_count == 1
     assert result.body_fallback_count == 0
@@ -161,6 +164,7 @@ def test_execute_posts_comment_and_parses_url(
     monkeypatch.setattr(publish_module, "_run", fake_run)
 
     result = publish_review(
+        locale="ko",
         run=run,
         repo="owner/repo",
         pr_number=42,
@@ -194,6 +198,7 @@ def test_422_retries_once_with_all_inline_comments_in_body(
     monkeypatch.setattr(publish_module, "_run", fake_run)
 
     result = publish_review(
+        locale="ko",
         run=run,
         repo="owner/repo",
         pr_number=42,
@@ -226,6 +231,7 @@ def test_non_422_error_is_not_retried(tmp_path: Path, monkeypatch: pytest.Monkey
 
     with pytest.raises(PublishError, match="server failed"):
         publish_review(
+            locale="ko",
             run=run,
             repo="owner/repo",
             pr_number=42,
@@ -332,6 +338,7 @@ def test_gate_verdict_uses_comment_only_bounded_fallback_and_keeps_dispositions(
 
     monkeypatch.setattr(publish_module, "_run", fake_run)
     result = publish_review(
+        locale="ko",
         run=run,
         repo="owner/repo",
         pr_number=42,

@@ -72,6 +72,7 @@ def coverage_fixture(lane_id: str, *, valid: int, findings: int) -> LaneCoverage
 
 def render_real(*, synthesis: str | None = None) -> str:
     return render_report(
+        locale="ko",
         target=target_fixture(),
         merged=merged_from_fixture(),
         outcome=outcome_from_fixture(),
@@ -128,6 +129,7 @@ def test_agentic_report_surfaces_uncovered_hunks_without_budget() -> None:
     )
 
     report = render_report(
+        locale="ko",
         target=target_fixture(),
         merged=merge([], lane_tiers={}),
         outcome=None,
@@ -218,7 +220,12 @@ def test_pattern_fold_renders_each_member_when_reasons_differ() -> None:
     )
 
     report = render_report(
-        target=target_fixture(), merged=merged, outcome=outcome, coverage=[], budget=None
+        locale="ko",
+        target=target_fixture(),
+        merged=merged,
+        outcome=outcome,
+        coverage=[],
+        budget=None,
     )
 
     first = "**a.ts:10** — first reason"
@@ -247,7 +254,12 @@ def test_pattern_fold_renders_one_reason_when_all_members_match() -> None:
     )
 
     report = render_report(
-        target=target_fixture(), merged=merged, outcome=outcome, coverage=[], budget=None
+        locale="ko",
+        target=target_fixture(),
+        merged=merged,
+        outcome=outcome,
+        coverage=[],
+        budget=None,
     )
 
     assert report.count("판정 사유: same reason") == 1
@@ -259,7 +271,7 @@ def test_unadjudicated_pattern_fold_renders_differing_member_bodies() -> None:
     merged = _pattern_merged(bodies=("first body `shared`", "second body `shared`"))
 
     report = render_report(
-        target=target_fixture(), merged=merged, outcome=None, coverage=[], budget=None
+        locale="ko", target=target_fixture(), merged=merged, outcome=None, coverage=[], budget=None
     )
 
     first = "**a.ts:10** — first body `shared`"
@@ -299,6 +311,7 @@ def test_rejected_unresolved_and_unadjudicated_modes() -> None:
     )
 
     adjudicated = render_report(
+        locale="ko",
         target=target_fixture(),
         merged=merged,
         outcome=outcome,
@@ -306,6 +319,7 @@ def test_rejected_unresolved_and_unadjudicated_modes() -> None:
         budget=None,
     )
     unadjudicated = render_report(
+        locale="ko",
         target=target_fixture(),
         merged=merged,
         outcome=None,
@@ -321,3 +335,26 @@ def test_rejected_unresolved_and_unadjudicated_modes() -> None:
     assert "근거 없는 기각 교정: 2건" in adjudicated
     assert "## 발견 (미판정)" in unadjudicated
     assert "## 확정 발견 (CONFIRMED)" not in unadjudicated
+
+
+def test_presentation_snapshot_selects_chrome_without_translating_evidence() -> None:
+    from rvw.presentation import PresentationConfig
+
+    merged = _synthetic_merged()
+    for locale, expected_heading in (
+        ("en", "## Findings (not adjudicated)"),
+        ("ko", "## 발견 (미판정)"),
+    ):
+        report = render_report(
+            target=target_fixture(),
+            merged=merged,
+            outcome=None,
+            coverage=[],
+            budget=None,
+            presentation=PresentationConfig(display_name="VOOY Review System", locale=locale),
+        )
+        assert report.startswith("# VOOY Review System")
+        assert expected_heading in report
+        for group in merged.groups:
+            assert group.bodies[0] in report
+            assert group.key in report
