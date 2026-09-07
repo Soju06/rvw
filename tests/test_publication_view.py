@@ -120,7 +120,7 @@ def test_publication_mixed_fixture_keeps_human_evidence_only(locale):
                 "## Verification uncertain",
             ]
         )
-        assert "1 changed regions were not reviewed." in result
+        assert "Changed regions not reviewed: 1." in result
 
 
 def test_publication_omits_empty_uncertainty_and_escapes_plain_footer():
