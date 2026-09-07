@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.13.0](https://github.com/Soju06/rvw/compare/v0.12.0...v0.13.0) (2026-09-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* .github/workflows/rvw-review.yml is removed. Repositories that want automated review install the rvw GitHub App; ad-hoc runs use the CLI or the container image directly.
+
+### Features
+
+* retire the GitHub Actions review surface ([#77](https://github.com/Soju06/rvw/issues/77)) ([34595d2](https://github.com/Soju06/rvw/commit/34595d2826e4ce5dc06f58d02b5500d538d6eff5))
+
+
+### Bug Fixes
+
+* **cli:** raise typer.Exit instead of typer._click.exceptions.Exit ([#75](https://github.com/Soju06/rvw/issues/75)) ([a6b6bcd](https://github.com/Soju06/rvw/commit/a6b6bcde6d7e6c6489dd20acf3d02f55f7778b09))
+* **cloud:** scope the container application name per environment ([#78](https://github.com/Soju06/rvw/issues/78)) ([37bdbc0](https://github.com/Soju06/rvw/commit/37bdbc0317f95c408067d19eb5250aede5901d00))
+
 ## [0.12.0](https://github.com/Soju06/rvw/compare/v0.11.5...v0.12.0) (2026-09-05)
 
 
