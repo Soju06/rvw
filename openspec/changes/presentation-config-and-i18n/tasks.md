@@ -12,10 +12,10 @@
 
 ## 3. Human publication and App check presentation
 
-- [ ] 3.1 Add failing mixed-outcome fixture tests covering blocker/warnings/rejected/uncertain/uncovered selection in both locales and retained/dropped metadata.
-- [ ] 3.2 Implement render_publication and inline/fallback human bodies; wire publish/run/auto, gate and stack using persisted presentation without changing diagnostic reports.
-- [ ] 3.3 Add Worker base-ref bootstrap config parsing, check renaming, localized title/summary and collapsed structured text; verify malformed and all neutral terminal paths.
-- [ ] 3.4 Synchronize reporting/pr-gate/cloud-app-platform main specs/context, verify stage tests and commit feat(reporting): publish a human publication view separate from report.md.
+- [x] 3.1 Add failing mixed-outcome fixture tests covering blocker/warnings/rejected/uncertain/uncovered selection in both locales and retained/dropped metadata.
+- [x] 3.2 Implement render_publication and inline/fallback human bodies; wire publish/run/auto, gate and stack using persisted presentation without changing diagnostic reports.
+- [x] 3.3 Add Worker base-ref bootstrap config parsing, check renaming, localized title/summary and collapsed structured text; verify malformed and all neutral terminal paths.
+- [x] 3.4 Synchronize reporting/pr-gate/cloud-app-platform main specs/context, verify stage tests and commit feat(reporting): publish a human publication view separate from report.md.
 
 ## 4. Hard model-language output contract
 

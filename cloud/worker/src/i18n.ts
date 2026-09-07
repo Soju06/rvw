@@ -1,10 +1,21 @@
 import type {Locale} from "./presentation";
 
 export const catalogEn = {
-  check_started: "{display_name} review in progress",
-  check_passed: "{display_name} review passed",
-  check_blocked: "{display_name} review found blockers",
-  check_incomplete: "{display_name} review could not complete",
+  bootstrap_summary: "Review is in progress.",
+  details: "Review details",
+  reason_deadline: "The review could not finish within the available time.",
+  reason_superseded: "A newer change replaced this review.",
+  reason_queue_exhausted: "The review could not start after repeated attempts.",
+  reason_artifacts: "The review could not complete because its results are unavailable.",
+  reason_process: "The review stopped before it could complete.",
+  reason_config: "The repository presentation configuration is invalid.",
+  reason_language: "The review text could not be verified in the configured language.",
+  reason_incomplete: "The review could not complete.",
+
+  check_started: "{display_name} · Review in progress",
+  check_passed: "{display_name} · Review complete",
+  check_blocked: "{display_name} · Changes needed",
+  check_incomplete: "{display_name} · Review incomplete",
   job: "Job {job_id}",
   artifacts: "Artifacts: job {job_id}",
   process_passed: "{display_name} run passed",
@@ -21,10 +32,21 @@ export const catalogEn = {
 } as const;
 export type MessageKey = keyof typeof catalogEn;
 export const catalogKo: Record<MessageKey, string> = {
-  check_started: "{display_name} 검토 중",
-  check_passed: "{display_name} 검토 완료",
-  check_blocked: "{display_name} 수정 필요",
-  check_incomplete: "{display_name} 검토 미완료",
+  bootstrap_summary: "검토 중입니다.",
+  details: "검토 상세 정보",
+  reason_deadline: "주어진 시간 안에 검토를 마치지 못했습니다.",
+  reason_superseded: "새로운 변경으로 이 검토가 대체되었습니다.",
+  reason_queue_exhausted: "여러 차례 시도했으나 검토를 시작하지 못했습니다.",
+  reason_artifacts: "검토 결과를 불러올 수 없어 검토를 마치지 못했습니다.",
+  reason_process: "검토를 마치기 전에 실행이 중단되었습니다.",
+  reason_config: "저장소의 표시 설정이 올바르지 않습니다.",
+  reason_language: "설정된 언어로 검토 내용을 확인하지 못했습니다.",
+  reason_incomplete: "검토를 마치지 못했습니다.",
+
+  check_started: "{display_name} · 검토 중",
+  check_passed: "{display_name} · 검토 완료",
+  check_blocked: "{display_name} · 수정 필요",
+  check_incomplete: "{display_name} · 검토 미완료",
   job: "작업 {job_id}",
   artifacts: "산출물: 작업 {job_id}",
   process_passed: "{display_name} 실행 통과",

@@ -97,7 +97,7 @@ def prepared_run(tmp_path: Path) -> tuple[RunHandle, MergeResult, AdjudicationOu
     merged = merged_fixture()
     outcome = outcome_fixture(merged)
     report = render_report(
-        locale="ko",
+        locale="en",
         target=target,
         merged=merged,
         outcome=outcome,
@@ -120,7 +120,7 @@ def test_dry_run_writes_exact_split_payload_without_calling_gh(
     monkeypatch.setattr(publish_module, "_run", forbidden_run)
 
     result = publish_review(
-        locale="ko",
+        locale="en",
         run=run,
         repo="owner/repo",
         pr_number=42,
@@ -132,8 +132,9 @@ def test_dry_run_writes_exact_split_payload_without_calling_gh(
 
     payload = json.loads((run.dir / "publish-payload.json").read_text(encoding="utf-8"))
     assert payload["event"] == "COMMENT"
-    assert payload["body"].startswith("# rvw 리뷰")
-    assert "종합 본문" in payload["body"]
+    assert payload["body"].startswith("## Summary")
+    assert "종합 본문" not in payload["body"]
+    assert "REJECTED-BODY" not in payload["body"]
     assert "NON-ANCHORABLE-BODY" in payload["body"]
     assert "INLINE-ONLY-BODY" not in payload["body"]
     assert len(payload["comments"]) == 1
@@ -144,7 +145,8 @@ def test_dry_run_writes_exact_split_payload_without_calling_gh(
         "body": payload["comments"][0]["body"],
     }
     assert "INLINE-ONLY-BODY" in payload["comments"][0]["body"]
-    assert "판정 사유: reason CONFIRMED" in payload["comments"][0]["body"]
+    assert "reason CONFIRMED" in payload["comments"][0]["body"]
+    assert "Finding ID" not in payload["comments"][0]["body"]
     assert result.review_url is None
     assert result.inline_count == 1
     assert result.body_fallback_count == 0
@@ -164,7 +166,7 @@ def test_execute_posts_comment_and_parses_url(
     monkeypatch.setattr(publish_module, "_run", fake_run)
 
     result = publish_review(
-        locale="ko",
+        locale="en",
         run=run,
         repo="owner/repo",
         pr_number=42,
@@ -198,7 +200,7 @@ def test_422_retries_once_with_all_inline_comments_in_body(
     monkeypatch.setattr(publish_module, "_run", fake_run)
 
     result = publish_review(
-        locale="ko",
+        locale="en",
         run=run,
         repo="owner/repo",
         pr_number=42,
@@ -211,7 +213,7 @@ def test_422_retries_once_with_all_inline_comments_in_body(
     assert len(payloads) == 2
     assert payloads[0]["event"] == payloads[1]["event"] == "COMMENT"
     assert "comments" not in payloads[1]
-    assert "### 앵커 실패 항목" in str(payloads[1]["body"])
+    assert "### Findings with unavailable inline anchors" in str(payloads[1]["body"])
     assert "INLINE-ONLY-BODY" in str(payloads[1]["body"])
     assert result.inline_count == 0
     assert result.body_fallback_count == 1
@@ -231,7 +233,7 @@ def test_non_422_error_is_not_retried(tmp_path: Path, monkeypatch: pytest.Monkey
 
     with pytest.raises(PublishError, match="server failed"):
         publish_review(
-            locale="ko",
+            locale="en",
             run=run,
             repo="owner/repo",
             pr_number=42,
@@ -338,11 +340,12 @@ def test_gate_verdict_uses_comment_only_bounded_fallback_and_keeps_dispositions(
 
     monkeypatch.setattr(publish_module, "_run", fake_run)
     result = publish_review(
-        locale="ko",
+        locale="en",
         run=run,
         repo="owner/repo",
         pr_number=42,
         report_md=render_gate_verdict(verdict),
+        gate_verdict=verdict,
         merged=merged,
         outcome=outcome,
         execute=True,
@@ -352,5 +355,6 @@ def test_gate_verdict_uses_comment_only_bounded_fallback_and_keeps_dispositions(
     assert payloads[0]["event"] == payloads[1]["event"] == "COMMENT"
     assert "comments" not in payloads[1]
     assert "accepted rule/inline" in str(payloads[1]["body"])
-    assert merged.groups[0].key in str(payloads[1]["body"])
+    assert "Finding ID" not in str(payloads[1]["body"])
+    assert f"evidence {merged.groups[0].key}" in str(payloads[1]["body"])
     assert result.review_url == "https://example.test/review/gate"

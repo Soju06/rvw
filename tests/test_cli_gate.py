@@ -642,7 +642,7 @@ def test_gate_target_executes_review_once_and_writes_dry_run_artifacts(
         (artifacts.run.dir / "publish-payload.json").read_text(encoding="utf-8")
     )
     assert publish_payload["event"] == "COMMENT"
-    assert "rvw gate — PASS" in publish_payload["body"]
+    assert "Gate — PASS" in publish_payload["body"]
 
 
 def test_gate_preserves_explicit_split_replica_overrides(

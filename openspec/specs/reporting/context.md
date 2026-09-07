@@ -16,7 +16,7 @@ This capability makes the review inspectable before any network action and trans
 - PR #1119 supplied concrete scale: 39/39 discovery runs produced 21 findings, merge produced 13 groups, and folds rendered five review items. DISCOVER took about 410s and ADJUDICATE about 197s.
 - That run excluded 2,846,073 generated characters (about 2.84 MB) and reviewed 26,195 source characters, making the exclusion accounting a material report fact rather than a hidden prompt optimization.
 - One rejected inline anchor causes GitHub to reject the entire review with 422. Bulk body fallback bounds publication at two API calls instead of probing N comments.
-- Gate verdicts are rendered from persisted typed artifacts rather than handwritten aggregate prose. Their finding table retains the public group key and disposition even when a CONFIRMED finding is also emitted as an inline comment.
+- Gate verdicts are rendered from persisted typed artifacts. Structured JSON retains public finding identity, dispositions and provenance; the publication view retains actionable findings and human reasons.
 - Stack runs keep a separate strict manifest, incremental ordinary member-run
   references, lineage observations, and deterministic Markdown report. Partial
   member references survive operational failure, while only a complete run can
@@ -42,7 +42,7 @@ This capability makes the review inspectable before any network action and trans
 
 - Ordinary `publish` can still use a moved PR head; `gate` closes this failure mode by revalidating both base and head before reaching publication.
 - GitHub errors without a recognizable status code cannot trigger the 422 fallback.
-- If the report heading structure is manually changed, body removal for inline findings may not find `## 확정 발견 (CONFIRMED)`.
+- Publication derives its selected findings from structured artifacts, so editing diagnostic report headings does not change finding selection.
 - A run can legitimately lack `outcome.json`; the report then renders findings as unadjudicated and publication creates no inline comments.
 - A degraded run can retain valid findings; every report and machine summary marks those results partial and keeps normalized reasons and available diagnostics for the failed executions.
 - The current code has no ADR-012 pre-publication guard for open state, head match, merge state, or BEHIND/DIRTY status.
@@ -58,7 +58,7 @@ The first payload for two confirmed anchorable findings has this shape:
 ```json
 {
   "event": "COMMENT",
-  "body": "...non-inline report content...",
+  "body": "...human publication content...",
   "comments": [
     {"path": "src/a.py", "line": 12, "side": "RIGHT", "body": "..."},
     {"path": "src/b.py", "line": 8, "side": "RIGHT", "body": "..."}
@@ -66,7 +66,7 @@ The first payload for two confirmed anchorable findings has this shape:
 }
 ```
 
-If that call returns 422, rvw makes one final call with no `comments` array and appends both items beneath `### 앵커 실패 항목` in the body.
+If that call returns 422, rvw makes one final call with no `comments` array and appends both items beneath the localized anchor-fallback heading in the body.
 
 ## Historical deltas
 
@@ -86,3 +86,9 @@ App also independently counted findings/coverage using a maximum of two totals a
 ## Locale catalogs (2026-09-07)
 
 The owner requested first-class i18n after the publication audit found Korean renderer headings combined with model explanations in multiple languages. Python catalogs own ordinary report, publication, gate, and stack chrome; Worker catalogs own bootstrap and terminal check chrome. Catalog migration preserves diagnostic content selection. Key parity, formatting argument compatibility, and a renderer Hangul-literal scan catch drift. The configured locale selects chrome; it does not translate code quotations, identifiers, or finding facts.
+
+## Human publication split (2026-09-07)
+
+The publication audit found run identifiers, SHA/timestamp headers, finding identities, replica votes, fold detail, coverage/budget tables, and generator footers reaching GitHub through diagnostic Markdown. The owner requested a separate human view. `report.md` remains diagnostic evidence, alongside the original structured stage files; publication is reconstructed from their findings rather than transformed by stripping report sections. It retains source locations, localized severity, short lane rule tags, titles, impact/correction, verbatim evidence, and configured footer. Rejected findings are absent. Uncertain findings remain separate and partial coverage has a short honest disclosure.
+
+Diagnostic summary severity counters continue to include all merged groups. The localized human completion sentence counts confirmed blockers and confirmed warnings/suggestions only, and its coverage sentence counts distinct uncovered regions rather than summing repeated lane-hunk receipts. The Worker consumes that Python Markdown without recounting. Structured lane counters and policy blockers remain available in summary JSON and collapsed check text. Gate publication retains PASS/BLOCK and disposition reasons while JSON preserves actor and inheritance provenance. Stack diagnostic reports retain origin runs and timelines; stack publication focuses on findings and current presence.

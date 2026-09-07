@@ -110,13 +110,13 @@ MUST summarize each member's local finding verdicts, and MUST render every
 lineage's origin claim, ordered descendant observations, evidence, and current
 `STILL_PRESENT`, `FIXED_IN`, `REGRESSED_IN`, or `UNCERTAIN` state.
 
+The stack publication view MUST use locale catalogs, retain findings, evidence and human disposition reasons, and omit run IDs, actors and inheritance internals.
+
 #### Scenario: Earlier finding is fixed later
 
 - **WHEN** PR 1 contributes a finding that is ABSENT starting at PR 3
 - **THEN** PR 1's local section still records the finding and the lineage section
   identifies PR 3 as the fixing member
-
-The stack publication view MUST use locale catalogs, retain findings, evidence and human disposition reasons, and omit run IDs, actors and inheritance internals.
 
 ### Requirement: Stack publication is body-only and dry-run by default
 
@@ -137,6 +137,8 @@ the same commit-pinned payload persisted for inspection.
 
 Python MUST emit version-1 `summary.json` with `schema_version: 1`, `lanes` counts `dispatched`, `valid`, and `uncovered`, `findings` counts for `blocker`, `warning`, and `suggestion`, `verdicts` counts for `CONFIRMED`, `REJECTED`, and `UNCERTAIN`, a `blockers` list of policy-blocking finding identifiers, resolved `presentation` configuration, publication failure/fallback facts, and common localized `markdown` summary text. `lanes.dispatched` MUST count dispatched lanes, `lanes.valid` MUST count lanes with at least one VALID execution, and `lanes.uncovered` MUST count remaining lane-hunk receipts. Counts MUST be derived from persisted execution and finding evidence, MUST preserve zero-valid coverage distinctly from clean valid execution, and MUST remain available with partial or missing stage artifacts. Missing execution evidence MUST NOT imply a successful review. App Check summaries and every other presentation of a policy-gated run MUST consume these facts without recounting stage payloads. `outcome.json` MUST retain its adjudication schema.
 
+The diagnostic `findings` counters MUST retain all merged groups regardless of verdict. Completed human summaries MUST state completion and counts of CONFIRMED blockers and CONFIRMED warnings/suggestions only, plus partial-coverage disclosure counting distinct uncovered change regions when applicable. Machine execution detail MUST remain in structured artifacts and check `text`, not the human summary.
+
 #### Scenario: Valid execution finds nothing
 
 - **WHEN** one or more discovery lanes are valid and no findings survive
@@ -146,8 +148,6 @@ Python MUST emit version-1 `summary.json` with `schema_version: 1`, `lanes` coun
 
 - **WHEN** execution fails before adjudication
 - **THEN** the summary remains available, the process envelope records failure, and absent verdict evidence is not interpreted as PASS
-
-Completed human summaries MUST state completion, blocker count and warning/suggestion count, plus partial-coverage disclosure when applicable. Machine execution detail MUST remain in structured artifacts and check `text`, not the human summary.
 
 ### Requirement: HTTP 422 fallback is bulk and bounded
 

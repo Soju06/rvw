@@ -102,6 +102,7 @@ from rvw.report import render_report
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.sample import SampleReport, sample_lane
 from rvw.schema import Severity, Tier, Verdict, finding_schema, lane_output_schema
+from rvw.special_publication import render_stack_publication
 from rvw.stack import (
     FindingLineage,
     MemberRunRef,
@@ -1129,6 +1130,7 @@ def _gate_invariant_failure(
             str(exc),
             inheritance_summary=inheritance_summary,
         ),
+        presentation=artifacts.presentation,
     )
     _error_console.print(str(exc), markup=False)
     raise typer.Exit(EXIT_NOT_FOUND) from exc
@@ -1359,7 +1361,9 @@ async def _gate_pipeline(
             _error_console.print(message, markup=False)
             raise typer.Exit(EXIT_SYSTEM_ERROR)
         verdict_path = artifacts.run.dir / "gate-verdict.json"
-        rendered_markdown = render_gate_verdict(republish_verdict)
+        rendered_markdown = render_gate_verdict(
+            republish_verdict, presentation=artifacts.presentation
+        )
         try:
             cached_markdown = artifacts.run._load_contained_text(
                 "gate-verdict.md",
@@ -1480,6 +1484,7 @@ async def _gate_pipeline(
                     inheritance_summary=inheritance_summary,
                     kind="pause",
                 ),
+                presentation=artifacts.presentation,
             )
             summary_text = ""
             if inheritance_summary is not None:
@@ -1557,6 +1562,7 @@ async def _gate_pipeline(
                         inheritance_summary=inheritance_summary,
                         actor=actor,
                     ),
+                    presentation=artifacts.presentation,
                 )
                 _error_console.print(message, markup=False)
                 raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
@@ -1583,7 +1589,9 @@ async def _gate_pipeline(
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
 
-    verdict_path, markdown_path = save_gate_verdict(artifacts.run.dir, verdict)
+    verdict_path, markdown_path = save_gate_verdict(
+        artifacts.run.dir, verdict, presentation=artifacts.presentation
+    )
     verdict_markdown = markdown_path.read_text(encoding="utf-8")
     _publish_gate_verdict(
         artifacts=artifacts,
@@ -1667,6 +1675,7 @@ def _publish_gate_verdict(
     attempted_at = datetime.now(UTC).isoformat()
     try:
         publication = publish_review(
+            gate_verdict=verdict,
             run=artifacts.run,
             repo=target.repo,
             pr_number=target.pr_number,
@@ -2555,6 +2564,7 @@ async def _stack_review_pipeline(
         manifest, member_runs, lineages, presentation=artifacts.presentation
     )
     handle.save_report(report_md)
+    RunHandle(handle.run_id, handle.dir).save_presentation(artifacts.presentation)
     handle.require_complete()
 
     payload = {
@@ -2589,7 +2599,12 @@ def stack_publish(
         handle = StackStore(out_root).open(run_id)
         handle.require_complete()
         manifest = handle.load_manifest()
-        report_md = handle.load_report()
+        handle.load_report()
+        members = handle.load_member_runs()
+        presentation = RunHandle(handle.run_id, handle.dir).load_presentation()
+        report_md = render_stack_publication(
+            manifest, members, handle.load_lineages(), presentation=presentation
+        )
         if execute:
             numbers = [member.number for member in manifest.members]
             current = resolve_stack(
@@ -2605,6 +2620,7 @@ def stack_publish(
             pr_number=tip.number,
             commit_id=tip.head_sha,
             body=report_md,
+            locale=presentation.locale,
             execute=execute,
         )
     except (StackRunNotFound, StackStageMissing) as exc:

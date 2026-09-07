@@ -13,6 +13,7 @@ from rvw.discover import DiscoverResult
 from rvw.merge import MergeResult
 from rvw.presentation import PresentationConfig
 from rvw.provenance import BuildProvenance, current_build_provenance
+from rvw.publication import publication_summary
 from rvw.runtimes import RunDiagnostic
 
 
@@ -282,13 +283,8 @@ def execution_summary(
     findings = FindingCounts(**{key: counts[key] for key in ("blocker", "warning", "suggestion")})
     votes = Counter(v.value for v in outcome.verdicts.values()) if outcome else Counter()
     verdicts = VerdictCounts(**{key: votes[key] for key in ("CONFIRMED", "REJECTED", "UNCERTAIN")})
-    markdown = (
-        f"Lanes: {lanes.valid}/{lanes.dispatched} valid; {lanes.uncovered} uncovered hunks.\n\n"
-        f"Findings: {findings.blocker} blocker, {findings.warning} warning, "
-        f"{findings.suggestion} suggestion.\n\n"
-        f"Verdicts: {verdicts.CONFIRMED} confirmed, {verdicts.REJECTED} rejected, "
-        f"{verdicts.UNCERTAIN} uncertain.\n\nPolicy blockers: {len(blockers)}."
-    )
+    presentation = presentation or PresentationConfig()
+    markdown = publication_summary(merged, outcome, discovered.coverage, presentation)
     return ExecutionSummary(
         presentation=presentation or PresentationConfig(),
         lanes=lanes,

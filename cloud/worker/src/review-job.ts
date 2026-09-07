@@ -1,4 +1,5 @@
-import {t} from "./i18n";
+import {t, type MessageKey} from "./i18n";
+import {defaultPresentation, type PresentationConfig} from "./presentation";
 import {DurableObject} from "cloudflare:workers";
 import type {Process} from "@cloudflare/sandbox";
 
@@ -7,6 +8,8 @@ import {requiredConfig, type RequiredConfig} from "./config";
 import {
   clearInstallationToken,
   createCheckRun,
+  checkDetails,
+  getPresentationConfig,
   getInstallationToken,
   updateCheckRun,
   type CreatedCheckRun,
@@ -59,6 +62,8 @@ interface JobRecord {
   cleanupPending?: boolean;
   diagnosticsFinalized?: boolean;
   artifactContractInvalid?: boolean;
+  presentation?: PresentationConfig;
+  presentationConfigFailure?: "presentation_config_invalid";
   artifacts: ArtifactMetadata[];
 }
 
@@ -129,21 +134,27 @@ function statusView(record: JobRecord): JobStatus {
   };
 }
 
-function titleFor(mapping: ReviewResultMapping): string {
-  if (mapping.conclusion === "success") return t("check_passed", "en", {display_name: "rvw"});
-  if (mapping.conclusion === "failure") return t("check_blocked", "en", {display_name: "rvw"});
-  return t("check_incomplete", "en", {display_name: "rvw"});
+function titleFor(mapping: ReviewResultMapping, presentation: PresentationConfig): string {
+  const key = mapping.conclusion === "success" ? "check_passed" : mapping.conclusion === "failure" ? "check_blocked" : "check_incomplete";
+  return t(key, presentation.locale, {display_name: presentation.display_name});
 }
 
-function summaryText(
-  jobId: string,
-  mapping: ReviewResultMapping,
-  summary: ArtifactSummary | null,
-): string {
-  const lines = [mapping.reason];
-  if (summary !== null) lines.push(summary.markdown);
-  lines.push(t("artifacts", "en", {job_id: jobId}));
-  return lines.join("\n\n");
+function humanReason(code: string | undefined, presentation: PresentationConfig): string {
+  const keys: Record<string, MessageKey> = {
+    timed_out: "reason_deadline", superseded: "reason_superseded", start_failed: "reason_queue_exhausted",
+    process_invalid: "reason_artifacts", artifacts_invalid: "reason_artifacts", summary_invalid: "reason_artifacts",
+    process_disappeared: "reason_process", presentation_config_invalid: "reason_config",
+  };
+  return t(keys[code ?? ""] ?? "reason_incomplete", presentation.locale);
+}
+
+function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSummary | null,
+  presentation: PresentationConfig): string {
+  return checkDetails({job_id: record.jobId, reason,
+    presentation_config_failure: record.presentationConfigFailure ?? null,
+    lanes: summary?.lanes ?? null, findings: summary?.findings ?? null,
+    verdicts: summary?.verdicts ?? null, blockers: summary?.blockers ?? null,
+    artifact_key: `jobs/${record.jobId}/`, artifacts: record.artifacts}, presentation);
 }
 
 export class RvwReviewJob extends DurableObject<Env> {
@@ -281,11 +292,18 @@ export class RvwReviewJob extends DurableObject<Env> {
     const token = await this.token(record, config.githubAppId);
     let check: CreatedCheckRun | undefined;
     if (record.checkRunId === undefined) {
+      const bootstrap = await getPresentationConfig(token, {
+        owner: message.owner, repo: message.repo, baseSha: message.baseSha,
+      });
+      record = {...record, presentation: bootstrap.presentation,
+        ...(bootstrap.failure === undefined ? {} : {presentationConfigFailure: bootstrap.failure})};
+      await this.save(record);
       check = await createCheckRun(token, {
         owner: message.owner,
         repo: message.repo,
         headSha: message.headSha,
         jobId: message.jobId,
+        presentation: record.presentation,
       });
       record = {
         ...record,
@@ -421,13 +439,17 @@ export class RvwReviewJob extends DurableObject<Env> {
     if (record.message === undefined || record.checkRunId === undefined) return true;
     try {
       const token = await this.token(record, appId);
+      const presentation = record.presentation ?? defaultPresentation();
+      const code = record.presentationConfigFailure ?? (record.state === "failed" ? "start_failed" : record.state);
       await updateCheckRun(token, {
         owner: record.message.owner,
         repo: record.message.repo,
         checkRunId: record.checkRunId,
         conclusion: "neutral",
-        title: t("check_incomplete", "en", {display_name: "rvw"}),
-        summary: `${reason}\n\n${t("artifacts", "en", {job_id: record.jobId})}`,
+        name: presentation.short_name,
+        title: t("check_incomplete", presentation.locale, {display_name: presentation.display_name}),
+        summary: humanReason(code, presentation),
+        text: diagnosticText(record, reason, null, presentation),
       });
       return true;
     } catch (error) {
@@ -714,10 +736,10 @@ export class RvwReviewJob extends DurableObject<Env> {
     ]);
     let mapping = checkConclusionForResult(exitCode, processJson ?? "");
     if (record.artifactContractInvalid) {
-      mapping = {terminalState: "failed", conclusion: "neutral", reason: t("manifest_invalid")};
+      mapping = {...mapping, terminalState: "failed", conclusion: "neutral", reason: t("manifest_invalid"), reasonCode: "artifacts_invalid"};
     }
     if (overrideReason !== undefined) {
-      mapping = {terminalState: "failed", conclusion: "neutral", reason: overrideReason};
+      mapping = {...mapping, terminalState: "failed", conclusion: "neutral", reason: overrideReason, reasonCode: "process_disappeared"};
     }
     let summary: ArtifactSummary | null = null;
     try {
@@ -725,18 +747,25 @@ export class RvwReviewJob extends DurableObject<Env> {
       summary = parseArtifactSummary(summaryJson);
     } catch (error) {
       if (mapping.terminalState === "completed") {
-        mapping = {terminalState: "failed", conclusion: "neutral",
-          reason: t("summary_invalid", "en", {error: errorMessage(error)})};
+        mapping = {...mapping, terminalState: "failed", conclusion: "neutral",
+          reason: t("summary_invalid", "en", {error: errorMessage(error)}), reasonCode: "summary_invalid"};
       }
     }
+    const presentation = summary?.presentation ?? mapping.presentation ?? record.presentation ?? defaultPresentation();
+    record = {...record, presentation};
     const token = await this.token(record, config.githubAppId);
     await updateCheckRun(token, {
       owner: message.owner,
       repo: message.repo,
       checkRunId,
       conclusion: mapping.conclusion,
-      title: titleFor(mapping),
-      summary: summaryText(record.jobId, mapping, summary),
+      name: presentation.short_name,
+      title: titleFor(mapping, presentation),
+      summary: mapping.terminalState === "completed" && summary !== null
+        ? summary.markdown + (record.presentationConfigFailure === undefined ? ""
+          : `\n\n${humanReason(record.presentationConfigFailure, presentation)}`)
+        : humanReason(record.presentationConfigFailure ?? mapping.reasonCode, presentation),
+      text: diagnosticText(record, mapping.reason, summary, presentation),
     });
     record = {
       ...record,

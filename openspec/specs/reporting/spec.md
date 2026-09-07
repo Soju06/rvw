@@ -34,7 +34,7 @@ Every review that reaches a terminal state MUST persist and expose a strict run 
 
 ### Requirement: Reports disclose incomplete execution
 
-Every report for a degraded or failed run MUST state prominently that the review is partial or failed and MUST list each failed lane with every normalized machine-readable reason. The report MUST retain successful findings and ordinary coverage counts without relabeling invalid executions as valid.
+Every degraded or failed run MUST retain each failed lane and every normalized machine-readable reason in diagnostic artifacts. Diagnostic reports MUST disclose partial or failed execution and retain successful findings and coverage counts. The publication view MUST disclose partial or failed execution in localized human prose without publishing lane diagnostics or relabeling invalid executions as valid.
 
 #### Scenario: Missing and malformed lanes coexist
 
@@ -43,16 +43,16 @@ Every report for a degraded or failed run MUST state prominently that the review
 
 ### Requirement: Report sections are machine-generated except synthesis
 
-The report renderer MUST machine-generate target metadata, finding sections, verdict details, coverage, budget accounting, and generator version, while only the `## 종합` content MAY be supplied as free-form synthesis.
+The system MUST retain target metadata, finding sections, verdict details, coverage, budget accounting, and generator version in diagnostic artifacts. Diagnostic report sections MUST remain machine-generated except optional free-form synthesis; their headings and placeholders MUST use locale catalogs. The publication view MUST use a catalog-generated outcome sentence and MUST NOT publish synthesis instructions.
 
 #### Scenario: No synthesis is supplied
 
 - **WHEN** REPORT renders without `--synthesis`
-- **THEN** `## 종합` contains the orchestrator placeholder and every other section is machine-rendered
+- **THEN** the diagnostic synthesis section contains the localized orchestrator placeholder and every other section is machine-rendered
 
 ### Requirement: Reports separate verdict classes
 
-An adjudicated report MUST render CONFIRMED groups in the confirmed section, unresolved UNCERTAIN groups in `## 검증 미확정`, and REJECTED groups in collapsible details without silently dropping any class.
+An adjudicated diagnostic report MUST render CONFIRMED groups in the confirmed section, unresolved UNCERTAIN groups in the localized uncertainty section, and REJECTED groups in collapsible details without silently dropping any class.
 
 #### Scenario: Expanded pass remains uncertain
 
@@ -61,7 +61,7 @@ An adjudicated report MUST render CONFIRMED groups in the confirmed section, unr
 
 ### Requirement: Coverage proves lane participation
 
-Every report MUST include a per-lane table of planned dispatched runs, valid runs, findings, and uncovered controller hunk count plus the canonical IDs of any uncovered hunks. It MUST include kept/excluded diff character accounting and chunk count only when an inline budget report exists.
+Diagnostic artifacts MUST retain a per-lane table of planned dispatched runs, valid runs, findings, and uncovered controller hunk count plus the canonical IDs of any uncovered hunks. Diagnostic report rendering MUST preserve this coverage detail and MUST include kept/excluded diff character accounting and chunk count only when an inline budget report exists.
 
 #### Scenario: One two-chunk inline lane fails entirely
 
@@ -75,7 +75,7 @@ Every report MUST include a per-lane table of planned dispatched runs, valid run
 
 ### Requirement: Display folds preserve member detail
 
-Pattern folds MUST render the repeated rule and every member location, region folds MUST contribute adjacency labels, and differing member adjudication reasons MUST render as per-member reason and evidence blocks.
+Diagnostic report pattern folds MUST render the repeated rule and every member location, region folds MUST contribute adjacency labels, and differing member adjudication reasons MUST render as per-member reason and evidence blocks.
 
 #### Scenario: Pattern members have different reasons
 
@@ -111,7 +111,7 @@ Confirmed groups that have a new-side line and `anchorable: true` MUST be emitte
 
 ### Requirement: HTTP 422 fallback is bulk and bounded
 
-Publication MUST retry exactly once after a 422 response to a payload containing inline comments by moving every inline item into an `앵커 실패 항목` body section, and MUST perform at most two GitHub API calls.
+Publication MUST retry exactly once after a 422 response to a payload containing inline comments by moving every inline item into a localized anchor-fallback body section, and MUST perform at most two GitHub API calls.
 
 #### Scenario: One inline anchor is rejected
 
@@ -125,12 +125,12 @@ Publication MUST retry exactly once after a 422 response to a payload containing
 
 ### Requirement: Gate verdict publication is artifact-derived
 
-The gate MUST generate its publishable verdict from persisted target, discovery, merge, adjudication, coverage, and disposition data, and the verdict MUST contain the run ID, base and head anchors, aggregate verdict counts, per-lane dispatched and valid counts, and each actionable finding's public ID, severity, adjudication verdict, disposition, and reason.
+The gate MUST generate its verdict from persisted target, discovery, merge, adjudication, coverage, and disposition data, and the persisted verdict JSON MUST contain the run ID, base and head anchors, aggregate verdict counts, per-lane dispatched and valid counts, and each actionable finding's public ID, severity, adjudication verdict, disposition, and reason.
 
 #### Scenario: Later audit reconstructs a gate decision
 
 - **WHEN** a gate verdict contains accepted and must-fix findings across multiple lanes
-- **THEN** the saved JSON and Markdown identify every decision and the exact anchored run without relying on aggregate counts alone
+- **THEN** the saved JSON identifies every decision and the exact anchored run; the localized publication view retains PASS/BLOCK, actionable findings, and disposition reasons while omitting run IDs, actors, and inheritance internals without relying on aggregate counts alone
 
 ### Requirement: Gate publication preserves COMMENT safety
 
@@ -161,10 +161,12 @@ publication uses them.
 
 ### Requirement: Stack reports separate local and tip state
 
-A stack report MUST render captured member metadata and ordinary run references,
+A diagnostic stack report MUST render captured member metadata and ordinary run references,
 MUST summarize each member's local finding verdicts, and MUST render every
 lineage's origin claim, ordered descendant observations, evidence, and current
 `STILL_PRESENT`, `FIXED_IN`, `REGRESSED_IN`, or `UNCERTAIN` state.
+
+The stack publication view MUST use locale catalogs, retain findings, evidence and human disposition reasons, and omit run IDs, actors and inheritance internals.
 
 #### Scenario: Earlier finding is fixed later
 
@@ -184,12 +186,14 @@ the same commit-pinned payload persisted for inspection.
 
 - **WHEN** `rvw stack publish --run <id>` is invoked without `--execute`
 - **THEN** the saved payload contains `event: COMMENT`, `commit_id` equal to the
-  manifest tip head, and the stack report body, contains no inline comments, and
+  manifest tip head, and the localized stack publication body, contains no inline comments, and
   no GitHub review is created
 
 ### Requirement: Policy-gated summaries have one producer
 
-Python MUST emit version-1 `summary.json` with `schema_version: 1`, `lanes` counts `dispatched`, `valid`, and `uncovered`, `findings` counts for `blocker`, `warning`, and `suggestion`, `verdicts` counts for `CONFIRMED`, `REJECTED`, and `UNCERTAIN`, a `blockers` list of policy-blocking finding identifiers, and common `markdown` summary text. `lanes.dispatched` MUST count dispatched lanes, `lanes.valid` MUST count lanes with at least one VALID execution, and `lanes.uncovered` MUST count remaining lane-hunk receipts. Counts MUST be derived from persisted execution and finding evidence, MUST preserve zero-valid coverage distinctly from clean valid execution, and MUST remain available with partial or missing stage artifacts. Missing execution evidence MUST NOT imply a successful review. App Check summaries and every other presentation of a policy-gated run MUST consume these facts without recounting stage payloads. `outcome.json` MUST retain its adjudication schema.
+Python MUST emit version-1 `summary.json` with `schema_version: 1`, `lanes` counts `dispatched`, `valid`, and `uncovered`, `findings` counts for `blocker`, `warning`, and `suggestion`, `verdicts` counts for `CONFIRMED`, `REJECTED`, and `UNCERTAIN`, a `blockers` list of policy-blocking finding identifiers, resolved `presentation` configuration, and common localized `markdown` summary text. `lanes.dispatched` MUST count dispatched lanes, `lanes.valid` MUST count lanes with at least one VALID execution, and `lanes.uncovered` MUST count remaining lane-hunk receipts. Counts MUST be derived from persisted execution and finding evidence, MUST preserve zero-valid coverage distinctly from clean valid execution, and MUST remain available with partial or missing stage artifacts. Missing execution evidence MUST NOT imply a successful review. App Check summaries and every other presentation of a policy-gated run MUST consume these facts without recounting stage payloads. `outcome.json` MUST retain its adjudication schema.
+
+The diagnostic `findings` counters MUST retain all merged groups regardless of verdict. Completed human summaries MUST state completion and counts of CONFIRMED blockers and CONFIRMED warnings/suggestions only, plus partial-coverage disclosure counting distinct uncovered change regions when applicable. Machine execution detail MUST remain in structured artifacts and check `text`, not the human summary.
 
 #### Scenario: Valid execution finds nothing
 
@@ -223,3 +227,17 @@ Every human-facing chrome string in ordinary, publication, gate, and stack rende
 
 - **WHEN** an existing run with locale en is rendered
 - **THEN** all renderer chrome is English and the same keys exist in the Korean catalog
+
+### Requirement: GitHub publication has a separate human view
+
+GitHub review and inline bodies MUST be rendered from persisted finding evidence as a publication view separate from diagnostic `report.md`. The body MUST contain localized outcome, blocker, and warning/suggestion sections, and an uncertainty section only when nonempty. REJECTED findings MUST NOT be published. A finding MUST retain its path:line location, localized severity, short code-formatted lane rule ID, human title, impact and correction, and verbatim evidence fence. Partial coverage MUST add a localized sentence stating the number of unreviewed change regions. The publication view MUST omit job/run IDs, head/base SHAs, generation timestamps, public finding IDs/group keys, replica agreement and votes, fold diagnostics, coverage tables, diff budgets, coerced-rejection counts, generator/build footers, and synthesis instructions. A configured footer MUST be included. Inline comments MUST render severity and rule tag, title, impact/correction, then evidence. Existing anchor eligibility and bounded 422 fallback MUST be preserved, with fallback bodies using the same human view.
+
+#### Scenario: Mixed fixture publishes in Korean
+
+- **WHEN** one blocker, two warnings, one rejected finding, one uncertain finding, and one uncovered hunk are rendered with locale ko
+- **THEN** the view includes 수정 필요, 확인 필요, the uncertainty section, rule tags, locations and 검토되지 않은 변경 구간이 1곳 있습니다. while excluding rejected findings and diagnostic metadata
+
+#### Scenario: Same fixture publishes in English
+
+- **WHEN** the same evidence is rendered with locale en
+- **THEN** the same selected findings and structure use English chrome

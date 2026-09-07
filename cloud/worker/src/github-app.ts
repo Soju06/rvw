@@ -1,3 +1,4 @@
+import {defaultPresentation, parsePresentationYaml, type PresentationConfig} from "./presentation";
 import {t} from "./i18n";
 import type {CheckConclusion} from "./review-job-contract";
 
@@ -244,6 +245,7 @@ export interface CreateCheckRunInput {
   headSha: string;
   jobId: string;
   detailsUrl?: string;
+  presentation?: PresentationConfig;
 }
 
 export interface CreatedCheckRun {
@@ -256,6 +258,7 @@ export async function createCheckRun(
   input: CreateCheckRunInput,
   fetcher: GitHubFetch = fetch,
 ): Promise<CreatedCheckRun> {
+  const presentation = input.presentation ?? defaultPresentation();
   const value = await githubJson(
     "Check Run creation",
     `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/check-runs`,
@@ -263,13 +266,15 @@ export async function createCheckRun(
     {
       method: "POST",
       body: JSON.stringify({
-        name: "rvw",
+        name: presentation.short_name,
         head_sha: input.headSha,
         status: "in_progress",
         external_id: input.jobId,
         started_at: new Date().toISOString(),
         ...(input.detailsUrl === undefined ? {} : {details_url: input.detailsUrl}),
-        output: {title: t("check_started", "en", {display_name: "rvw"}), summary: t("job", "en", {job_id: input.jobId})},
+        output: {title: t("check_started", presentation.locale, {display_name: presentation.display_name}),
+          summary: t("bootstrap_summary", presentation.locale),
+          text: checkDetails({job_id: input.jobId}, presentation)},
       }),
     },
     fetcher,
@@ -294,6 +299,8 @@ export interface UpdateCheckRunInput {
   conclusion: CheckConclusion;
   title: string;
   summary: string;
+  name?: string;
+  text?: string;
 }
 
 export async function updateCheckRun(
@@ -309,11 +316,40 @@ export async function updateCheckRun(
       method: "PATCH",
       body: JSON.stringify({
         status: "completed",
+        ...(input.name === undefined ? {} : {name: input.name}),
         conclusion: input.conclusion,
         completed_at: new Date().toISOString(),
-        output: {title: input.title, summary: input.summary},
+        output: {title: input.title, summary: input.summary, ...(input.text === undefined ? {} : {text: input.text})},
       }),
     },
     fetcher,
   );
+}
+
+export function checkDetails(facts: Record<string, unknown>, presentation: PresentationConfig): string {
+  // Escaping '<' prevents arbitrary diagnostic strings from ending the collapsed section.
+  const json = JSON.stringify(facts, null, 2).replace(/</g, "\\u003c");
+  const fence = "`".repeat(Math.max(3, ...[...json.matchAll(/`+/g)].map((match) => match[0].length + 1)));
+  return `<details><summary>${t("details", presentation.locale)}</summary>\n\n${fence}json\n${json}\n${fence}\n</details>`;
+}
+
+export async function getPresentationConfig(
+  token: string,
+  input: {owner: string; repo: string; baseSha: string},
+  fetcher: GitHubFetch = fetch,
+): Promise<{presentation: PresentationConfig; failure?: "presentation_config_invalid"}> {
+  const path = `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/.rvw/config.yaml?ref=${encodeURIComponent(input.baseSha)}`;
+  const response = await fetcher(`${GITHUB_API}${path}`, {method: "GET", headers: githubHeaders(token)});
+  if (response.status === 404) return {presentation: defaultPresentation()};
+  if (!response.ok) throw new GitHubApiError("presentation config read", response.status);
+  try {
+    const body = objectValue(await response.json(), "presentation config");
+    if (body.type !== "file" || body.target !== undefined || body.encoding !== "base64" ||
+        typeof body.content !== "string" || body.content.length > 32_768) throw new Error();
+    const bytes = Uint8Array.from(atob(body.content.replace(/\s/g, "")), (character) => character.charCodeAt(0));
+    const raw = new TextDecoder("utf-8", {fatal: true}).decode(bytes);
+    return {presentation: parsePresentationYaml(raw)};
+  } catch {
+    return {presentation: defaultPresentation(), failure: "presentation_config_invalid"};
+  }
 }

@@ -497,7 +497,7 @@ def test_stack_publish_dry_run_has_no_network_or_revalidation(
     assert result.exit_code == 0, result.stdout
     payload = json.loads((run_dir / "publish-payload.json").read_text(encoding="utf-8"))
     assert payload == {
-        "body": "# completed stack report\n",
+        "body": "## Stack review\n\nNone.\n",
         "commit_id": "3" * 40,
         "event": "COMMENT",
     }

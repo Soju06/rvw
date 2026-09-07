@@ -14,16 +14,20 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.i18n import Locale, t
 from rvw.merge import CollapseGroup, MergeResult
-from rvw.report import render_group_item
+from rvw.presentation import PresentationConfig
+from rvw.publication import render_publication, render_publication_item
 from rvw.schema import Verdict
-from rvw.store import RunHandle
+from rvw.store import RunHandle, StageMissing
+
+if TYPE_CHECKING:
+    from rvw.gate import GateVerdict
 
 _HTTP_STATUS = re.compile(r"(?:HTTP\s+|status(?: code)?[=: ]+)(?P<status>[1-5][0-9]{2})", re.I)
 _COMMIT_ID = re.compile(r"^[0-9a-f]{40}$")
@@ -83,57 +87,10 @@ def _confirmed_inline_groups(
     ]
 
 
-def _body_without_inline(
-    report_md: str,
-    merged: MergeResult,
-    outcome: AdjudicationOutcome | None,
-    inline_keys: set[str],
-    *,
-    locale: Locale = "en",
-) -> str:
-    if not inline_keys or outcome is None or t("report.confirmed_heading", locale) not in report_md:
-        return report_md
-
-    start = report_md.index(t("report.confirmed_heading", locale))
-    next_section = report_md.find("\n## ", start + len(t("report.confirmed_heading", locale)))
-    if next_section < 0:
-        next_section = len(report_md)
-    before = report_md[:start].rstrip()
-    after = report_md[next_section:].lstrip()
-    retained = [
-        group
-        for group in merged.groups
-        if outcome.verdicts.get(group.key) is Verdict.CONFIRMED and group.key not in inline_keys
-    ]
-    sections = [before]
-    if retained:
-        sections.append(
-            f"{t('report.confirmed_heading', locale)}\n\n"
-            + "\n\n".join(render_group_item(group, outcome, locale=locale) for group in retained)
-        )
-    if after:
-        sections.append(after)
-    return "\n\n".join(section for section in sections if section) + "\n"
-
-
-def _payload(
-    *,
-    body: str,
-    inline_groups: list[CollapseGroup],
-    outcome: AdjudicationOutcome | None,
-    locale: Locale = "en",
-) -> dict[str, object]:
+def _payload(*, body: str, comments: list[dict[str, object]] | None = None) -> dict[str, object]:
     payload: dict[str, object] = {"event": "COMMENT", "body": body}
-    if inline_groups:
-        payload["comments"] = [
-            {
-                "path": group.file,
-                "line": group.line,
-                "side": "RIGHT",
-                "body": render_group_item(group, outcome, locale=locale),
-            }
-            for group in inline_groups
-        ]
+    if comments:
+        payload["comments"] = comments
     return payload
 
 
@@ -151,16 +108,18 @@ def _review_url(raw: str, *, locale: Locale = "en") -> str:
     return value
 
 
-def _fallback_body(
-    body: str, groups: list[CollapseGroup], outcome: AdjudicationOutcome, *, locale: Locale = "en"
-) -> str:
-    items = []
-    for group in groups:
-        line = group.line if group.line is not None else t("common.unknown", locale)
-        items.append(
-            f"#### `{group.file}:{line}`\n\n{render_group_item(group, outcome, locale=locale)}"
-        )
-    return body.rstrip() + t("publish.fallback_heading", locale) + "\n\n".join(items) + "\n"
+def _fallback_body(body: str, comments: list[dict[str, object]], locale: Locale) -> str:
+    items = [
+        f"#### `{comment['path']}:{comment['line']}`\n\n{comment['body']}" for comment in comments
+    ]
+    return (
+        body.rstrip()
+        + "\n\n"
+        + t("publish.fallback_heading", locale)
+        + "\n\n"
+        + "\n\n".join(items)
+        + "\n"
+    )
 
 
 def publish_review(
@@ -172,14 +131,48 @@ def publish_review(
     merged: MergeResult,
     outcome: AdjudicationOutcome | None,
     execute: bool,
-    locale: Locale = "en",
+    locale: Locale | None = None,
+    presentation: PresentationConfig | None = None,
+    gate_verdict: GateVerdict | None = None,
 ) -> PublishResult:
     """Build or execute one GitHub COMMENT review from persisted run artifacts."""
 
+    del report_md
+    presentation = presentation or run.load_presentation()
+    if locale is not None:
+        presentation = presentation.model_copy(update={"locale": locale})
+    locale = presentation.locale
     inline_groups = _confirmed_inline_groups(merged, outcome)
-    inline_keys = {group.key for group in inline_groups}
-    body = _body_without_inline(report_md, merged, outcome, inline_keys, locale=locale)
-    payload = _payload(body=body, inline_groups=inline_groups, outcome=outcome, locale=locale)
+    try:
+        coverage = run.load_discover().coverage
+    except StageMissing:
+        coverage = []
+    try:
+        summary = run.load_summary()
+    except StageMissing:
+        summary = None
+    body = render_publication(
+        merged=merged,
+        outcome=outcome,
+        coverage=coverage,
+        presentation=presentation,
+        excluded_keys=frozenset(group.key for group in inline_groups),
+        summary=summary,
+    )
+    if gate_verdict is not None:
+        from rvw.special_publication import render_gate_publication
+
+        body = render_gate_publication(gate_verdict, merged, outcome, presentation)
+    comments: list[dict[str, object]] = [
+        {
+            "path": group.file,
+            "line": group.line,
+            "side": "RIGHT",
+            "body": render_publication_item(group, outcome, presentation=presentation, inline=True),
+        }
+        for group in inline_groups
+    ]
+    payload = _payload(body=body, comments=comments)
     payload_text = _json_text(payload)
 
     if not execute:
@@ -205,12 +198,7 @@ def publish_review(
     except PublishError as exc:
         if exc.status_code != 422 or not inline_groups or outcome is None:
             raise
-        fallback = _payload(
-            body=_fallback_body(body, inline_groups, outcome, locale=locale),
-            inline_groups=[],
-            outcome=outcome,
-            locale=locale,
-        )
+        fallback = _payload(body=_fallback_body(body, comments, locale))
         raw = _run(command, _json_text(fallback))
         return PublishResult(
             review_url=_review_url(raw, locale=locale),
@@ -241,7 +229,7 @@ def publish_body_review(
 
     if _COMMIT_ID.fullmatch(commit_id) is None:
         raise ValueError(t("publish.invalid_commit", locale))
-    payload = _payload(body=body, inline_groups=[], outcome=None, locale=locale)
+    payload = _payload(body=body)
     payload["commit_id"] = commit_id
     payload_text = _json_text(payload)
     (run_dir / "publish-payload.json").write_text(

@@ -64,6 +64,8 @@ export interface ReviewResultMapping {
   terminalState: "completed" | "failed";
   conclusion: CheckConclusion;
   reason: string;
+  reasonCode?: string;
+  presentation?: PresentationConfig;
 }
 
 export interface ProcessResult {
@@ -165,15 +167,15 @@ export function checkConclusionForResult(
       throw new Error(`SDK exit ${exitCode} disagrees with process exit ${payload.exit_code}`);
     }
     if (payload.status === "pass") {
-      return {terminalState: "completed", conclusion: "success", reason: t("process_passed", "en", {display_name: "rvw"})};
+      return {terminalState: "completed", conclusion: "success", reason: t("process_passed", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation};
     }
     if (payload.status === "block") {
-      return {terminalState: "completed", conclusion: "failure", reason: t("process_blocked", "en", {display_name: "rvw"})};
+      return {terminalState: "completed", conclusion: "failure", reason: t("process_blocked", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation};
     }
-    return {terminalState: "failed", conclusion: "neutral", reason: payload.failure === null
+    return {terminalState: "failed", conclusion: "neutral", presentation: payload.presentation, reasonCode: payload.failure?.code, reason: payload.failure === null
       ? t("process_status", "en", {display_name: "rvw", status: payload.status}) : `${payload.failure.code}: ${payload.failure.detail}`};
   } catch (error) {
-    return {terminalState: "failed", conclusion: "neutral", reason:
+    return {terminalState: "failed", conclusion: "neutral", reasonCode: "process_invalid", reason:
       t("process_invalid", "en", {display_name: "rvw", error: error instanceof Error ? error.message : String(error)})};
   }
 }
@@ -181,6 +183,9 @@ export function checkConclusionForResult(
 export interface ArtifactSummary {
   schema_version: 1;
   lanes: {dispatched: number; valid: number; uncovered: number};
+  findings: Record<"blocker" | "warning" | "suggestion", number>;
+  verdicts: Record<"CONFIRMED" | "REJECTED" | "UNCERTAIN", number>;
+  blockers: string[];
   markdown: string;
   presentation: PresentationConfig;
 }
@@ -214,5 +219,7 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
   const valid = lanes.valid as number;
   const uncovered = lanes.uncovered as number;
   if (valid === 0 || valid > dispatched) throw new Error("review coverage has no valid lanes or exceeds dispatched lanes");
-  return {schema_version: 1, lanes: {dispatched, valid, uncovered}, markdown: value.markdown, presentation};
+  return {schema_version: 1, lanes: {dispatched, valid, uncovered}, markdown: value.markdown, presentation,
+    findings: value.findings as ArtifactSummary["findings"],
+    verdicts: value.verdicts as ArtifactSummary["verdicts"], blockers: value.blockers as string[]};
 }
