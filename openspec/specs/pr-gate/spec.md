@@ -426,7 +426,7 @@ Policy-gated `run` and `auto` MUST resolve policy in this order: an explicit pol
 
 ### Requirement: Gate publication uses localized human findings
 
-Gate publication MUST derive its body from the persisted verdict and presentation snapshot through the human publication view and locale catalogs. It MUST retain PASS/BLOCK, the actionable finding list, and human disposition reasons, and MUST omit run IDs, actor identity, and inheritance internals from publication prose. Structured gate verdict artifacts MUST retain those diagnostic facts. Publication MUST preserve disposition, anchor, and COMMENT safety semantics.
+Gate publication MUST derive its body from the persisted verdict and presentation snapshot through the human publication view and locale catalogs. It MUST retain PASS/BLOCK, the actionable finding list, and human disposition reasons, and MUST omit run IDs, actor identity, and inheritance internals from publication prose. Structured gate verdict artifacts MUST retain those diagnostic facts. Publication MUST satisfy the shared language gate without changing disposition, anchor, or COMMENT safety semantics.
 
 #### Scenario: Accepted blocker is published
 

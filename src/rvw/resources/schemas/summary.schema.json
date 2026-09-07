@@ -122,6 +122,24 @@
   },
   "additionalProperties": false,
   "properties": {
+    "publication_failure": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Publication Failure"
+    },
+    "language_fallback_used": {
+      "default": false,
+      "title": "Language Fallback Used",
+      "type": "boolean"
+    },
     "presentation": {
       "$ref": "#/$defs/PresentationConfig"
     },

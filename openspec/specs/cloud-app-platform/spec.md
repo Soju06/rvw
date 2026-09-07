@@ -219,3 +219,17 @@ Worker Korean and English catalogs MUST have identical keys and format-compatibl
 
 - **WHEN** a job exceeds its deadline before Python completes
 - **THEN** the check uses catalog-localized incomplete prose and preserves job and diagnostic details in text
+
+### Requirement: App retains publication language outcomes
+
+The App MUST consume nullable nonempty-string `publication_failure` and boolean `language_fallback_used` from Python process and summary contracts, defaulting absent legacy fields to null and false. A process with `infra_failed`, exit 3, and `publication_language_mismatch` MUST complete its check as neutral with catalog-localized human prose. The collapsed check `text` MUST retain the publication failure and fallback facts; those facts MUST NOT be hidden by a successful model review or reinterpreted as policy PASS.
+
+#### Scenario: Review findings fail the language gate
+
+- **WHEN** valid review evidence is retained but Python reports publication_language_mismatch with infra_failed and exit 3
+- **THEN** the App finishes a neutral localized check, retains the failure in text, and sends no finding prose
+
+#### Scenario: Explicit language fallback succeeds
+
+- **WHEN** Python publishes through explicit fallback and reports language_fallback_used true
+- **THEN** the App retains that fact in check text while preserving the canonical process conclusion

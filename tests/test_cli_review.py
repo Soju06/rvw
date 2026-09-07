@@ -463,12 +463,12 @@ async def test_shared_pipeline_propagates_split_replicas_concurrency_and_deadlin
     assert stage_calls == [("discover", 2, 3, 37), ("adjudicate", 5, 3, 37)]
 
 
-async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
+async def test_shared_pipeline_threads_locale_without_expanded_runtime(
     tmp_path: Path,
     registry_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The optional expanded runtime must not change the default callback contract."""
+    """Locale is mandatory while the optional expanded runtime stays optional."""
 
     runtime = cast(Runtime, FakeRuntime())
     received_runtime: Runtime | None = None
@@ -487,6 +487,7 @@ async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
         concurrency: int,
         deadline_seconds: int,
         host_gate: HostSlotGate | None,
+        locale: str,
     ) -> AdjudicationOutcome:
         nonlocal received_runtime
         del (
@@ -499,6 +500,7 @@ async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
             deadline_seconds,
             host_gate,
         )
+        assert locale == "ko"
         received_runtime = runtime
         return AdjudicationOutcome(
             verdicts={},
@@ -515,6 +517,7 @@ async def test_shared_pipeline_preserves_legacy_adjudicator_signature(
     monkeypatch.setattr(pipeline_module, "discover", fake_discover)
 
     await pipeline_module.execute_pipeline(
+        presentation=PresentationConfig(locale="ko"),
         registry=registry,
         lanes_root=lanes_root,
         target=pr_target(),
@@ -914,7 +917,9 @@ def test_adjudicate_run_reuses_persisted_artifacts_and_rewrites_outcome_report(
     assert (run_dir / "discover.json").read_bytes() == discover_before
     assert (run_dir / "outcome.json").is_file()
     assert (run_dir / "report.md").read_bytes() != report_before
-    assert "## Confirmed findings (CONFIRMED)" in (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "## Confirmed findings (CONFIRMED)" in (run_dir / "report.md").read_text(
+        encoding="utf-8"
+    )
     assert json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["build"] == build_before
 
 

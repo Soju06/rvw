@@ -42,6 +42,7 @@ CATALOG: dict[str, str] = {
     "report.footer": "_{display_name} {p0} 생성 · 빌드 {p1}_",
     "publish.missing_url": "GitHub 응답에 html_url이 없습니다",
     "publish.invalid_url": "GitHub 응답의 html_url이 문자열이 아닙니다",
+    "publish.language_mismatch": "publication_language_mismatch: 검토 내용이 설정된 언어와 일치하지 않습니다.",
     "publish.fallback_heading": "\n\n### 앵커 실패 항목\n\n",
     "publish.invalid_commit": "스택 게시의 commit_id는 40자리 소문자 SHA여야 합니다",
     "stack.header": "# {display_name} stacked PR 리뷰",

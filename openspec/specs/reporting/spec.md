@@ -191,7 +191,7 @@ the same commit-pinned payload persisted for inspection.
 
 ### Requirement: Policy-gated summaries have one producer
 
-Python MUST emit version-1 `summary.json` with `schema_version: 1`, `lanes` counts `dispatched`, `valid`, and `uncovered`, `findings` counts for `blocker`, `warning`, and `suggestion`, `verdicts` counts for `CONFIRMED`, `REJECTED`, and `UNCERTAIN`, a `blockers` list of policy-blocking finding identifiers, resolved `presentation` configuration, and common localized `markdown` summary text. `lanes.dispatched` MUST count dispatched lanes, `lanes.valid` MUST count lanes with at least one VALID execution, and `lanes.uncovered` MUST count remaining lane-hunk receipts. Counts MUST be derived from persisted execution and finding evidence, MUST preserve zero-valid coverage distinctly from clean valid execution, and MUST remain available with partial or missing stage artifacts. Missing execution evidence MUST NOT imply a successful review. App Check summaries and every other presentation of a policy-gated run MUST consume these facts without recounting stage payloads. `outcome.json` MUST retain its adjudication schema.
+Python MUST emit version-1 `summary.json` with `schema_version: 1`, `lanes` counts `dispatched`, `valid`, and `uncovered`, `findings` counts for `blocker`, `warning`, and `suggestion`, `verdicts` counts for `CONFIRMED`, `REJECTED`, and `UNCERTAIN`, a `blockers` list of policy-blocking finding identifiers, resolved `presentation` configuration, nullable nonempty-string `publication_failure`, boolean `language_fallback_used`, and common localized `markdown` summary text. `lanes.dispatched` MUST count dispatched lanes, `lanes.valid` MUST count lanes with at least one VALID execution, and `lanes.uncovered` MUST count remaining lane-hunk receipts. Counts MUST be derived from persisted execution and finding evidence, MUST preserve zero-valid coverage distinctly from clean valid execution, and MUST remain available with partial or missing stage artifacts. Missing execution evidence MUST NOT imply a successful review. App Check summaries and every other presentation of a policy-gated run MUST consume these facts without recounting stage payloads. `outcome.json` MUST retain its adjudication schema.
 
 The diagnostic `findings` counters MUST retain all merged groups regardless of verdict. Completed human summaries MUST state completion and counts of CONFIRMED blockers and CONFIRMED warnings/suggestions only, plus partial-coverage disclosure counting distinct uncovered change regions when applicable. Machine execution detail MUST remain in structured artifacts and check `text`, not the human summary.
 
@@ -241,3 +241,22 @@ GitHub review and inline bodies MUST be rendered from persisted finding evidence
 
 - **WHEN** the same evidence is rendered with locale en
 - **THEN** the same selected findings and structure use English chrome
+
+### Requirement: Publication language is checked before every GitHub write
+
+Before any review prose is sent to GitHub, the system MUST split rendered Markdown into prose segments excluding fenced code, inline code, URLs, paths, identifier tokens containing slash, underscore, dot or camelCase, numbers and punctuation. Segments with fewer than 12 letters MUST be skipped. Korean prose MUST have Hangul share of letters at least 0.6; English prose MUST have Latin share at least 0.9 and zero Hangul. Any segment satisfying neither target threshold MUST be a mismatch. On mismatch the system MUST attempt exactly one bounded runtime rewrite receiving only prose segments and returning the same number of segments, then re-render and re-check. Finding count, severity, verdict, path:line anchors, rule tags, and every evidence fence MUST remain byte-identical; a rewrite violating these invariants MUST be rejected. If mismatch remains, no review prose MUST be published and the outcome MUST record `publication_language_mismatch`, unless explicit language fallback permits the original mismatched prose and records `language_fallback_used: true`. Catalog-only localized check outcome summaries MUST remain available.
+
+#### Scenario: Wrong-language finding
+
+- **WHEN** Korean chrome contains an English explanation of at least 12 letters
+- **THEN** the gate attempts one rewrite and publishes only if the result satisfies the locale and invariants
+
+#### Scenario: Rewrite changes evidence
+
+- **WHEN** the rewrite changes an evidence fence or segment count
+- **THEN** the rewrite is rejected and no prose is published without fallback
+
+#### Scenario: Explicit fallback
+
+- **WHEN** mismatch remains and language fallback is explicitly enabled
+- **THEN** mismatched prose may be published and language_fallback_used is true

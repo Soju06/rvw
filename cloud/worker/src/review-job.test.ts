@@ -286,3 +286,33 @@ it("persists a malformed bootstrap diagnostic before creating the default check"
   expect(test.record().presentationConfigFailure).toBe("presentation_config_invalid");
   expect(test.storage.put.mock.invocationCallOrder[0]).toBeLessThan(mocks.createCheckRun.mock.invocationCallOrder[0]);
 });
+it("keeps the localized outcome counts on language mismatch and records fallback facts in text", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  const presentation = {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko", footer: null};
+  const publication = {publication_failure: "publication_language_mismatch", language_fallback_used: false};
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 3} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({presentation, ...publication, status: "infra_failed", exit_code: 3,
+    failure: {code: "publication_language_mismatch", detail: "Untranslated prose must never reach this summary"}})));
+  const markdown = "검토를 마쳤습니다. 수정이 필요한 문제 1건, 확인이 필요한 항목 2건.";
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture({presentation, ...publication, markdown})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const output = mocks.updateCheckRun.mock.calls[0][1];
+  expect(output).toMatchObject({name: "VOOY Review", conclusion: "neutral", summary: markdown});
+  expect(output.text).toContain('"publication_failure": "publication_language_mismatch"');
+  expect(output.text).toContain('"language_fallback_used": false');
+  expect(output.summary).not.toContain("Untranslated prose");
+});
+it("retains process language-fallback facts when summary is missing", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 0} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({publication_failure: "publication_language_mismatch", language_fallback_used: true})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const output = mocks.updateCheckRun.mock.calls[0][1];
+  expect(output.conclusion).toBe("neutral");
+  expect(output.text).toContain('"publication_failure": "publication_language_mismatch"');
+  expect(output.text).toContain('"language_fallback_used": true');
+});

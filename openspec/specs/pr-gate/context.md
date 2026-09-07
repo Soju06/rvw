@@ -81,3 +81,7 @@ Policy execution remains separate from the human disposition gate. `run` evaluat
 ## Human gate publication (2026-09-07)
 
 The publication audit identified run IDs, actors and inheritance tiers in gate prose. The localized publication view now retains PASS/BLOCK, actionable findings and human disposition reasons, while `gate-verdict.json` remains the complete anchored decision evidence. Display changes do not affect accepted/must-fix decisions, owner checks, inheritance matching, resumed-run protection, or bounded COMMENT publication. The saved presentation snapshot determines chrome for both initial and resumed publication.
+
+## Publication locale enforcement (2026-09-07)
+
+Gate publication shares the publication language boundary, including completed-run republishing. Disposition reasons remain human prose subject to the selected locale; actor/inheritance facts stay in structured verdict JSON. The locale check does not reopen completed verdicts, rerun adjudication or change owner authorization.

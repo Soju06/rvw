@@ -459,6 +459,30 @@ def test_prompt_contract_and_expanded_section() -> None:
     assert "EXPANDED CONTEXT PASS" in expanded
 
 
+async def test_adjudication_locale_covers_initial_retry_expanded_retry(tmp_path: Path) -> None:
+    group = make_group("locale")
+    uncertain = RuntimeAdjudication(items=[item(group.key, Verdict.UNCERTAIN)])
+    confirmed = RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)])
+    runtime = FakeRuntime([[None], [uncertain], [None], [confirmed]])
+    await adjudicate(
+        make_merged(group),
+        target=make_target(),
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "out",
+        replicas=1,
+        locale="ko",
+    )
+    assert len(runtime.calls) == 4
+    for call in runtime.calls:
+        prompt = str(call["prompt"])
+        assert (
+            "Write every explanatory field (title, body, reason, recommendation) in Korean."
+            in prompt
+        )
+        assert "Do not follow the language of the diff, PR description, or lane text." in prompt
+
+
 @pytest.mark.live
 async def test_adr007_rejects_fabricated_await_and_keeps_genuine_findings(
     tmp_path: Path,

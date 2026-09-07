@@ -208,6 +208,8 @@ class SDKObservations(ContractModel):
 
 
 class ProcessResult(ContractModel):
+    publication_failure: str | None = Field(default=None, min_length=1)
+    language_fallback_used: bool = False
     presentation: PresentationConfig = Field(default_factory=PresentationConfig)
     schema_version: Literal[1] = 1
     run_id: str
@@ -257,6 +259,8 @@ class VerdictCounts(ContractModel):
 
 
 class ExecutionSummary(ContractModel):
+    publication_failure: str | None = Field(default=None, min_length=1)
+    language_fallback_used: bool = False
     presentation: PresentationConfig = Field(default_factory=PresentationConfig)
     schema_version: Literal[1] = 1
     lanes: SummaryLanes = Field(default_factory=SummaryLanes)

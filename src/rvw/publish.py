@@ -20,9 +20,11 @@ from pydantic import BaseModel, ConfigDict
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.i18n import Locale, t
+from rvw.langgate import Rewriter, RuntimeRewriter, enforce_language_sync
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.presentation import PresentationConfig
 from rvw.publication import render_publication, render_publication_item
+from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.schema import Verdict
 from rvw.store import RunHandle, StageMissing
 
@@ -42,6 +44,7 @@ class PublishResult(BaseModel):
     inline_count: int
     body_fallback_count: int
     state: Literal["commented"]
+    language_fallback_used: bool = False
 
 
 class PublishError(RuntimeError):
@@ -50,6 +53,56 @@ class PublishError(RuntimeError):
     def __init__(self, detail: str, *, status_code: int | None = None) -> None:
         self.status_code = status_code
         super().__init__(detail)
+
+
+class PublicationLanguageMismatch(PublishError):
+    reason = "publication_language_mismatch"
+
+    def __init__(self, locale: Locale) -> None:
+        super().__init__(t("publish.language_mismatch", locale))
+
+
+def _check_publication(
+    documents: list[str],
+    *,
+    run_dir: Path,
+    locale: Locale,
+    rewriter: Rewriter | None,
+    allow_language_fallback: bool,
+) -> tuple[tuple[str, ...], bool]:
+    from rvw.store import _write_json
+    from rvw.summary import ExecutionSummary
+
+    checked = enforce_language_sync(
+        documents,
+        locale=locale,
+        rewriter=rewriter
+        if rewriter is not None
+        else RuntimeRewriter(
+            CodexRuntime(mode=CodexRuntimeMode.TOOL_LESS),
+            run_dir,
+        ),
+        allow_language_fallback=allow_language_fallback,
+    )
+    facts = {
+        "publication_failure": checked.failure_reason,
+        "language_fallback_used": checked.language_fallback_used,
+        "rewrite_attempted": checked.rewrite_attempted,
+    }
+    _write_json(run_dir / "publication.json", facts)
+    summary_path = run_dir / "summary.json"
+    if summary_path.is_file():
+        summary = ExecutionSummary.model_validate_json(summary_path.read_text(encoding="utf-8"))
+    else:
+        presentation = RunHandle(run_dir.name, run_dir).load_presentation()
+        summary = ExecutionSummary(presentation=presentation, markdown=t("pub.incomplete", locale))
+    summary.publication_failure = checked.failure_reason
+    summary.language_fallback_used = checked.language_fallback_used
+    _write_json(summary_path, summary.model_dump(mode="json"))
+    if not checked.publishable:
+        (run_dir / "publish-payload.json").unlink(missing_ok=True)
+        raise PublicationLanguageMismatch(locale)
+    return checked.documents, checked.language_fallback_used
 
 
 def _run(cmd: list[str], input_json: str) -> str:
@@ -134,6 +187,8 @@ def publish_review(
     locale: Locale | None = None,
     presentation: PresentationConfig | None = None,
     gate_verdict: GateVerdict | None = None,
+    rewriter: Rewriter | None = None,
+    allow_language_fallback: bool = False,
 ) -> PublishResult:
     """Build or execute one GitHub COMMENT review from persisted run artifacts."""
 
@@ -172,6 +227,17 @@ def publish_review(
         }
         for group in inline_groups
     ]
+    fallback_body = _fallback_body(body, comments, locale)
+    documents, fallback_used = _check_publication(
+        [body, *(str(comment["body"]) for comment in comments), fallback_body],
+        run_dir=run.dir,
+        locale=locale,
+        rewriter=rewriter,
+        allow_language_fallback=allow_language_fallback,
+    )
+    body, fallback_body = documents[0], documents[-1]
+    for comment, rewritten in zip(comments, documents[1:-1], strict=True):
+        comment["body"] = rewritten
     payload = _payload(body=body, comments=comments)
     payload_text = _json_text(payload)
 
@@ -182,6 +248,7 @@ def publish_review(
             inline_count=len(inline_groups),
             body_fallback_count=0,
             state="commented",
+            language_fallback_used=fallback_used,
         )
 
     command = [
@@ -198,13 +265,14 @@ def publish_review(
     except PublishError as exc:
         if exc.status_code != 422 or not inline_groups or outcome is None:
             raise
-        fallback = _payload(body=_fallback_body(body, comments, locale))
+        fallback = _payload(body=fallback_body)
         raw = _run(command, _json_text(fallback))
         return PublishResult(
             review_url=_review_url(raw, locale=locale),
             inline_count=0,
             body_fallback_count=len(inline_groups),
             state="commented",
+            language_fallback_used=fallback_used,
         )
 
     return PublishResult(
@@ -212,6 +280,7 @@ def publish_review(
         inline_count=len(inline_groups),
         body_fallback_count=0,
         state="commented",
+        language_fallback_used=fallback_used,
     )
 
 
@@ -224,12 +293,21 @@ def publish_body_review(
     body: str,
     execute: bool,
     locale: Locale = "en",
+    rewriter: Rewriter | None = None,
+    allow_language_fallback: bool = False,
 ) -> PublishResult:
     """Persist and optionally send one body-only GitHub COMMENT review."""
 
     if _COMMIT_ID.fullmatch(commit_id) is None:
         raise ValueError(t("publish.invalid_commit", locale))
-    payload = _payload(body=body)
+    documents, fallback_used = _check_publication(
+        [body],
+        run_dir=run_dir,
+        locale=locale,
+        rewriter=rewriter,
+        allow_language_fallback=allow_language_fallback,
+    )
+    payload = _payload(body=documents[0])
     payload["commit_id"] = commit_id
     payload_text = _json_text(payload)
     (run_dir / "publish-payload.json").write_text(
@@ -242,6 +320,7 @@ def publish_body_review(
             inline_count=0,
             body_fallback_count=0,
             state="commented",
+            language_fallback_used=fallback_used,
         )
 
     command = [
@@ -259,6 +338,7 @@ def publish_body_review(
         inline_count=0,
         body_fallback_count=0,
         state="commented",
+        language_fallback_used=fallback_used,
     )
 
 

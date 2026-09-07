@@ -1,4 +1,4 @@
-"""Reusable execution and loading for the ordinary rvw review pipeline."""
+"""Reusable execution and loading for the ordinary review pipeline."""
 
 from __future__ import annotations
 
@@ -140,6 +140,7 @@ async def execute_pipeline(
         )
     brief = dynamic_brief.read_text(encoding="utf-8") if dynamic_brief is not None else None
     discovered = await discover(
+        locale=presentation.locale,
         registry=registry,
         lanes_root=lanes_root,
         target=target,
@@ -182,6 +183,7 @@ async def execute_pipeline(
         try:
             outcome = await adjudicator(
                 merged,
+                locale=presentation.locale,
                 target=target,
                 runtime=adjudication_runtime,
                 repo_dir=repo_dir,

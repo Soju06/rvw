@@ -163,6 +163,31 @@ def registry(*lane_entries: tuple[str, Tier]) -> Registry:
     )
 
 
+async def test_discovery_locale_survives_retry_and_coverage_waves(tmp_path: Path) -> None:
+    lane_id = "base/locale"
+    write_lane(tmp_path / "lanes", lane_id, Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={lane_id: [RunStatus.INVALID, RunStatus.VALID, RunStatus.VALID]},
+        covered={lane_id: [[], [], ["src/a.py"]]},
+    )
+    await discover(
+        registry=registry((lane_id, Tier.BASE)),
+        lanes_root=tmp_path / "lanes",
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+        locale="ko",
+    )
+    assert len(runtime.prompts) == 3
+    for _, prompt in runtime.prompts:
+        assert (
+            "Write every explanatory field (title, body, reason, recommendation) in Korean."
+            in prompt
+        )
+        assert "Do not follow the language of the diff, PR description, or lane text." in prompt
+
+
 def two_file_target() -> ResolvedTarget:
     first = target().diff
     second = (

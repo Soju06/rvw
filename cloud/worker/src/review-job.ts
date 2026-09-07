@@ -141,6 +141,7 @@ function titleFor(mapping: ReviewResultMapping, presentation: PresentationConfig
 
 function humanReason(code: string | undefined, presentation: PresentationConfig): string {
   const keys: Record<string, MessageKey> = {
+    publication_language_mismatch: "reason_language",
     timed_out: "reason_deadline", superseded: "reason_superseded", start_failed: "reason_queue_exhausted",
     process_invalid: "reason_artifacts", artifacts_invalid: "reason_artifacts", summary_invalid: "reason_artifacts",
     process_disappeared: "reason_process", presentation_config_invalid: "reason_config",
@@ -149,9 +150,11 @@ function humanReason(code: string | undefined, presentation: PresentationConfig)
 }
 
 function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSummary | null,
-  presentation: PresentationConfig): string {
+  presentation: PresentationConfig, mapping?: ReviewResultMapping): string {
   return checkDetails({job_id: record.jobId, reason,
     presentation_config_failure: record.presentationConfigFailure ?? null,
+    publication_failure: summary?.publication_failure ?? mapping?.publication_failure ?? null,
+    language_fallback_used: summary?.language_fallback_used ?? mapping?.language_fallback_used ?? false,
     lanes: summary?.lanes ?? null, findings: summary?.findings ?? null,
     verdicts: summary?.verdicts ?? null, blockers: summary?.blockers ?? null,
     artifact_key: `jobs/${record.jobId}/`, artifacts: record.artifacts}, presentation);
@@ -761,11 +764,11 @@ export class RvwReviewJob extends DurableObject<Env> {
       conclusion: mapping.conclusion,
       name: presentation.short_name,
       title: titleFor(mapping, presentation),
-      summary: mapping.terminalState === "completed" && summary !== null
+      summary: (mapping.terminalState === "completed" || mapping.reasonCode === "publication_language_mismatch") && summary !== null
         ? summary.markdown + (record.presentationConfigFailure === undefined ? ""
           : `\n\n${humanReason(record.presentationConfigFailure, presentation)}`)
         : humanReason(record.presentationConfigFailure ?? mapping.reasonCode, presentation),
-      text: diagnosticText(record, mapping.reason, summary, presentation),
+      text: diagnosticText(record, mapping.reason, summary, presentation, mapping),
     });
     record = {
       ...record,

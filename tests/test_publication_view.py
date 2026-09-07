@@ -4,6 +4,7 @@ import pytest
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import EnrichedFinding, LaneCoverage, RunCoverage
+from rvw.langgate import check_language
 from rvw.merge import merge
 from rvw.presentation import PresentationConfig
 from rvw.publication import render_publication
@@ -131,3 +132,15 @@ def test_publication_omits_empty_uncertainty_and_escapes_plain_footer():
     )
     assert "Verification uncertain" not in result
     assert r"A \*plain\* footer" in result
+
+
+def test_korean_publication_fixture_passes_only_its_configured_locale():
+    merged, outcome, coverage = publication_fixture("ko")
+    result = render_publication(
+        merged=merged,
+        outcome=outcome,
+        coverage=coverage,
+        presentation=PresentationConfig(locale="ko"),
+    )
+    assert check_language(result, "ko")
+    assert not check_language(result, "en")

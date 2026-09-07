@@ -90,7 +90,12 @@ from rvw.pipeline import (
 from rvw.policy import PolicyNotFound, evaluate, resolve_auto_policy
 from rvw.presentation import WORKTREE_RULE_WARNING, PresentationConfig, PresentationConfigInvalid
 from rvw.provenance import current_build_provenance, version_label
-from rvw.publish import PublishError, publish_body_review, publish_review
+from rvw.publish import (
+    PublicationLanguageMismatch,
+    PublishError,
+    publish_body_review,
+    publish_review,
+)
 from rvw.registry import (
     EffectiveRegistry,
     Registry,
@@ -159,11 +164,12 @@ _PLAN_REPLICAS = 1
 _PLAN_ADJUDICATE_REPLICAS = 3
 DEFAULT_RUN_ROOT = Path("/tmp/rvw")
 
+_CLI_COMMAND = "rvw"
 _EXAMPLES: dict[str, list[str]] = {
     "review": [
-        "rvw review --target 123",
-        "rvw review --target 123 --pause --dynamic-brief /tmp/brief.md",
-        "rvw review --target HEAD --json",
+        f"{_CLI_COMMAND} review --target 123",
+        f"{_CLI_COMMAND} review --target 123 --pause --dynamic-brief /tmp/brief.md",
+        f"{_CLI_COMMAND} review --target HEAD --json",
     ],
     "plan": ["rvw plan --target 123 --json"],
     "gate": [
@@ -633,6 +639,7 @@ def review(
         Option("--allow-worktree-rules", help="Read .rvw rules from the working tree (non-SoT)."),
     ] = False,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     host_gate = _command_host_gate()
     try:
@@ -653,8 +660,12 @@ def review(
                 allow_worktree_rules=allow_worktree_rules,
                 host_gate=host_gate,
                 discovery_mode=discovery_mode,
+                allow_language_fallback=allow_language_fallback,
             )
         )
+    except PublicationLanguageMismatch as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
     except PresentationConfigInvalid as exc:
         if json_output:
             _write_json({"error": exc.reason, "reason": exc.reason, "detail": str(exc)})
@@ -714,6 +725,7 @@ async def _review_pipeline(
     allow_worktree_rules: bool = False,
     host_gate: HostSlotGate | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
+    allow_language_fallback: bool = False,
 ) -> None:
     resolved_target: ResolvedTarget | None = None
     if publish:
@@ -762,6 +774,7 @@ async def _review_pipeline(
     payload_path: Path | None = None
     if artifacts.target.kind == "pr" and artifacts.target.pr_number is not None:
         publication = publish_review(
+            allow_language_fallback=allow_language_fallback,
             run=artifacts.run,
             repo=artifacts.target.repo,
             pr_number=artifacts.target.pr_number,
@@ -809,30 +822,32 @@ async def _execute_pipeline(
 ) -> _PipelineArtifacts | None:
     """Execute and persist common review stages without publishing or rendering CLI output."""
     target = resolved_target or _resolve_cli_target(target_spec)
-    presentation = presentation or load_repo_presentation(
-        target, cwd=repo_dir or Path.cwd(), allow_worktree_rules=allow_worktree_rules
-    )
-    if registry_root.expanduser() == DEFAULT_REGISTRY_ROOT:
-        registry = load_effective_registry(
-            target,
-            cwd=Path.cwd(),
-            external_root=registry_root,
-            allow_worktree_rules=allow_worktree_rules,
-        )
-        lanes_root = Path(".")
-    else:
-        registry, lanes_root = _load_registry_root(registry_root)
-    active_lanes = _load_active_lanes(registry, lanes_root, target)
-    if lane_sources is not None and isinstance(registry, EffectiveRegistry):
-        active_ids = {lane.id for lane in active_lanes}
-        for source in registry.sources:
-            if source.lane.id in active_ids:
-                lane_sources[source.source] = lane_sources.get(source.source, 0) + 1
 
     async def execute_with_checkout(checkout: Path | None) -> _PipelineArtifacts | None:
+        source_dir = Path.cwd() if allow_worktree_rules else (checkout or Path.cwd())
+        resolved_presentation = presentation or load_repo_presentation(
+            target, cwd=source_dir, allow_worktree_rules=allow_worktree_rules
+        )
+        if registry_root.expanduser() == DEFAULT_REGISTRY_ROOT:
+            registry = load_effective_registry(
+                target,
+                cwd=source_dir,
+                external_root=registry_root,
+                allow_worktree_rules=allow_worktree_rules,
+            )
+            lanes_root = Path(".")
+        else:
+            registry, lanes_root = _load_registry_root(registry_root)
+        active_lanes = _load_active_lanes(registry, lanes_root, target)
+        if lane_sources is not None and isinstance(registry, EffectiveRegistry):
+            active_ids = {lane.id for lane in active_lanes}
+            for source in registry.sources:
+                if source.lane.id in active_ids:
+                    lane_sources[source.source] = lane_sources.get(source.source, 0) + 1
+
         return await execute_pipeline(
             run_handle=run_handle,
-            presentation=presentation,
+            presentation=resolved_presentation,
             registry=registry,
             lanes_root=lanes_root,
             target=target,
@@ -1158,6 +1173,7 @@ def gate(
     execute: Annotated[bool, Option("--execute")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     """Run or resume a fail-closed, artifact-backed pull-request gate."""
 
@@ -1194,6 +1210,7 @@ def gate(
             json_output=json_output,
             host_gate=host_gate,
             discovery_mode=discovery_mode,
+            allow_language_fallback=allow_language_fallback,
         )
     )
 
@@ -1215,6 +1232,7 @@ async def _gate_pipeline(
     json_output: bool,
     host_gate: HostSlotGate | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
+    allow_language_fallback: bool = False,
 ) -> None:
     artifacts: _PipelineArtifacts
     plan: GatePlan
@@ -1387,6 +1405,7 @@ async def _gate_pipeline(
             execute=True,
             republish=True,
             json_output=json_output,
+            allow_language_fallback=allow_language_fallback,
         )
         return
     if inherit_run_id is not None and inherited_verdict is None:
@@ -1603,6 +1622,7 @@ async def _gate_pipeline(
         execute=execute,
         republish=False,
         json_output=json_output,
+        allow_language_fallback=allow_language_fallback,
     )
 
 
@@ -1669,12 +1689,14 @@ def _publish_gate_verdict(
     execute: bool,
     republish: bool,
     json_output: bool,
+    allow_language_fallback: bool = False,
 ) -> None:
     if target.pr_number is None:
         raise GateInvariantError("gate publication requires a pull-request number")
     attempted_at = datetime.now(UTC).isoformat()
     try:
         publication = publish_review(
+            allow_language_fallback=allow_language_fallback,
             gate_verdict=verdict,
             run=artifacts.run,
             repo=target.repo,
@@ -1753,6 +1775,7 @@ def auto(
     base_ref: Annotated[str | None, Option("--base-ref")] = None,
     head_ref: Annotated[str | None, Option("--head-ref")] = None,
     out: Annotated[Path | None, Option("--out")] = None,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     """Compatibility alias of run, using the policy's publication preference."""
     if allow_approve:
@@ -1771,6 +1794,7 @@ def auto(
         base_ref,
         head_ref,
         out,
+        allow_language_fallback,
     )
 
 
@@ -1793,6 +1817,7 @@ def run_command(
     ] = _PLAN_ADJUDICATE_REPLICAS,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
     json_output: Annotated[bool, Option("--json")] = False,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     """Execute a policy-gated review and persist the shared result contract."""
     _run_command(
@@ -1809,6 +1834,7 @@ def run_command(
         base_ref,
         head_ref,
         out,
+        allow_language_fallback,
     )
 
 
@@ -1826,6 +1852,7 @@ def _run_command(
     base_ref: str | None,
     head_ref: str | None,
     out: Path | None,
+    allow_language_fallback: bool = False,
 ) -> None:
     started = time.monotonic()
     runtime = RuntimeSettings(
@@ -1862,6 +1889,8 @@ def _run_command(
         runtime=runtime,
         root=DEFAULT_RUN_ROOT,
     )
+    if allow_language_fallback:
+        process.command.append("--allow-language-fallback")
     stage = "configuration"
     artifacts: PipelineArtifacts | None = None
 
@@ -2010,7 +2039,10 @@ def _run_command(
                     if resolved.kind != "pr" or resolved.pr_number is None:
                         stage = "configuration"
                         raise ValueError("github-comment publication requires a PR target")
-                    publish_review(
+                    publication = publish_review(
+                        allow_language_fallback=(
+                            allow_language_fallback or effective.policy.allow_language_fallback
+                        ),
                         run=run,
                         repo=resolved.repo,
                         pr_number=resolved.pr_number,
@@ -2019,6 +2051,7 @@ def _run_command(
                         outcome=artifacts.outcome,
                         execute=True,
                     )
+                    process.language_fallback_used = publication.language_fallback_used
                 process.status = "block" if decision.verdict == "BLOCK" else "pass"
                 process.exit_code = 1 if decision.verdict == "BLOCK" else 0
                 process.failure = None
@@ -2051,6 +2084,9 @@ def _run_command(
                 )
             )
             code = "invalid_target" if invalid else "target_resolution_failed"
+        if isinstance(exc, PublicationLanguageMismatch):
+            code = exc.reason
+            process.publication_failure = exc.reason
         if isinstance(exc, PresentationConfigInvalid):
             code = exc.reason
             invalid = True
@@ -2095,6 +2131,16 @@ def _run_command(
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
         process.duration_ms = max(0, int((time.monotonic() - started) * 1000))
+        with diagnostic_attempt("summary.json"):
+            summary_path = run.dir / "summary.json"
+            final_summary = ExecutionSummary.model_validate_json(summary_path.read_text())
+            if process.publication_failure is not None or process.language_fallback_used:
+                final_summary.publication_failure = process.publication_failure
+                final_summary.language_fallback_used = process.language_fallback_used
+                write_artifact_json(summary_path, final_summary.model_dump(mode="json"))
+            else:
+                process.publication_failure = final_summary.publication_failure
+                process.language_fallback_used = final_summary.language_fallback_used
         with (
             diagnostic_attempt("run.log"),
             (run.dir / "run.log").open("a", encoding="utf-8") as log,
@@ -2237,6 +2283,7 @@ async def _adjudicate_existing_run(
     try:
         outcome = await adjudicate(
             merged,
+            locale=run.load_presentation().locale,
             target=target,
             runtime=CodexRuntime(),
             repo_dir=repo_dir,
@@ -2317,6 +2364,7 @@ def publish_command(
     run_id: Annotated[str, Option("--run")],
     execute: Annotated[bool, Option("--execute")] = False,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     try:
         run = RunStore(out_root).open(run_id)
@@ -2343,15 +2391,20 @@ def publish_command(
     except StageMissing as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_NOT_FOUND) from exc
-    result = publish_review(
-        run=run,
-        repo=target.repo,
-        pr_number=target.pr_number,
-        report_md=report_md,
-        merged=merged,
-        outcome=outcome,
-        execute=execute,
-    )
+    try:
+        result = publish_review(
+            allow_language_fallback=allow_language_fallback,
+            run=run,
+            repo=target.repo,
+            pr_number=target.pr_number,
+            report_md=report_md,
+            merged=merged,
+            outcome=outcome,
+            execute=execute,
+        )
+    except PublicationLanguageMismatch as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
     if execute:
         _console.print(str(result.review_url), markup=False, soft_wrap=True)
     else:
@@ -2524,6 +2577,7 @@ async def _stack_review_pipeline(
             if lineages:
                 presence = await adjudicate_presence(
                     lineages,
+                    locale=artifacts.presentation.locale,
                     pr_number=member.number,
                     member_order=numbers,
                     target=target,
@@ -2592,6 +2646,7 @@ def stack_publish(
     execute: Annotated[bool, Option("--execute")] = False,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
+    allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     """Write or execute one body-only COMMENT review against the stack tip."""
 
@@ -2615,6 +2670,7 @@ def stack_publish(
             verify_manifest(manifest, current)
         tip = manifest.members[-1]
         result = publish_body_review(
+            allow_language_fallback=allow_language_fallback,
             run_dir=handle.dir,
             repo=manifest.repo,
             pr_number=tip.number,

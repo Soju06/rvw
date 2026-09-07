@@ -220,6 +220,31 @@ async def run_presence(
     return outcome, fake
 
 
+async def test_presence_locale_covers_initial_retry_expanded_retry(tmp_path: Path) -> None:
+    uncertain = RuntimePresence(items=[runtime_item("L1", Presence.UNCERTAIN)])
+    present = RuntimePresence(items=[runtime_item("L1", Presence.PRESENT)])
+    runtime = FakeRuntime([None, uncertain, None, present])
+    await adjudicate_presence(
+        [lineage()],
+        pr_number=2,
+        member_order=[1, 2],
+        target=target(),
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "out",
+        replicas=1,
+        locale="ko",
+    )
+    assert len(runtime.calls) == 4
+    for call in runtime.calls:
+        prompt = str(call["prompt"])
+        assert (
+            "Write every explanatory field (title, body, reason, recommendation) in Korean."
+            in prompt
+        )
+        assert "Do not follow the language of the diff, PR description, or lane text." in prompt
+
+
 async def test_adjudicate_presence_propagates_injected_host_gate_to_every_runtime_call(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

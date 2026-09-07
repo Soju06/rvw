@@ -77,6 +77,7 @@ class AutoPolicy(BaseModel):
     drop: DropRule
     block_when: BlockRule
     publish_state: Literal["comment", "none"]
+    allow_language_fallback: bool = Field(default=False, strict=True)
 
 
 class AutoDecision(BaseModel):

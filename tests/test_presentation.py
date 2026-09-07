@@ -259,3 +259,44 @@ def test_config_directory_is_not_treated_as_missing(anchored: tuple[Path, Resolv
     target = target.model_copy(update={"base_sha": git(repo, "rev-parse", "HEAD")})
     with pytest.raises(PresentationConfigInvalid):
         load_repo_presentation(target, cwd=repo)
+
+
+@pytest.mark.asyncio
+async def test_host_review_reads_presentation_from_provisioned_target_checkout(
+    anchored: tuple[Path, ResolvedTarget], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A remote PR base need not exist in the operator's ambient repository."""
+    import rvw.cli as cli
+    from rvw.registry import Registry
+
+    repo, target = anchored
+    ambient = tmp_path.with_name(tmp_path.name + "-operator-directory")
+    ambient.mkdir()
+    monkeypatch.chdir(ambient)
+    monkeypatch.setattr(cli, "_resolve_cli_target", lambda _: target)
+    monkeypatch.setattr(cli, "provision_checkout", lambda **_: repo)
+    monkeypatch.setattr(cli, "_load_registry_root", lambda _: (Registry(layers=[]), repo))
+    monkeypatch.setattr(cli, "_load_active_lanes", lambda *_: [])
+    snapshots: list[PresentationConfig] = []
+
+    async def execute(**kwargs: object) -> None:
+        snapshot = kwargs["presentation"]
+        assert isinstance(snapshot, PresentationConfig)
+        snapshots.append(snapshot)
+
+    monkeypatch.setattr(cli, "execute_pipeline", execute)
+    await cli._execute_pipeline(
+        target_spec="https://github.com/owner/repo/pull/1",
+        repo_dir=None,
+        registry_root=repo / "explicit-registry",
+        discover_replicas=1,
+        adjudicate_replicas=1,
+        concurrency=1,
+        deadline_seconds=10,
+        out_root=repo / "runs",
+        pause=False,
+        dynamic_brief=None,
+    )
+    assert len(snapshots) == 1
+    assert snapshots[0].locale == "ko"
+    assert snapshots[0].display_name == "VOOY Review System"

@@ -285,6 +285,8 @@ def test_versioned_schema_resources_match_python_contract() -> None:
     assert set(ProcessResult.model_fields) == {
         "schema_version",
         "presentation",
+        "publication_failure",
+        "language_fallback_used",
         "run_id",
         "target",
         "status",

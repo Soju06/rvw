@@ -60,7 +60,12 @@ export function isDeadlineReached(nowMs: number, deadlineMs: number): boolean {
   return nowMs >= deadlineMs;
 }
 
-export interface ReviewResultMapping {
+interface PublicationFacts {
+  publication_failure: string | null;
+  language_fallback_used: boolean;
+}
+
+export interface ReviewResultMapping extends Partial<PublicationFacts> {
   terminalState: "completed" | "failed";
   conclusion: CheckConclusion;
   reason: string;
@@ -68,7 +73,7 @@ export interface ReviewResultMapping {
   presentation?: PresentationConfig;
 }
 
-export interface ProcessResult {
+export interface ProcessResult extends PublicationFacts {
   schema_version: 1;
   run_id: string;
   status: "pass" | "block" | "invalid" | "infra_failed";
@@ -98,11 +103,22 @@ function nullableString(value: unknown): boolean {
   return value === null || typeof value === "string";
 }
 
+function publicationFacts(value: Record<string, unknown>): PublicationFacts {
+  const failure = value.publication_failure === undefined ? null : value.publication_failure;
+  const fallback = value.language_fallback_used === undefined ? false : value.language_fallback_used;
+  if ((failure !== null && (typeof failure !== "string" || failure.length === 0)) || typeof fallback !== "boolean") {
+    throw new Error("publication language facts are invalid");
+  }
+  return {publication_failure: failure, language_fallback_used: fallback};
+}
+
 export function parseProcessResult(output: string): ProcessResult {
   const value = recordValue(JSON.parse(output), "process");
   fields(value, ["schema_version", "run_id", "target", "status", "exit_code", "duration_ms",
     "command", "effective_policy", "lane_sources", "runtime", "failure", "artifacts", "sdk_observations",
-    ...(value.presentation === undefined ? [] : ["presentation"])], "process");
+    ...(value.presentation === undefined ? [] : ["presentation"]),
+    ...["publication_failure", "language_fallback_used"].filter(key => key in value)], "process");
+  const publication = publicationFacts(value);
   const presentation = parsePresentation(value.presentation === undefined ? {} : value.presentation);
   if (value.schema_version !== 1 || typeof value.run_id !== "string" || !value.run_id ||
       !["pass", "block", "invalid", "infra_failed"].includes(value.status as string) ||
@@ -154,7 +170,7 @@ export function parseProcessResult(output: string): ProcessResult {
   if (["invalid", "infra_failed"].includes(status) !== (failure !== null)) {
     throw new Error("process status and failure disagree");
   }
-  return {schema_version: 1, run_id: value.run_id, status, exit_code: value.exit_code, failure, presentation};
+  return {schema_version: 1, run_id: value.run_id, status, exit_code: value.exit_code, failure, presentation, ...publication};
 }
 
 export function checkConclusionForResult(
@@ -163,16 +179,17 @@ export function checkConclusionForResult(
 ): ReviewResultMapping {
   try {
     const payload = parseProcessResult(output);
+    const publication = {publication_failure: payload.publication_failure, language_fallback_used: payload.language_fallback_used};
     if (exitCode !== null && exitCode !== payload.exit_code) {
       throw new Error(`SDK exit ${exitCode} disagrees with process exit ${payload.exit_code}`);
     }
     if (payload.status === "pass") {
-      return {terminalState: "completed", conclusion: "success", reason: t("process_passed", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation};
+      return {terminalState: "completed", conclusion: "success", reason: t("process_passed", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation, ...publication};
     }
     if (payload.status === "block") {
-      return {terminalState: "completed", conclusion: "failure", reason: t("process_blocked", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation};
+      return {terminalState: "completed", conclusion: "failure", reason: t("process_blocked", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation, ...publication};
     }
-    return {terminalState: "failed", conclusion: "neutral", presentation: payload.presentation, reasonCode: payload.failure?.code, reason: payload.failure === null
+    return {terminalState: "failed", conclusion: "neutral", presentation: payload.presentation, ...publication, reasonCode: payload.failure?.code, reason: payload.failure === null
       ? t("process_status", "en", {display_name: "rvw", status: payload.status}) : `${payload.failure.code}: ${payload.failure.detail}`};
   } catch (error) {
     return {terminalState: "failed", conclusion: "neutral", reasonCode: "process_invalid", reason:
@@ -180,7 +197,7 @@ export function checkConclusionForResult(
   }
 }
 
-export interface ArtifactSummary {
+export interface ArtifactSummary extends PublicationFacts {
   schema_version: 1;
   lanes: {dispatched: number; valid: number; uncovered: number};
   findings: Record<"blocker" | "warning" | "suggestion", number>;
@@ -194,7 +211,9 @@ export interface ArtifactSummary {
 export function parseArtifactSummary(output: string): ArtifactSummary {
   const value = recordValue(JSON.parse(output), "summary");
   fields(value, ["schema_version", "lanes", "findings", "verdicts", "blockers", "markdown",
-    ...(value.presentation === undefined ? [] : ["presentation"])], "summary");
+    ...(value.presentation === undefined ? [] : ["presentation"]),
+    ...["publication_failure", "language_fallback_used"].filter(key => key in value)], "summary");
+  const publication = publicationFacts(value);
   const presentation = parsePresentation(value.presentation === undefined ? {} : value.presentation);
   for (const [key, names] of [["findings", ["blocker", "warning", "suggestion"]],
     ["verdicts", ["CONFIRMED", "REJECTED", "UNCERTAIN"]]] as const) {
@@ -219,7 +238,7 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
   const valid = lanes.valid as number;
   const uncovered = lanes.uncovered as number;
   if (valid === 0 || valid > dispatched) throw new Error("review coverage has no valid lanes or exceeds dispatched lanes");
-  return {schema_version: 1, lanes: {dispatched, valid, uncovered}, markdown: value.markdown, presentation,
+  return {schema_version: 1, lanes: {dispatched, valid, uncovered}, markdown: value.markdown, presentation, ...publication,
     findings: value.findings as ArtifactSummary["findings"],
     verdicts: value.verdicts as ArtifactSummary["verdicts"], blockers: value.blockers as string[]};
 }

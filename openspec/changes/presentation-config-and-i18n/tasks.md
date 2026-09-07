@@ -19,12 +19,12 @@
 
 ## 4. Hard model-language output contract
 
-- [ ] 4.1 Add failing tests for locale instructions in all discovery/agentic/coverage/retry and ordinary/expanded/retry/stack-presence prompt variants, then thread the snapshot locale through them.
-- [ ] 4.2 Add deterministic langgate segmentation/threshold tests and fake-Rewriter tests for exactly one rewrite, same-count output, immutable findings/anchors/rules/evidence, and final mismatch.
-- [ ] 4.3 Implement langgate with bounded existing runtime adapter and wire before every publication route; add --allow-language-fallback and strict auto policy opt-in, recorded failure/fallback facts and exit 3 semantics.
-- [ ] 4.4 Synchronize discovery/adjudication/reporting/operation-modes/runtime-contract main specs/context and commit feat(runtime): enforce the configured locale on model prose after verification.
+- [x] 4.1 Add failing tests for locale instructions in all discovery/agentic/coverage/retry and ordinary/expanded/retry/stack-presence prompt variants, then thread the snapshot locale through them.
+- [x] 4.2 Add deterministic langgate segmentation/threshold tests and fake-Rewriter tests for exactly one rewrite, same-count output, immutable findings/anchors/rules/evidence, and final mismatch.
+- [x] 4.3 Implement langgate with bounded existing runtime adapter and wire before every publication route; add --allow-language-fallback and strict auto policy opt-in, recorded failure/fallback facts and exit 3 semantics.
+- [x] 4.4 Synchronize discovery/adjudication/reporting/operation-modes/runtime-contract main specs/context and commit feat(runtime): enforce the configured locale on model prose after verification.
 
 ## 5. Final verification and handoff
 
-- [ ] 5.1 Run every requested bare Python, OpenSpec, cloud and literal-scan gate, fixing all failures.
-- [ ] 5.2 Write /tmp/rvw-i18n-report.md within 160 lines with stage commits, resolution sites, catalog counts/tests, publication table, language contract, exact gate results, audit exclusions and git state; leave change unarchived and do not push or open a PR.
+- [x] 5.1 Run every requested bare Python, OpenSpec, cloud and literal-scan gate, fixing all failures.
+- [x] 5.2 Write /tmp/rvw-i18n-report.md within 160 lines with stage commits, resolution sites, catalog counts/tests, publication table, language contract, exact gate results, audit exclusions and git state; leave change unarchived and do not push or open a PR.

@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -15,6 +15,7 @@ from rvw.diffbudget import reviewed_diff
 from rvw.dispatch import DEFAULT_CONCURRENCY, DEFAULT_DEADLINE_SECONDS
 from rvw.hostslots import HostSlotGate, host_slot
 from rvw.merge import CollapseGroup, MergeResult
+from rvw.prompts import language_output_contract
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.schema import RuntimeAdjudication, RuntimeAdjudicationItem, Verdict
 from rvw.target import ResolvedTarget
@@ -48,6 +49,7 @@ def build_adjudication_prompt(
     diff: str,
     expanded: bool,
     retry_invalid_reasons: Sequence[str] = (),
+    locale: Literal["ko", "en"] = "en",
 ) -> str:
     """Render an adjudication-only prompt with every replica body preserved."""
 
@@ -127,6 +129,7 @@ def build_adjudication_prompt(
             parts.extend([f"### Body {index}", body])
 
     parts.extend(["# Unified diff", "```diff", diff, "```"])
+    parts.append(language_output_contract(locale))
     return "\n\n".join(parts)
 
 
@@ -306,6 +309,7 @@ async def adjudicate(
     concurrency: int = DEFAULT_CONCURRENCY,
     host_gate: HostSlotGate | None = None,
     expanded_runtime: Runtime | None = None,
+    locale: Literal["ko", "en"] = "en",
 ) -> AdjudicationOutcome:
     """Adjudicate all collapse groups, widening context once for uncertainty."""
 
@@ -343,6 +347,7 @@ async def adjudicate(
             diff=reviewed.text,
             expanded=expanded,
             retry_invalid_reasons=retry_invalid_reasons,
+            locale=locale,
         )
         schema = adjudication_schema([group.key for group in groups])
 
