@@ -397,7 +397,7 @@ Gate MUST write a reconstructable verdict artifact after artifact-backed validat
 
 ### Requirement: Auto policy resolution is portable and precedence-ordered
 
-Policy-gated `run` and `auto` MUST resolve policy in this order: an explicit policy path; `.rvw/policies/auto.yaml` read from the captured base commit; an existing external `~/.hermes/review/policies/auto.yaml`; and the packaged `rvw/resources/policies/auto-default.yaml`. Selecting the external policy MUST emit a deprecation warning. The packaged default MUST be installed with the Python distribution and available equally to host, Actions, and App. An explicit missing path or malformed selected policy MUST be an invalid configuration and MUST NOT silently fall through to a lower-priority source. The effective source and path MUST be recorded in `process.json`; package fallback MUST NOT require modifying the external registry.
+Policy-gated `run` and `auto` MUST resolve policy in this order: an explicit policy path; `.rvw/policies/auto.yaml` read from the captured base commit; an existing external `~/.hermes/review/policies/auto.yaml`; and the packaged `rvw/resources/policies/auto-default.yaml`. Selecting the external policy MUST emit a deprecation warning. The packaged default MUST be installed with the Python distribution and available equally to the host CLI, the container image, and the App. An explicit missing path or malformed selected policy MUST be an invalid configuration and MUST NOT silently fall through to a lower-priority source. The effective source and path MUST be recorded in `process.json`; package fallback MUST NOT require modifying the external registry.
 
 #### Scenario: Base policy and external policy coexist
 

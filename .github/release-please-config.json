@@ -11,7 +11,8 @@
           "path": "uv.lock",
           "jsonpath": "$.package[?(@.name=='rvw')].version"
         }
-      ]
+      ],
+      "bump-minor-pre-major": true
     }
   }
 }

@@ -42,9 +42,11 @@ pip install rvw          # or: uv tool install rvw
 Requires Python 3.12+ and a working [Codex CLI](https://github.com/openai/codex)
 (`codex exec`) as the review runtime.
 
-Every release tag automatically publishes versioned and `latest` GHCR images. For
-systemic pull-request checks, pin the image by version tag or digest and follow the
-[containerized GitHub Actions guide](docs/container-ci.md).
+Every release tag automatically publishes versioned and `latest` GHCR images. rvw has
+two review surfaces: the CLI, on a host or in that image, and the
+[GitHub App](cloud/README.md), which reviews pull requests from webhooks and reports a
+Check Run. For direct container runs, pin the image by version tag or digest and follow
+the [container image guide](docs/container-image.md).
 
 ## Quickstart
 
@@ -78,7 +80,7 @@ rvw stack publish --run <stack-run-id>
 - **Layer** — activation tier owning lanes: `base` (always) → `project`
   (repo predicate) → `scope` (path predicate) → `dynamic` (per-PR brief)
 - **Runtime** — the execution engine (`codex exec`; read-only by default on the host,
-  with the measured outer-container isolation fallback described in the CI guide)
+  with the measured outer-container isolation fallback described in the container image guide)
 - **Run** — lane × runtime × replica
 
 The registry lives outside the package (default `~/.hermes/review/`):

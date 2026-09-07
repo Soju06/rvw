@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Define the portable, secret-free image and base-controlled GitHub Actions contract
-that lets repositories run rvw as a systemic pull-request check.
+Define the portable, secret-free container image that packages the rvw CLI with its
+runtime for direct invocation and for the GitHub App Sandbox.
 
 ## Requirements
 
@@ -26,24 +26,24 @@ as its working directory.
 - **WHEN** the container is started in a mounted checkout with `review --target <sha> --repo-dir <path>` arguments
 - **THEN** the entry point executes the equivalent `rvw review` command in that working-directory context
 
-### Requirement: Reusable review image ships a compatible reproducible GitHub CLI
+### Requirement: Root review image ships a compatible reproducible GitHub CLI
 
-The reusable review image MUST install an exact GitHub CLI release from the official
+The root review image MUST install an exact GitHub CLI release from the official
 upstream release archive at `/usr/local/bin/gh`, MUST verify that archive against a
 pinned SHA-256 and the checksum manifest from the same release, and MUST NOT install the
 distribution-provided `gh` package. The image build MUST fail unless the installed
 version is at least the declared minimum version that supports every pull-request field
 used by rvw target resolution, including `headRefOid`.
 
-#### Scenario: Reusable image definition is inspected offline
+#### Scenario: Root image definition is inspected offline
 
 - **WHEN** a maintainer inspects the root Dockerfile without network credentials
 - **THEN** it declares exact GitHub CLI and minimum versions, omits `gh` from the
   distribution package list, and verifies the exact official release archive checksum
 
-#### Scenario: Reusable image is built
+#### Scenario: Root image is built
 
-- **WHEN** the reusable review image build installs its declared GitHub CLI release
+- **WHEN** the root review image build installs its declared GitHub CLI release
 - **THEN** `/usr/local/bin/gh` reports that exact release and the build-time minimum
   version assertion succeeds
 
@@ -84,39 +84,6 @@ NOT receive a Codex credential, PyPI credential, or personal endpoint.
 
 - **WHEN** the normalized tag version does not match package metadata or the runtime version
 - **THEN** image publication exits nonzero before the image build or registry push
-
-### Requirement: Reusable review workflow is base-controlled and immutable-targeted
-
-The project MUST provide a reusable workflow callable by a thin target-repository workflow triggered by `pull_request_target`. The caller MUST select an explicit image reference. The reusable job MUST check out the event's immutable PR head SHA without persisting credentials, fetch the recorded base SHA, and execute `rvw run` with the full base-repository PR URL, both captured event SHAs through `--base-ref` and `--head-ref`, the checkout path, an explicit publication mode, and a writable mounted `--out` artifact directory. Python anchor verification MUST reject event/resolved mismatches before review. The workflow MUST expose the shared replica, adjudication replica, concurrency, deadline, and discovery-mode controls and a job timeout input defaulting to 90 minutes. It MUST map `CODEX_API_KEY`, optional `CODEX_BASE_URL`, and a job-scoped `GITHUB_TOKEN` into the container and grant only repository-content read and pull-request COMMENT publication permissions.
-
-#### Scenario: Pull request review runs from the base workflow
-
-- **WHEN** a protected caller receives a `pull_request_target` event and invokes the reusable workflow with a pinned image tag
-- **THEN** the base-side workflow executes against the event's exact repository and anchors with the base commit available locally
-
-#### Scenario: Policy requests COMMENT publication
-
-- **WHEN** the workflow selects `github-comment`
-- **THEN** rvw uses the mapped GitHub token for COMMENT narratives without emitting an approving review
-
-### Requirement: The workflow job is the review check
-
-The reusable workflow MUST map canonical rvw exit 0 to success and exits 1, 2, and 3 to job failure without a success override. It MUST render the Python `summary.json` content in the job step summary and include the `process.json` failure reason for invalid or infrastructure failures. It MUST upload the mounted output directory as a workflow artifact on success and failure using a SHA-pinned `actions/upload-artifact`. Project documentation MUST describe the job as the initial check surface and MUST NOT claim that the check is required or configure branch protection.
-
-#### Scenario: Auto policy blocks a change
-
-- **WHEN** containerized `rvw run` returns exit 1
-- **THEN** the reusable job fails and retains the shared artifacts
-
-#### Scenario: Infrastructure failure occurs
-
-- **WHEN** containerized `rvw run` returns exit 3
-- **THEN** the job fails, includes its process failure reason in the summary, and uploads available artifacts
-
-#### Scenario: Auto policy passes a change
-
-- **WHEN** containerized `rvw run` returns exit 0
-- **THEN** the job succeeds and retains the shared summary and artifacts
 
 ### Requirement: Headless smoke records the container isolation evidence
 
