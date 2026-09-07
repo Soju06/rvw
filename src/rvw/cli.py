@@ -217,11 +217,11 @@ class ContractCommand(TyperCommand):
     def invoke(self, ctx: click.Context) -> object:
         try:
             return super().invoke(ctx)
-        except (click.exceptions.Exit, click.ClickException):
+        except (typer.Exit, click.ClickException):
             raise
         except (Exception, KeyboardInterrupt) as exc:
             click.echo(f"infrastructure failure: {redact_diagnostic(str(exc))}", err=True)
-            raise click.exceptions.Exit(EXIT_SYSTEM_ERROR) from exc
+            raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
 
 
 app = typer.Typer(
