@@ -51,6 +51,14 @@ messages through an environment-specific Queue, observes each Sandbox process
 with a Durable Object alarm, stores result artifacts in R2, and completes an rvw
 Check Run. No dashboard, D1 database, or analytics are part of A1.
 
+The container application is named per environment (`rvw-sandbox-dev`,
+`rvw-sandbox-spike`, `rvw-sandbox-prod`) because Cloudflare container
+applications are account-scoped by name and bound to one Durable Object
+namespace, so spike and prod can only coexist with distinct names. Migrating an
+existing environment to its per-environment name creates a new container
+application on the next deploy; the deployer must delete the previous
+application with `npx wrangler containers delete <container-application-id>`.
+
 ## Offline checks
 
 ```bash

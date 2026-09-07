@@ -75,3 +75,50 @@ manifest, and separately enforces the actual v2.18.0 compatibility floor during 
 The `/tmp/rvw-surfaces-analysis.md` audit inspected committed v0.11.5 (`613201f`) code, not deployed image state. It found timeout persisted four stage artifacts but skipped `run.log`, `process.json`, and `environment.txt`, with the same diagnostic omission on start failure and supersession (`cloud/worker/src/review-job.ts:148–152,387–470,822–836`, baseline lines). Terminal handling now attempts one common best-effort persistence phase before Sandbox destruction, and SDK termination observations supplement the Python process schema rather than create a competing object.
 
 App formerly supplied URL plus `GH_REPO` to compensate for unbound Python calls, installed fallback policy in an external-registry image path, parsed stdout for the run ID, copied artifacts out of `/tmp`, and recounted coverage/findings in TypeScript (`cloud/worker/src/sandbox-auth.ts:107–119`, `cloud/Dockerfile:46–47`, `cloud/worker/src/review-job-contract.ts:116–195`, baseline lines). It now passes webhook anchors and an explicit output directory to `run` and consumes Python process/summary/manifest files. Zero VALID lanes map to a neutral Check even if an envelope claims PASS. Webhook authentication, installation tokens and egress, queue/lifecycle, Check Run API, and R2 transport remain platform duties.
+
+## Container application naming (2026-09-07)
+
+The first production deploy through the reusable workflow (deployer run
+34094286509, job `deploy prod / deploy`, step `Deploy Worker`, 2026-09-07
+07:14 UTC) built and pushed the image and then failed with:
+
+```
+✘ [ERROR] There is already an application with the name rvw-sandbox deployed that is associated with a different durable object namespace (<spike namespace id>). Either change the container name or delete the existing application first.
+```
+
+Cloudflare container applications are account-scoped by name and associated
+with exactly one Durable Object namespace. `cloud/wrangler.jsonc` scoped the
+Worker name (`rvw-cloud-spike`, `rvw-cloud-prod`), Queues, DLQs, and R2 buckets
+per environment but named the Sandbox container `rvw-sandbox` in the default,
+`spike`, and `prod` entries. The live `spike` deployment therefore owned the
+name and `prod` could never deploy into the same account. The deploy workflow
+repeated the assumption in a comment ("same across envs") and its rollout wait
+fell back to the top-level entry when an environment declared no container.
+
+The container application is now named `rvw-sandbox-<environment>`:
+`rvw-sandbox-dev`, `rvw-sandbox-spike`, and `rvw-sandbox-prod`. Wrangler
+4.128.0 offers no variable or templated container name and `--var` overlays only
+`vars`; when `containers[].name` is omitted, its `validateContainerApp` config
+validation derives `<worker name>-<class_name>` lowercased from the
+configuration file's Worker name, appending `-<environment>` only for named
+environments (`rvw-cloud-rvwsandbox` for the default entry,
+`rvw-cloud-spike-rvwsandbox-spike` for spike), which would also be unique per
+environment. Explicit literals were chosen because the workflow parses
+`containers[0].name` from the committed configuration, the derived form ignores
+a CLI `--name` override (the Worker name changes while the application name
+does not), and it changes silently on a class rename.
+The deploy workflow now resolves the selected environment's name before
+`wrangler deploy`, rejects a missing or unsuffixed entry, and scopes both the
+previous-digest capture and the rollout wait to that application so sibling
+applications on the account are ignored. The Sandbox binding is by Durable
+Object class (`RVW_SANDBOX` → `RvwSandbox`), and the Terraform module does not
+model the container application, so Worker source and Terraform are unchanged.
+
+Renaming is a create, not a rename, on the Cloudflare side. The next `spike`
+deploy creates `rvw-sandbox-spike` bound to the existing spike Durable Object
+namespace and leaves the old `rvw-sandbox` application (and its image tags)
+running until the deployer deletes them with the documented
+`wrangler containers delete` and `wrangler containers images delete` commands.
+`prod` starts fresh as `rvw-sandbox-prod`. Rolling back to a release that still
+uses the shared name only works while no other environment holds it. The
+requirement is normative in `spec.md`; this section records the measured basis.

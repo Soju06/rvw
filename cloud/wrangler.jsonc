@@ -11,7 +11,7 @@
   },
   "containers": [
     {
-      "name": "rvw-sandbox",
+      "name": "rvw-sandbox-dev",
       "class_name": "RvwSandbox",
       "image": "./Dockerfile",
       "image_build_context": "..",
@@ -57,7 +57,7 @@
       },
       "containers": [
         {
-          "name": "rvw-sandbox",
+          "name": "rvw-sandbox-spike",
           "class_name": "RvwSandbox",
           "image": "./Dockerfile",
           "image_build_context": "..",
@@ -100,7 +100,7 @@
       },
       "containers": [
         {
-          "name": "rvw-sandbox",
+          "name": "rvw-sandbox-prod",
           "class_name": "RvwSandbox",
           "image": "./Dockerfile",
           "image_build_context": "..",
