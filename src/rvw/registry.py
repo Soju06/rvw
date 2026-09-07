@@ -18,6 +18,12 @@ import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from rvw.lane import Lane, load_lane, load_new_lane, validate_glob_patterns
+from rvw.presentation import (
+    WORKTREE_RULE_WARNING,
+    PresentationConfig,
+    PresentationConfigInvalid,
+    parse_presentation_config,
+)
 from rvw.schema import Tier
 
 if TYPE_CHECKING:
@@ -290,3 +296,49 @@ def load_repo_policy(
     except subprocess.CalledProcessError:
         return None
     return AutoPolicy.model_validate(yaml.safe_load(raw))
+
+
+def load_repo_presentation(
+    target: ResolvedTarget, *, cwd: Path, allow_worktree_rules: bool = False
+) -> PresentationConfig:
+    """Read presentation only from the anchored base, unless explicitly overridden."""
+    name = ".rvw/config.yaml"
+    try:
+        root = Path(
+            subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=cwd,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        )
+        if allow_worktree_rules:
+            warnings.warn(WORKTREE_RULE_WARNING, UserWarning, stacklevel=2)
+            path = root / name
+            if not path.exists():
+                return PresentationConfig()
+            raw = path.read_text(encoding="utf-8")
+        else:
+            if target.base_sha is None:
+                raise PresentationConfigInvalid("target base revision is missing")
+            entry = subprocess.run(
+                ["git", "ls-tree", target.base_sha, "--", name],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            if not entry:
+                return PresentationConfig()
+            if not entry.startswith(("100644 blob ", "100755 blob ")):
+                raise PresentationConfigInvalid("presentation configuration must be a regular file")
+            blobs = _git_blob_files(cwd=root, base_ref=target.base_sha, prefix=name)
+            if name not in blobs:
+                raise PresentationConfigInvalid("cannot read presentation configuration blob")
+            raw = blobs[name]
+        return parse_presentation_config(raw)
+    except (OSError, subprocess.CalledProcessError, UnicodeError) as exc:
+        raise PresentationConfigInvalid(
+            "cannot read presentation configuration at the target base"
+        ) from exc

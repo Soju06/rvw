@@ -16,6 +16,7 @@ from rvw.discover import DiscoverResult
 from rvw.lane import Lane
 from rvw.merge import MergeResult
 from rvw.pipeline import PipelineArtifacts
+from rvw.presentation import PresentationConfig
 from rvw.registry import Registry
 from rvw.schema import Tier, Verdict
 from rvw.summary import ExecutionSummary, ProcessResult
@@ -25,6 +26,7 @@ runner = CliRunner()
 
 @pytest.fixture
 def offline_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> PipelineArtifacts:
+    monkeypatch.setattr(cli, "load_repo_presentation", lambda *_, **__: PresentationConfig())
     """Keep real stage persistence/merging, replace only external execution boundaries."""
     artifacts = fixture_artifacts(tmp_path, adjudicated=True)
     checkout = tmp_path / "checkout"

@@ -13,6 +13,7 @@ from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import apply_diff_budget
 from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage, RunCoverage
 from rvw.merge import merge
+from rvw.presentation import PresentationConfig
 from rvw.sample import SampleReport, SampleSiteVariance
 from rvw.schema import Tier, Verdict
 from rvw.store import RunStore
@@ -24,6 +25,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 @pytest.fixture(autouse=True)
 def offline_run_resolution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli_module, "load_repo_presentation", lambda *_, **__: PresentationConfig())
     monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _: target())
     monkeypatch.setattr(cli_module, "provision_checkout", lambda **_: Path.cwd())
     monkeypatch.setattr(cli_module, "DEFAULT_RUN_ROOT", tmp_path / "contract")

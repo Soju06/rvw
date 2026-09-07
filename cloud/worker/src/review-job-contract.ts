@@ -1,3 +1,4 @@
+import {parsePresentation, type PresentationConfig} from "./presentation";
 import {artifactManifest} from "./artifacts";
 
 export type JobState =
@@ -70,6 +71,7 @@ export interface ProcessResult {
   status: "pass" | "block" | "invalid" | "infra_failed";
   exit_code: number;
   failure: {code: string; detail: string} | null;
+  presentation: PresentationConfig;
 }
 
 function recordValue(value: unknown, label: string): Record<string, unknown> {
@@ -96,7 +98,9 @@ function nullableString(value: unknown): boolean {
 export function parseProcessResult(output: string): ProcessResult {
   const value = recordValue(JSON.parse(output), "process");
   fields(value, ["schema_version", "run_id", "target", "status", "exit_code", "duration_ms",
-    "command", "effective_policy", "lane_sources", "runtime", "failure", "artifacts", "sdk_observations"], "process");
+    "command", "effective_policy", "lane_sources", "runtime", "failure", "artifacts", "sdk_observations",
+    ...(value.presentation === undefined ? [] : ["presentation"])], "process");
+  const presentation = parsePresentation(value.presentation === undefined ? {} : value.presentation);
   if (value.schema_version !== 1 || typeof value.run_id !== "string" || !value.run_id ||
       !["pass", "block", "invalid", "infra_failed"].includes(value.status as string) ||
       !integer(value.duration_ms) || !Array.isArray(value.command) ||
@@ -147,7 +151,7 @@ export function parseProcessResult(output: string): ProcessResult {
   if (["invalid", "infra_failed"].includes(status) !== (failure !== null)) {
     throw new Error("process status and failure disagree");
   }
-  return {schema_version: 1, run_id: value.run_id, status, exit_code: value.exit_code, failure};
+  return {schema_version: 1, run_id: value.run_id, status, exit_code: value.exit_code, failure, presentation};
 }
 
 export function checkConclusionForResult(
@@ -177,12 +181,15 @@ export interface ArtifactSummary {
   schema_version: 1;
   lanes: {dispatched: number; valid: number; uncovered: number};
   markdown: string;
+  presentation: PresentationConfig;
 }
 
 /** Consume Python summary facts; no discovery/adjudication recount lives here. */
 export function parseArtifactSummary(output: string): ArtifactSummary {
   const value = recordValue(JSON.parse(output), "summary");
-  fields(value, ["schema_version", "lanes", "findings", "verdicts", "blockers", "markdown"], "summary");
+  fields(value, ["schema_version", "lanes", "findings", "verdicts", "blockers", "markdown",
+    ...(value.presentation === undefined ? [] : ["presentation"])], "summary");
+  const presentation = parsePresentation(value.presentation === undefined ? {} : value.presentation);
   for (const [key, names] of [["findings", ["blocker", "warning", "suggestion"]],
     ["verdicts", ["CONFIRMED", "REJECTED", "UNCERTAIN"]]] as const) {
     const counts = recordValue(value[key], `summary ${key}`);
@@ -206,5 +213,5 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
   const valid = lanes.valid as number;
   const uncovered = lanes.uncovered as number;
   if (valid === 0 || valid > dispatched) throw new Error("review coverage has no valid lanes or exceeds dispatched lanes");
-  return {schema_version: 1, lanes: {dispatched, valid, uncovered}, markdown: value.markdown};
+  return {schema_version: 1, lanes: {dispatched, valid, uncovered}, markdown: value.markdown, presentation};
 }

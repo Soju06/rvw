@@ -19,6 +19,7 @@ from rvw.discover import DiscoverResult
 from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import MergeResult
+from rvw.presentation import PresentationConfig
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Verdict
@@ -26,6 +27,12 @@ from rvw.store import RunStore
 from rvw.target import ResolvedTarget
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def offline_presentation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The target fixtures use synthetic SHAs, so no repository config can be read."""
+    monkeypatch.setattr(cli_module, "load_repo_presentation", lambda *_, **__: PresentationConfig())
 
 
 def test_review_rejects_invalid_host_concurrency_before_pipeline(

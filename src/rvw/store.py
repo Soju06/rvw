@@ -22,6 +22,7 @@ from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport
 from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage
 from rvw.merge import MergeResult
+from rvw.presentation import PresentationConfig, PresentationConfigInvalid
 from rvw.summary import (
     ArtifactEntry,
     ExecutionSummary,
@@ -219,6 +220,19 @@ class RunHandle:
 
     def load_target(self) -> ResolvedTarget:
         return ResolvedTarget.model_validate(self._load_contained_json("target.json", "target"))
+
+    def save_presentation(self, presentation: PresentationConfig) -> None:
+        _write_json(self.dir / "presentation.json", presentation.model_dump(mode="json"))
+
+    def load_presentation(self) -> PresentationConfig:
+        try:
+            return PresentationConfig.model_validate(
+                self._load_contained_json("presentation.json", "presentation")
+            )
+        except StageMissing:
+            return PresentationConfig()
+        except (ValueError, OSError) as exc:
+            raise PresentationConfigInvalid("invalid persisted presentation snapshot") from exc
 
     def save_summary(self, summary: RunSummary) -> None:
         _write_json(self.dir / "run.json", summary.model_dump(mode="json"))

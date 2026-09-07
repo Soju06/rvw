@@ -154,3 +154,30 @@ it("rejects incompatible failure and unknown process fields", () => {
     expect(checkConclusionForResult(null, JSON.stringify(processFixture(overrides))).conclusion).toBe("neutral");
   }
 });
+
+it("consumes the resolved presentation snapshot from process and summary", () => {
+  const presentation = {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko", footer: null};
+  expect(checkConclusionForResult(0, JSON.stringify(processFixture({presentation}))).conclusion).toBe("success");
+  expect(parseArtifactSummary(JSON.stringify(summaryFixture({presentation})))).toMatchObject({presentation});
+});
+it.each([
+  null,
+  {display_name: "", short_name: "rvw", locale: "en", footer: null},
+  {display_name: "rvw", short_name: "rvw", locale: "fr", footer: null},
+  {display_name: "rvw", short_name: "rvw\nname", locale: "en", footer: null},
+  {display_name: "rvw", short_name: "rvw", locale: "en", footer: null, extra: true},
+])("rejects malformed presentation snapshots %#", (presentation) => {
+  expect(checkConclusionForResult(0, JSON.stringify(processFixture({presentation}))).conclusion).toBe("neutral");
+  expect(() => parseArtifactSummary(JSON.stringify(summaryFixture({presentation})))).toThrow();
+});
+
+it("defaults legacy process and summary contracts without presentation", () => {
+  const process: Record<string, unknown> = processFixture();
+  const summary: Record<string, unknown> = summaryFixture();
+  delete process.presentation;
+  delete summary.presentation;
+  expect(checkConclusionForResult(0, JSON.stringify(process)).conclusion).toBe("success");
+  expect(parseArtifactSummary(JSON.stringify(summary)).presentation).toEqual({
+    display_name: "rvw", short_name: "rvw", locale: "en", footer: null,
+  });
+});

@@ -88,6 +88,7 @@ from rvw.pipeline import (
     verdict_counts,
 )
 from rvw.policy import PolicyNotFound, evaluate, resolve_auto_policy
+from rvw.presentation import WORKTREE_RULE_WARNING, PresentationConfig, PresentationConfigInvalid
 from rvw.provenance import current_build_provenance, version_label
 from rvw.publish import PublishError, publish_body_review, publish_review
 from rvw.registry import (
@@ -95,6 +96,7 @@ from rvw.registry import (
     Registry,
     load_effective_registry,
     load_registry,
+    load_repo_presentation,
 )
 from rvw.report import render_report
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
@@ -134,6 +136,7 @@ from rvw.store import (
 )
 from rvw.summary import (
     EffectivePolicySource,
+    ExecutionSummary,
     ProcessFailure,
     ProcessTarget,
     ReviewStatus,
@@ -651,6 +654,12 @@ def review(
                 discovery_mode=discovery_mode,
             )
         )
+    except PresentationConfigInvalid as exc:
+        if json_output:
+            _write_json({"error": exc.reason, "reason": exc.reason, "detail": str(exc)})
+        else:
+            _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_USER_ERROR) from exc
     except EmptyReviewDiffError as exc:
         _empty_review_failure(exc, json_output=json_output)
     except CheckoutVerificationError as exc:
@@ -795,9 +804,13 @@ async def _execute_pipeline(
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
     run_handle: RunHandle | None = None,
     lane_sources: dict[str, int] | None = None,
+    presentation: PresentationConfig | None = None,
 ) -> _PipelineArtifacts | None:
     """Execute and persist common review stages without publishing or rendering CLI output."""
     target = resolved_target or _resolve_cli_target(target_spec)
+    presentation = presentation or load_repo_presentation(
+        target, cwd=repo_dir or Path.cwd(), allow_worktree_rules=allow_worktree_rules
+    )
     if registry_root.expanduser() == DEFAULT_REGISTRY_ROOT:
         registry = load_effective_registry(
             target,
@@ -818,6 +831,7 @@ async def _execute_pipeline(
     async def execute_with_checkout(checkout: Path | None) -> _PipelineArtifacts | None:
         return await execute_pipeline(
             run_handle=run_handle,
+            presentation=presentation,
             registry=registry,
             lanes_root=lanes_root,
             target=target,
@@ -843,12 +857,7 @@ async def _execute_pipeline(
             on_pause=lambda message: _console.print(message, markup=False),
             on_warning=lambda message: _error_console.print(message, markup=False),
             host_gate=host_gate,
-            rule_source_warning=(
-                "WARNING: .rvw rules loaded from the working tree via "
-                "--allow-worktree-rules; this run is non-SoT."
-                if allow_worktree_rules
-                else None
-            ),
+            rule_source_warning=(WORKTREE_RULE_WARNING if allow_worktree_rules else None),
             discovery_mode=discovery_mode,
         )
 
@@ -1914,6 +1923,13 @@ def _run_command(
                             destination=Path(temporary) / "checkout",
                         )
                     stack.enter_context(chdir(repo_dir))
+                stage = "configuration"
+                process.presentation = load_repo_presentation(resolved, cwd=Path.cwd())
+                run.save_presentation(process.presentation)
+                write_artifact_json(
+                    run.dir / "summary.json",
+                    ExecutionSummary(presentation=process.presentation).model_dump(mode="json"),
+                )
                 stage = "policy"
                 effective = resolve_auto_policy(
                     resolved,
@@ -1948,6 +1964,7 @@ def _run_command(
                         discovery_mode=discovery_mode,
                         run_handle=run,
                         lane_sources=process.lane_sources,
+                        presentation=process.presentation,
                     )
                 )
                 if artifacts is None:
@@ -1961,6 +1978,7 @@ def _run_command(
                             artifacts.merged,
                             artifacts.outcome,
                             [],
+                            presentation=process.presentation,
                         ).model_dump(mode="json"),
                     )
                     detail = (
@@ -1975,6 +1993,7 @@ def _run_command(
                         artifacts.merged,
                         artifacts.outcome,
                         decision.blocking,
+                        presentation=process.presentation,
                     ).model_dump(mode="json"),
                 )
                 stage = "publication"
@@ -2023,6 +2042,9 @@ def _run_command(
                 )
             )
             code = "invalid_target" if invalid else "target_resolution_failed"
+        if isinstance(exc, PresentationConfigInvalid):
+            code = exc.reason
+            invalid = True
         if isinstance(exc, PolicyNotFound):
             code = "policy_not_found"
         if isinstance(exc, EmptyReviewDiffError):
@@ -2058,6 +2080,7 @@ def _run_command(
                         merged,
                         artifacts.outcome if artifacts else None,
                         [],
+                        presentation=process.presentation,
                     ).model_dump(mode="json"),
                 )
     finally:
@@ -2249,6 +2272,7 @@ def report_command(
     try:
         run = RunStore(out_root).open(run_id)
         target = run.load_target()
+        run.load_presentation()
         discovered = run.load_discover()
         merged = run.load_merge()
         outcome = _optional_outcome(run)
@@ -2286,6 +2310,7 @@ def publish_command(
     try:
         run = RunStore(out_root).open(run_id)
         target = run.load_target()
+        run.load_presentation()
     except InvalidRunId as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_USER_ERROR) from exc

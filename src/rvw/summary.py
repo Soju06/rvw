@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rvw.adjudicate import AdjudicationAttempt, AdjudicationOutcome
 from rvw.discover import DiscoverResult
 from rvw.merge import MergeResult
+from rvw.presentation import PresentationConfig
 from rvw.provenance import BuildProvenance, current_build_provenance
 from rvw.runtimes import RunDiagnostic
 
@@ -206,6 +207,7 @@ class SDKObservations(ContractModel):
 
 
 class ProcessResult(ContractModel):
+    presentation: PresentationConfig = Field(default_factory=PresentationConfig)
     schema_version: Literal[1] = 1
     run_id: str
     target: ProcessTarget = Field(default_factory=ProcessTarget)
@@ -254,6 +256,7 @@ class VerdictCounts(ContractModel):
 
 
 class ExecutionSummary(ContractModel):
+    presentation: PresentationConfig = Field(default_factory=PresentationConfig)
     schema_version: Literal[1] = 1
     lanes: SummaryLanes = Field(default_factory=SummaryLanes)
     findings: FindingCounts = Field(default_factory=FindingCounts)
@@ -267,6 +270,7 @@ def execution_summary(
     merged: MergeResult,
     outcome: AdjudicationOutcome | None,
     blockers: list[str],
+    presentation: PresentationConfig | None = None,
 ) -> ExecutionSummary:
     """Compute presentation facts once for every review adapter."""
     lanes = SummaryLanes(
@@ -286,5 +290,10 @@ def execution_summary(
         f"{verdicts.UNCERTAIN} uncertain.\n\nPolicy blockers: {len(blockers)}."
     )
     return ExecutionSummary(
-        lanes=lanes, findings=findings, verdicts=verdicts, blockers=blockers, markdown=markdown
+        presentation=presentation or PresentationConfig(),
+        lanes=lanes,
+        findings=findings,
+        verdicts=verdicts,
+        blockers=blockers,
+        markdown=markdown,
     )
