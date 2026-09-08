@@ -1,4 +1,4 @@
-import {processFixture, summaryFixture, waveWallFixture} from "./review-contract-fixtures";
+import {processFixture, publishFactsFixture, summaryFixture, waveWallFixture} from "./review-contract-fixtures";
 import {describe, expect, it} from "vitest";
 
 import {
@@ -145,6 +145,32 @@ describe("Python artifact summary", () => {
     expect(parsed.failed_lanes).toEqual(failed);
     expect(parsed.wave_wall_seconds).toEqual(walls);
   });
+  it("passes through publication facts and the skip reason from Python", () => {
+    const publish = publishFactsFixture({event: "REQUEST_CHANGES", policy_source: "repository", actor: "review-bot[bot]",
+      dismissed_review_ids: [17, 18], resolved_thread_ids: ["PRRT_1"], reused_thread_ids: ["PRRT_2"],
+      threads_skipped_lane_invalid: ["PRRT_3"], threads_skipped_reason: null});
+    const parsed = parseArtifactSummary(JSON.stringify(summaryFixture({publish, publication_skipped: "duplicate_review_same_head"})));
+    expect(parsed.publish).toEqual(publish);
+    expect(parsed.publication_skipped).toBe("duplicate_review_same_head");
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture({publish, publication_skipped: null}))).publication_skipped).toBeNull();
+  });
+  it("defaults legacy summaries without publication facts", () => {
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture()))).toMatchObject({publish: null, publication_skipped: null});
+  });
+  it.each([
+    {publish: publishFactsFixture({event: "DISMISS"})},
+    {publish: publishFactsFixture({policy_source: "head"})},
+    {publish: publishFactsFixture({dismissed_review_ids: ["17"]})},
+    {publish: publishFactsFixture({resolved_thread_ids: [1]})},
+    {publish: publishFactsFixture({resolved_thread_ids: [""]})},
+    {publish: publishFactsFixture({extra: true})},
+    {publish: {event: "COMMENT"}},
+    {publish: "COMMENT"},
+    {publication_skipped: ""},
+    {publication_skipped: 3},
+  ])("rejects malformed publication facts %#", (overrides) => {
+    expect(() => parseArtifactSummary(JSON.stringify(summaryFixture(overrides)))).toThrow();
+  });
   it("defaults legacy summaries without failure or wave facts", () => {
     const summary: Record<string, unknown> = summaryFixture();
     delete summary.failed_lanes;
@@ -166,6 +192,16 @@ describe("Python artifact summary", () => {
 });
 
 
+it.each(["none", "github-review", "github-comment"])("accepts runtime.publish %s", (publish) => {
+  const process = processFixture();
+  (process.runtime as Record<string, unknown>).publish = publish;
+  expect(checkConclusionForResult(0, JSON.stringify(process)).conclusion).toBe("success");
+});
+it("rejects an unknown runtime.publish value", () => {
+  const process = processFixture();
+  (process.runtime as Record<string, unknown>).publish = "github-approve";
+  expect(checkConclusionForResult(0, JSON.stringify(process)).conclusion).toBe("neutral");
+});
 it.each(["target", "runtime", "artifacts", "effective_policy", "failure"])(
   "rejects process contracts missing %s", (field) => {
     const process: Record<string, unknown> = processFixture();

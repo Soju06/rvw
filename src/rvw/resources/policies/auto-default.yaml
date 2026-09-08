@@ -11,3 +11,17 @@ block_when:
   confirmed_only: true
 
 publish_state: comment
+
+# Review event per verdict. Defaults reproduce COMMENT-only publication; a
+# consuming repository opts into stronger events in its own base-ref copy.
+publish:
+  on_block: comment
+  on_pass: comment
+  dismiss_on_pass: false
+  approve_requires_explicit_opt_in: true
+
+# rvw's own inline threads: resolve when the finding is gone on the next head,
+# never post a second thread for a finding that already has an open one.
+threads:
+  resolve_on_fix: true
+  reuse_open_thread: true

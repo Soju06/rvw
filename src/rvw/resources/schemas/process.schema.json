@@ -220,6 +220,7 @@
           "default": "none",
           "enum": [
             "none",
+            "github-review",
             "github-comment"
           ],
           "title": "Publish",

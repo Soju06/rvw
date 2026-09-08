@@ -176,7 +176,8 @@ class RuntimeSettings(ContractModel):
     concurrency: int = Field(default=8, ge=1)
     deadline: int = Field(default=600, ge=1, le=1800)
     discovery_mode: Literal["agentic", "inline"] = "agentic"
-    publish: Literal["none", "github-comment"] = "none"
+    # ``github-comment`` is the deprecated alias of ``github-review``; the CLI normalises it.
+    publish: Literal["none", "github-review", "github-comment"] = "none"
     host_concurrency: int = Field(default=12, ge=0)
     sandbox: Literal["read-only", "danger-full-access"] = "read-only"
     no_output_seconds: int = Field(default=660, ge=1)
@@ -283,9 +284,57 @@ class VerdictCounts(ContractModel):
     UNCERTAIN: int = Field(default=0, ge=0)
 
 
+ReviewEventName = Literal["COMMENT", "REQUEST_CHANGES", "APPROVE"]
+PublishPolicySourceName = Literal["default", "repository", "explicit"]
+EventClampReason = Literal[
+    "no_verdict",
+    "no_adjudication",
+    "degraded",
+    "login_unknown",
+    "read_failed",
+    "snapshot_unverified",
+    "event_override",
+]
+ThreadsSkippedReason = Literal[
+    "login_unknown",
+    "read_failed",
+    "degraded",
+    "forbidden",
+    "write_failed",
+    "disabled_by_policy",
+    "not_planned",
+]
+PublicationSkipped = Literal["duplicate_review_same_head", "on_pass_none", "head_moved"]
+
+
+class PublishFacts(ContractModel):
+    """What publication did on GitHub: the event, and every thread and review it touched."""
+
+    event: ReviewEventName | None = None
+    policy_source: PublishPolicySourceName | None = None
+    actor: str | None = None
+    event_clamped_reason: EventClampReason | None = None
+    dismissed_review_ids: list[int] = Field(default_factory=list)
+    dismiss_failed_review_ids: list[int] = Field(default_factory=list)
+    resolved_thread_ids: list[str] = Field(default_factory=list)
+    reused_thread_ids: list[str] = Field(default_factory=list)
+    superseded_thread_ids: list[str] = Field(default_factory=list)
+    threads_ambiguous: list[str] = Field(default_factory=list)
+    threads_skipped_lane_invalid: list[str] = Field(default_factory=list)
+    threads_skipped_resolved: list[str] = Field(default_factory=list)
+    threads_skipped_same_head: list[str] = Field(default_factory=list)
+    threads_skipped_human_reply: list[str] = Field(default_factory=list)
+    threads_skipped_unverified: list[str] = Field(default_factory=list)
+    threads_skipped_uncovered: list[str] = Field(default_factory=list)
+    threads_skipped_missing: list[str] = Field(default_factory=list)
+    threads_skipped_write_failed: list[str] = Field(default_factory=list)
+    threads_skipped_reason: ThreadsSkippedReason | None = None
+
+
 class ExecutionSummary(ContractModel):
     publication_failure: str | None = Field(default=None, min_length=1)
     language_fallback_used: bool = False
+    publication_skipped: PublicationSkipped | None = None
     presentation: PresentationConfig = Field(default_factory=PresentationConfig)
     schema_version: Literal[1] = 1
     lanes: SummaryLanes = Field(default_factory=SummaryLanes)
@@ -295,6 +344,7 @@ class ExecutionSummary(ContractModel):
     verdicts: VerdictCounts = Field(default_factory=VerdictCounts)
     blockers: list[str] = Field(default_factory=list)
     markdown: str = "Review has not completed."
+    publish: PublishFacts = Field(default_factory=PublishFacts)
 
 
 def summary_failed_lanes(coverage: Sequence[LaneCoverage]) -> list[SummaryFailedLane]:

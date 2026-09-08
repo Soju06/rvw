@@ -1,4 +1,4 @@
-import {processFixture, summaryFixture, waveWallFixture} from "./review-contract-fixtures";
+import {processFixture, publishFactsFixture, summaryFixture, waveWallFixture} from "./review-contract-fixtures";
 import type {PresentationConfig} from "./presentation";
 import type {UpdateCheckRunInput} from "./github-app";
 import type {Process} from "@cloudflare/sandbox";
@@ -8,7 +8,8 @@ const mocks = vi.hoisted(() => ({
   sandboxFor: vi.fn(), configureOutbound: vi.fn(),
   getInstallationToken: vi.fn(async () => "installation-placeholder"),
   getPresentationConfig: vi.fn(async (): Promise<{presentation: PresentationConfig; failure?: string}> => ({presentation: {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko" as const, footer: null}, failure: undefined as string | undefined})),
-  createCheckRun: vi.fn(async () => ({id: 42})),
+  createCheckRun: vi.fn(async () => ({id: 42, appSlug: "review-app"})),
+  getCheckRunAppSlug: vi.fn(async () => "review-app"),
   clearInstallationToken: vi.fn(), updateCheckRun: vi.fn(async (_token: string, _request: UpdateCheckRunInput) => {}),
 }));
 vi.mock("cloudflare:workers", () => ({DurableObject: class {
@@ -79,6 +80,9 @@ function setup(state: string, envOverrides: Record<string, string> = {}) {
     RVW_JOB_DEADLINE_MINUTES: "120", RVW_ARTIFACTS: {put}, ...envOverrides} as unknown as Env;
   return {job: new RvwReviewJob(ctx, env), events, put, sandbox, storage, files, record: () => record};
 }
+function startOptions(call: unknown[]): {env: Record<string, string>} {
+  return (call as [string, {env: Record<string, string>}])[1];
+}
 beforeEach(() => { vi.clearAllMocks(); });
 describe("terminal diagnostic persistence", () => {
   it.each(["timeout", "start failure", "supersession"])(
@@ -115,7 +119,7 @@ it("writes the review script with the explicit configured deadline and a matchin
   delete test.record().processId;
   await expect(test.job.start(message)).rejects.toThrow("process failed to start");
   const script = test.sandbox.writeFile.mock.calls.find(([path]) => path === "/workspace/run-review.sh")?.[1];
-  expect(script).toContain("--deadline 900 --policy auto --publish github-comment --json");
+  expect(script).toContain("--deadline 900 --policy auto --publish github-review --json");
   expect(script).toBe(reviewScript(message, 900));
   expect(reviewScript(message, 1200)).toContain("--deadline 1200 ");
 });
@@ -126,6 +130,43 @@ it("fails closed before provisioning when the job cap cannot cover the review bu
     reason: "job_deadline_below_review_budget", minimumJobDeadlineMinutes: 85});
   expect(mocks.createCheckRun).not.toHaveBeenCalled();
   expect(mocks.sandboxFor).not.toHaveBeenCalled();
+});
+
+it("passes the App bot login into the review process from the created check run", async () => {
+  const test = setup("provisioning");
+  delete test.record().checkRunId;
+  delete test.record().processId;
+  test.sandbox.startProcess.mockImplementationOnce((async () => ({id: "process-2", command: "/workspace/run-review.sh",
+    startTime: new Date("2026-09-07T10:13:27.000Z")})) as never);
+  await test.job.start(message);
+  expect(test.record().appSlug).toBe("review-app");
+  const options = startOptions(test.sandbox.startProcess.mock.calls[0]);
+  expect(options.env.RVW_GITHUB_LOGIN).toBe("review-app[bot]");
+  expect(mocks.getCheckRunAppSlug).not.toHaveBeenCalled();
+});
+
+it("reads the App slug back when re-entering with an existing check run", async () => {
+  const test = setup("provisioning");
+  delete test.record().processId;
+  test.sandbox.startProcess.mockImplementationOnce((async () => ({id: "process-2", command: "/workspace/run-review.sh",
+    startTime: new Date("2026-09-07T10:13:27.000Z")})) as never);
+  await test.job.start(message);
+  expect(mocks.createCheckRun).not.toHaveBeenCalled();
+  expect(mocks.getCheckRunAppSlug).toHaveBeenCalledWith("installation-placeholder", {owner: "acme", repo: "rockets", checkRunId: 42});
+  const options = startOptions(test.sandbox.startProcess.mock.calls[0]);
+  expect(options.env.RVW_GITHUB_LOGIN).toBe("review-app[bot]");
+});
+
+it("starts without a login when the slug cannot be read, and still reviews", async () => {
+  const test = setup("provisioning");
+  delete test.record().processId;
+  mocks.getCheckRunAppSlug.mockRejectedValueOnce(new Error("HTTP 500"));
+  test.sandbox.startProcess.mockImplementationOnce((async () => ({id: "process-2", command: "/workspace/run-review.sh",
+    startTime: new Date("2026-09-07T10:13:27.000Z")})) as never);
+  await test.job.start(message);
+  const options = startOptions(test.sandbox.startProcess.mock.calls[0]);
+  expect(options.env).not.toHaveProperty("RVW_GITHUB_LOGIN");
+  expect(test.record().state).toBe("running");
 });
 
 it("uses the configured job cap for the deadline recorded at start", async () => {
@@ -210,6 +251,41 @@ it("puts failed lanes, per-wave walls, receipts, and distinct regions into the c
   expect(facts.wave_wall_seconds).toMatchObject({discovery_initial: 600.134, discovery_retry: 600.085,
     discovery_redispatch: null, adjudication_initial: 600.144, adjudication_expanded: null});
   expect(facts).not.toHaveProperty("uncovered");
+});
+
+it("carries the publication facts and skip reason verbatim into the check text", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "/workspace/run-review.sh", status: "completed",
+    startTime: new Date("2026-09-07T10:13:27Z"), exitCode: 1} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({status: "block", exit_code: 1, failure: null,
+    runtime: {...(processFixture().runtime as Record<string, unknown>), publish: "github-review"}})));
+  const publish = publishFactsFixture({event: "REQUEST_CHANGES", policy_source: "repository", actor: "review-app[bot]",
+    resolved_thread_ids: ["PRRT_1"], reused_thread_ids: ["PRRT_2"], threads_skipped_lane_invalid: ["PRRT_3"]});
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture({publish, publication_skipped: null,
+    markdown: "Review complete. Changes required: 1. Needs attention: 0."})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const update = mocks.updateCheckRun.mock.calls[0][1];
+  expect(update.conclusion).toBe("failure");
+  expect(update.summary).toBe("Review complete. Changes required: 1. Needs attention: 0.");
+  const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
+  expect(facts.publish).toEqual(publish);
+  expect(facts.publication_skipped).toBeNull();
+});
+
+it("shows the publish policy reason when Python exits 2 on publish_policy_invalid", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 2} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({status: "invalid", exit_code: 2,
+    failure: {code: "publish_policy_invalid", detail: "approve_not_opted_in"}})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const output = mocks.updateCheckRun.mock.calls[0][1];
+  expect(output.conclusion).toBe("neutral");
+  expect(output.summary).toBe("The repository publish policy is invalid.");
+  expect(output.text).toContain("publish_policy_invalid");
 });
 
 it("persists diagnostics when a Sandbox process disappears", async () => {

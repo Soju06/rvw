@@ -40,13 +40,19 @@ docker run --rm \
 3 for infrastructure failure. It writes `process.json`, `summary.json`, and the stage
 artifacts beneath `--out`; read those files rather than stdout prose to determine the
 result. Pass `--base-ref` and `--head-ref` when the caller has captured immutable commit
-anchors. `--publish github-comment` publishes finding narratives as a COMMENT review;
-nothing in the image can emit an approving review.
+anchors. `--publish github-review` publishes finding narratives as a GitHub review whose
+event follows the consuming repository's `.rvw/policies/auto.yaml` at the base ref
+(COMMENT by default; `github-comment` remains an accepted alias for one release). An
+approving review needs the repository's explicit double opt-in; nothing on the command
+line can escalate past that policy. Set `RVW_GITHUB_LOGIN` to the publishing login
+(`<app-slug>[bot]` for an App) so rvw can reuse and resolve its own review threads; with a
+personal token the login is read from the token itself.
 
 `CODEX_API_KEY` is read only by the provider declared in the generated Codex config.
 `CODEX_BASE_URL` is optional and selects the endpoint at startup; the image has no
 personal proxy URL or credential baked into it. `GH_TOKEN` (or `GITHUB_TOKEN`) is needed
-only for pull-request target resolution and COMMENT publication. The image runs as root,
+only for pull-request target resolution and review publication, including reading and
+resolving rvw's own review threads (`pull_requests: write`). The image runs as root,
 so the three `GIT_CONFIG_*` variables mark the host-owned `/workspace` mount as a Git
 `safe.directory` for this process only; without them Git rejects the mount as dubious
 ownership, the repository `.rvw` policy is skipped, and `rvw run` exits 3.

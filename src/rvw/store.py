@@ -22,6 +22,7 @@ from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport
 from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage
 from rvw.merge import MergeResult
+from rvw.policy import EffectivePolicy, validate_policy
 from rvw.presentation import PresentationConfig, PresentationConfigInvalid
 from rvw.summary import (
     ArtifactEntry,
@@ -233,6 +234,36 @@ class RunHandle:
             return PresentationConfig()
         except (ValueError, OSError) as exc:
             raise PresentationConfigInvalid("invalid persisted presentation snapshot") from exc
+
+    def save_policy(self, effective: EffectivePolicy) -> None:
+        """Snapshot the effective auto policy so publication can replay it."""
+
+        _write_json(
+            self.dir / "policy.json",
+            {
+                "source": effective.source,
+                "path": effective.path,
+                "policy": effective.policy.model_dump(mode="json"),
+            },
+        )
+
+    def load_policy(self) -> EffectivePolicy | None:
+        """The persisted policy snapshot, or ``None`` for runs created before it existed."""
+
+        try:
+            raw = self._load_contained_json("policy.json", "policy")
+        except StageMissing:
+            return None
+        if not isinstance(raw, dict) or raw.get("source") not in {
+            "explicit",
+            "repository",
+            "external",
+            "package",
+        }:
+            raise ValueError("policy.json snapshot is malformed")
+        return EffectivePolicy(
+            validate_policy(raw.get("policy")), raw["source"], str(raw.get("path", ""))
+        )
 
     def save_summary(self, summary: RunSummary) -> None:
         _write_json(self.dir / "run.json", summary.model_dump(mode="json"))

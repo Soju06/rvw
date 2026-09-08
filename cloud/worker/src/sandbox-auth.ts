@@ -100,13 +100,26 @@ export function buildGitCloneUrl(owner: string, repo: string): string {
   return `https://x-access-token@github.com/${owner}/${repo}.git`;
 }
 
-export function buildReviewProcessEnv(
-  proxyHost: string,
-): Record<"CODEX_API_KEY" | "CODEX_BASE_URL", string> {
+export type ReviewProcessEnv = Record<"CODEX_API_KEY" | "CODEX_BASE_URL", string> &
+  Partial<Record<"RVW_GITHUB_LOGIN", string>>;
+
+/**
+ * Build the review process environment. `githubLogin` is the App's own bot login
+ * (`<slug>[bot]`); an installation token cannot describe itself, so Python needs it to
+ * recognise, reuse, and resolve its own review threads. It travels through the process
+ * environment, not the script, because the script unsets unrelated variables before exec.
+ */
+export function buildReviewProcessEnv(proxyHost: string, githubLogin?: string): ReviewProcessEnv {
   return {
     CODEX_API_KEY: "placeholder-not-a-secret",
     CODEX_BASE_URL: `https://${proxyHost}/backend-api/codex`,
+    ...(githubLogin === undefined || githubLogin.length === 0 ? {} : {RVW_GITHUB_LOGIN: githubLogin}),
   };
+}
+
+/** GitHub names an App's actor `<slug>[bot]` in REST; Python strips the suffix for GraphQL. */
+export function botLoginForAppSlug(slug: string): string {
+  return `${slug}[bot]`;
 }
 
 /** Quote one shell argument; callers may safely pass paths containing apostrophes. */
@@ -122,7 +135,11 @@ export interface ReviewInvocation {
   headSha: string;
   out?: string;
   repoDir?: string;
-  publish?: "none" | "github-comment";
+  /**
+   * `github-review` is canonical: the Python side selects the review event from the
+   * repository policy. `github-comment` is the deprecated alias accepted for one release.
+   */
+  publish?: "none" | "github-review" | "github-comment";
   /** Explicit runtime deadline in seconds; the CLI default is never relied upon. */
   deadlineSeconds: number;
 }
@@ -148,6 +165,6 @@ export function buildRvwRunInvocation(options: ReviewInvocation): string {
     `--base-ref ${shellQuote(baseSha)} --head-ref ${shellQuote(headSha)} ` +
     `--out ${shellQuote(options.out ?? "/workspace/result")} ` +
     (options.repoDir === undefined ? "" : `--repo-dir ${shellQuote(options.repoDir)} `) +
-    `--deadline ${deadlineSeconds} --policy auto --publish ${options.publish ?? "github-comment"} --json`
+    `--deadline ${deadlineSeconds} --policy auto --publish ${options.publish ?? "github-review"} --json`
   );
 }

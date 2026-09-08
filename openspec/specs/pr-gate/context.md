@@ -85,3 +85,7 @@ The publication audit identified run IDs, actors and inheritance tiers in gate p
 ## Publication locale enforcement (2026-09-07)
 
 Gate publication shares the publication language boundary, including completed-run republishing. Disposition reasons remain human prose subject to the selected locale; actor/inheritance facts stay in structured verdict JSON. The locale check does not reopen completed verdicts, rerun adjudication or change owner authorization.
+
+## Policy-selected gate event (2026-09-08)
+
+Gate publication reuses the ordinary publish implementation, so it inherits the policy-selected event, the clamps, same-head idempotency, dismissal, and thread reconciliation without a second code path. Target mode resolves the policy inside its provisioned checkout at the captured base and persists it as `policy.json`; resume and publication-only republish re-read the base ref from the current directory or the contents API and fall back to the snapshot only with every event above COMMENT clamped. `publish-status.json` records the event actually used and any skip reason beside the inline and fallback counts, so an operator can tell a skipped same-head duplicate from a published REQUEST_CHANGES. Owner authorization for blocker acceptance is unchanged: accepting a blocker still produces the human disposition record, and whether that PASS approves the pull request is the repository's `publish` policy, never the gate's decision.

@@ -53,7 +53,7 @@ def test_run_and_auto_record_language_result_and_preserve_outcome_counts(
     monkeypatch.setattr(cli, "publish_review", publish)
     out = tmp_path / "result"
     args = [command, "--target", "42", "--policy", str(policy), "--out", str(out), "--json"]
-    args += ["--publish", "github-comment"] if command == "run" else ["--publish"]
+    args += ["--publish", "github-review"] if command == "run" else ["--publish"]
     if fallback == "cli":
         args += ["--allow-language-fallback"]
     result = CliRunner().invoke(cli.app, args)

@@ -1096,6 +1096,7 @@ def test_publish_defaults_to_dry_run_and_non_pr_execute_is_user_error(
         del cmd, input_json
         raise AssertionError("dry-run called gh")
 
+    monkeypatch.setattr(cli_module, "resolve_own_identity", lambda *_, **__: None)
     monkeypatch.setattr(publish_module, "_run", forbidden_run)
     dry_run = runner.invoke(
         cli_module.app,

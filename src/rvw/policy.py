@@ -12,22 +12,35 @@ Policy files use this YAML shape::
       severity_at_least: blocker
       confirmed_only: true
     publish_state: comment
+    publish:
+      on_block: comment
+      on_pass: comment
+      dismiss_on_pass: false
+      approve_requires_explicit_opt_in: true
+    threads:
+      resolve_on_fix: true
+      reuse_open_thread: true
 
-``publish_state`` accepts only ``comment`` or ``none``. Approval is
-intentionally not expressible by policy.
+``publish_state`` accepts only ``comment`` or ``none`` and decides whether the
+policy-gated commands publish at all. The ``publish`` block selects the GitHub
+review event per verdict and the ``threads`` block governs rvw's own inline
+threads; both default to the historical COMMENT-only behaviour. ``approve`` is
+double-gated: it requires ``approve_requires_explicit_opt_in: false`` in the same
+file. Any invalid value in either block fails closed as ``publish_policy_invalid``.
 """
 
 from __future__ import annotations
 
 import subprocess
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.merge import MergeResult
@@ -47,6 +60,47 @@ class PolicyNotFound(FileNotFoundError):
     def __init__(self, path: Path) -> None:
         self.path = path
         super().__init__(f"auto policy not found: {path}")
+
+
+class PublishPolicyInvalid(ValueError):
+    """The ``publish`` or ``threads`` block cannot be trusted; publication must not run."""
+
+    reason = "publish_policy_invalid"
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(f"{self.reason}: {detail}")
+
+
+ReviewEventOnBlock = Literal["comment", "request_changes"]
+ReviewEventOnPass = Literal["comment", "approve", "none"]
+PublishPolicySource = Literal["default", "repository", "explicit"]
+
+
+class PublishPolicy(BaseModel):
+    """Which GitHub review event each policy verdict publishes."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    on_block: ReviewEventOnBlock = "comment"
+    on_pass: ReviewEventOnPass = "comment"
+    dismiss_on_pass: bool = False
+    approve_requires_explicit_opt_in: bool = True
+
+    @model_validator(mode="after")
+    def _approve_is_double_gated(self) -> PublishPolicy:
+        if self.on_pass == "approve" and self.approve_requires_explicit_opt_in:
+            raise ValueError("approve_not_opted_in")
+        return self
+
+
+class ThreadPolicy(BaseModel):
+    """How rvw treats its own inline review threads across heads."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    resolve_on_fix: bool = True
+    reuse_open_thread: bool = True
 
 
 class PromoteRule(BaseModel):
@@ -78,6 +132,8 @@ class AutoPolicy(BaseModel):
     block_when: BlockRule
     publish_state: Literal["comment", "none"]
     allow_language_fallback: bool = Field(default=False, strict=True)
+    publish: PublishPolicy = Field(default_factory=PublishPolicy)
+    threads: ThreadPolicy = Field(default_factory=ThreadPolicy)
 
 
 class AutoDecision(BaseModel):
@@ -99,13 +155,80 @@ class EffectivePolicy:
     path: str
 
 
+def _publish_block_detail(error: Mapping[str, Any]) -> str:
+    message = str(error.get("msg", ""))
+    if "approve_not_opted_in" in message:
+        return "approve_not_opted_in"
+    location = ".".join(str(part) for part in error.get("loc", ()))
+    return f"{location}: {message}"
+
+
+def validate_policy(raw: object) -> AutoPolicy:
+    """Validate a policy document, naming ``publish``/``threads`` faults distinctly.
+
+    Faults inside the two publication blocks are raised as ``PublishPolicyInvalid`` so the
+    process contract records ``publish_policy_invalid``; every other schema violation stays an
+    ordinary ``ValidationError`` (``invalid_policy``).
+    """
+
+    try:
+        return AutoPolicy.model_validate(raw)
+    except ValidationError as exc:
+        publication_errors = [
+            error
+            for error in exc.errors()
+            if error.get("loc") and error["loc"][0] in {"publish", "threads"}
+        ]
+        if publication_errors:
+            raise PublishPolicyInvalid(_publish_block_detail(publication_errors[0])) from exc
+        raise
+
+
+def repository_policy_from_contents(raw: object) -> AutoPolicy | None:
+    """Validate a repository ``auto.yaml`` fetched through the GitHub contents API.
+
+    ``raw`` is the decoded response; ``None`` means the file is absent. Malformed content
+    raises like any other selected source.
+    """
+
+    import base64
+
+    if not isinstance(raw, Mapping):
+        return None
+    content = raw.get("content")
+    if raw.get("type") != "file" or not isinstance(content, str):
+        return None
+    text = base64.b64decode("".join(content.split())).decode("utf-8")
+    return validate_policy(yaml.safe_load(text))
+
+
+def packaged_policy() -> EffectivePolicy:
+    """The packaged default policy, used when no trustworthy source is reachable."""
+
+    resource_path = "resources/policies/auto-default.yaml"
+    default = files("rvw").joinpath(resource_path).read_text(encoding="utf-8")
+    return EffectivePolicy(
+        validate_policy(yaml.safe_load(default)), "package", f"rvw:{resource_path}"
+    )
+
+
+def publish_policy_source(source: str) -> PublishPolicySource:
+    """Collapse effective-policy provenance to the recorded ``publish.policy_source``."""
+
+    if source == "repository":
+        return "repository"
+    if source == "explicit":
+        return "explicit"
+    return "default"
+
+
 def load_policy(path: Path) -> AutoPolicy:
     """Load and strictly validate one YAML auto policy."""
 
     expanded = path.expanduser()
     if not expanded.is_file():
         raise PolicyNotFound(expanded)
-    return AutoPolicy.model_validate(yaml.safe_load(expanded.read_text(encoding="utf-8")))
+    return validate_policy(yaml.safe_load(expanded.read_text(encoding="utf-8")))
 
 
 def resolve_auto_policy(
@@ -114,11 +237,14 @@ def resolve_auto_policy(
     cwd: Path,
     policy: str | Path = "auto",
     external_path: Path | None = None,
+    allow_external: bool = True,
 ) -> EffectivePolicy:
     """Select explicit, immutable repository, legacy external, then packaged policy.
 
     Only a missing source permits fallback. Invalid YAML or a schema violation
     in the selected source must reach the caller as an invalid configuration.
+    ``allow_external=False`` skips the deprecated external file, which publication-time
+    resolution never trusts.
     """
 
     if str(policy) != "auto":
@@ -140,13 +266,13 @@ def resolve_auto_policy(
         except subprocess.CalledProcessError:
             pass
         else:
-            selected = AutoPolicy.model_validate(yaml.safe_load(raw))
+            selected = validate_policy(yaml.safe_load(raw))
             return EffectivePolicy(selected, "repository", repository_path)
 
     external = (external_path or Path("~/.hermes/review/policies/auto.yaml")).expanduser()
     if not external.is_absolute():
         external = cwd / external
-    if external.is_file():
+    if allow_external and external.is_file():
         warnings.warn(
             f"external auto policy is deprecated: {external}; "
             "move it to .rvw/policies/auto.yaml or pass --policy explicitly",
@@ -158,7 +284,7 @@ def resolve_auto_policy(
     resource_path = "resources/policies/auto-default.yaml"
     default = files("rvw").joinpath(resource_path).read_text(encoding="utf-8")
     return EffectivePolicy(
-        AutoPolicy.model_validate(yaml.safe_load(default)), "package", f"rvw:{resource_path}"
+        validate_policy(yaml.safe_load(default)), "package", f"rvw:{resource_path}"
     )
 
 
@@ -232,7 +358,17 @@ __all__ = [
     "EffectivePolicy",
     "PolicyNotFound",
     "PromoteRule",
+    "PublishPolicy",
+    "PublishPolicyInvalid",
+    "PublishPolicySource",
+    "ReviewEventOnBlock",
+    "ReviewEventOnPass",
+    "ThreadPolicy",
     "evaluate",
     "load_policy",
+    "packaged_policy",
+    "publish_policy_source",
+    "repository_policy_from_contents",
     "resolve_auto_policy",
+    "validate_policy",
 ]

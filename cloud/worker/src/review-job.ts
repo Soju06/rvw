@@ -9,6 +9,7 @@ import {
   clearInstallationToken,
   createCheckRun,
   checkDetails,
+  getCheckRunAppSlug,
   getPresentationConfig,
   getInstallationToken,
   updateCheckRun,
@@ -26,7 +27,7 @@ import {
   type JobState,
   type ReviewResultMapping,
 } from "./review-job-contract";
-import {buildReviewProcessEnv, buildRvwRunInvocation, shellQuote} from "./sandbox-auth";
+import {botLoginForAppSlug, buildReviewProcessEnv, buildRvwRunInvocation, shellQuote} from "./sandbox-auth";
 import {configureOutbound, optionalFile, readTextFile, sandboxFor} from "./sandbox";
 import {validateReviewJobMessage, type ReviewJobMessage} from "./webhook";
 
@@ -55,6 +56,8 @@ interface JobRecord {
   processStartedAt?: string;
   checkRunId?: number;
   checkRunUrl?: string;
+  /** The App slug GitHub reported on the check run; Python receives `<slug>[bot]`. */
+  appSlug?: string;
   conclusion?: CheckConclusion;
   reason?: string;
   checkUpdatePending?: boolean;
@@ -140,7 +143,7 @@ function titleFor(mapping: ReviewResultMapping, presentation: PresentationConfig
 
 function humanReason(code: string | undefined, presentation: PresentationConfig): string {
   const keys: Record<string, MessageKey> = {
-    publication_language_mismatch: "reason_language",
+    publication_language_mismatch: "reason_language", publish_policy_invalid: "reason_publish_policy",
     timed_out: "reason_deadline", superseded: "reason_superseded", start_failed: "reason_queue_exhausted",
     process_invalid: "reason_artifacts", artifacts_invalid: "reason_artifacts", summary_invalid: "reason_artifacts",
     process_disappeared: "reason_process", presentation_config_invalid: "reason_config",
@@ -161,6 +164,9 @@ function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSumm
     failed_lanes: summary?.failed_lanes ?? null, wave_wall_seconds: summary?.wave_wall_seconds ?? null,
     findings: summary?.findings ?? null,
     verdicts: summary?.verdicts ?? null, blockers: summary?.blockers ?? null,
+    // Publication facts come verbatim from Python: the event, its policy source, and every
+    // thread and review publication touched or deliberately left alone.
+    publication_skipped: summary?.publication_skipped ?? null, publish: summary?.publish ?? null,
     artifact_key: `jobs/${record.jobId}/`, artifacts: record.artifacts}, presentation);
 }
 
@@ -316,9 +322,24 @@ export class RvwReviewJob extends DurableObject<Env> {
         ...record,
         checkRunId: check.id,
         ...(check.htmlUrl === undefined ? {} : {checkRunUrl: check.htmlUrl}),
+        ...(check.appSlug === undefined ? {} : {appSlug: check.appSlug}),
         updatedAt: new Date().toISOString(),
       };
       await this.save(record);
+    } else if (record.appSlug === undefined) {
+      // Re-entry with an existing check: the slug was never observed, read it back.
+      try {
+        const appSlug = await getCheckRunAppSlug(token, {
+          owner: message.owner, repo: message.repo, checkRunId: record.checkRunId,
+        });
+        if (appSlug !== undefined) {
+          record = {...record, appSlug, updatedAt: new Date().toISOString()};
+          await this.save(record);
+        }
+      } catch (error) {
+        console.error(JSON.stringify({event: "review_job_app_slug_unavailable",
+          jobId: record.jobId, error: errorMessage(error)}));
+      }
     }
 
     const sandboxId = record.sandboxId ?? `rvw-review-${crypto.randomUUID()}`;
@@ -333,7 +354,10 @@ export class RvwReviewJob extends DurableObject<Env> {
     await sandbox.exec("chmod 0755 /workspace/run-review.sh");
     const process = await sandbox.startProcess("/workspace/run-review.sh", {
       autoCleanup: false,
-      env: buildReviewProcessEnv(config.codexProxyHost),
+      env: buildReviewProcessEnv(
+        config.codexProxyHost,
+        record.appSlug === undefined ? undefined : botLoginForAppSlug(record.appSlug),
+      ),
     });
     const deadlineAtMs = Date.now() + config.jobDeadlineMinutes * 60 * 1_000;
     record = {

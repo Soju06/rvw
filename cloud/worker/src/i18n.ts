@@ -9,6 +9,7 @@ export const catalogEn = {
   reason_artifacts: "The review could not complete because its results are unavailable.",
   reason_process: "The review stopped before it could complete.",
   reason_config: "The repository presentation configuration is invalid.",
+  reason_publish_policy: "The repository publish policy is invalid.",
   reason_language: "The review text could not be verified in the configured language.",
   reason_incomplete: "The review could not complete.",
 
@@ -40,6 +41,7 @@ export const catalogKo: Record<MessageKey, string> = {
   reason_artifacts: "검토 결과를 불러올 수 없어 검토를 마치지 못했습니다.",
   reason_process: "검토를 마치기 전에 실행이 중단되었습니다.",
   reason_config: "저장소의 표시 설정이 올바르지 않습니다.",
+  reason_publish_policy: "저장소의 게시 정책이 올바르지 않습니다.",
   reason_language: "설정된 언어로 검토 내용을 확인하지 못했습니다.",
   reason_incomplete: "검토를 마치지 못했습니다.",
 

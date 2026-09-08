@@ -69,6 +69,200 @@
       "title": "PresentationConfig",
       "type": "object"
     },
+    "PublishFacts": {
+      "additionalProperties": false,
+      "description": "What publication did on GitHub: the event, and every thread and review it touched.",
+      "properties": {
+        "event": {
+          "anyOf": [
+            {
+              "enum": [
+                "COMMENT",
+                "REQUEST_CHANGES",
+                "APPROVE"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event"
+        },
+        "policy_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "default",
+                "repository",
+                "explicit"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Source"
+        },
+        "actor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor"
+        },
+        "event_clamped_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "no_verdict",
+                "no_adjudication",
+                "degraded",
+                "login_unknown",
+                "read_failed",
+                "snapshot_unverified",
+                "event_override"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Clamped Reason"
+        },
+        "dismissed_review_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Dismissed Review Ids",
+          "type": "array"
+        },
+        "dismiss_failed_review_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Dismiss Failed Review Ids",
+          "type": "array"
+        },
+        "resolved_thread_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Resolved Thread Ids",
+          "type": "array"
+        },
+        "reused_thread_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reused Thread Ids",
+          "type": "array"
+        },
+        "superseded_thread_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Superseded Thread Ids",
+          "type": "array"
+        },
+        "threads_ambiguous": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Ambiguous",
+          "type": "array"
+        },
+        "threads_skipped_lane_invalid": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Skipped Lane Invalid",
+          "type": "array"
+        },
+        "threads_skipped_resolved": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Skipped Resolved",
+          "type": "array"
+        },
+        "threads_skipped_same_head": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Skipped Same Head",
+          "type": "array"
+        },
+        "threads_skipped_human_reply": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Skipped Human Reply",
+          "type": "array"
+        },
+        "threads_skipped_unverified": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Skipped Unverified",
+          "type": "array"
+        },
+        "threads_skipped_uncovered": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Skipped Uncovered",
+          "type": "array"
+        },
+        "threads_skipped_missing": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Skipped Missing",
+          "type": "array"
+        },
+        "threads_skipped_write_failed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Skipped Write Failed",
+          "type": "array"
+        },
+        "threads_skipped_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "login_unknown",
+                "read_failed",
+                "degraded",
+                "forbidden",
+                "write_failed",
+                "disabled_by_policy",
+                "not_planned"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threads Skipped Reason"
+        }
+      },
+      "title": "PublishFacts",
+      "type": "object"
+    },
     "SummaryFailedLane": {
       "additionalProperties": false,
       "description": "One lane with a final INVALID planned execution and its normalized reason.",
@@ -267,6 +461,23 @@
       "title": "Language Fallback Used",
       "type": "boolean"
     },
+    "publication_skipped": {
+      "anyOf": [
+        {
+          "enum": [
+            "duplicate_review_same_head",
+            "on_pass_none",
+            "head_moved"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Publication Skipped"
+    },
     "presentation": {
       "$ref": "#/$defs/PresentationConfig"
     },
@@ -306,6 +517,9 @@
       "default": "Review has not completed.",
       "title": "Markdown",
       "type": "string"
+    },
+    "publish": {
+      "$ref": "#/$defs/PublishFacts"
     }
   },
   "title": "ExecutionSummary",

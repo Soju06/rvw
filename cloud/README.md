@@ -192,6 +192,20 @@ consumers may manage Terraform themselves and set it false.
    bindings; `GITHUB_APP_ID`, `RVW_JOB_DEADLINE_MINUTES`, `RVW_REVIEW_DEADLINE_SECONDS`,
    and `CODEX_PROXY_HOST` are non-secret vars supplied by the deployer.
 
+### Publication identity and permissions
+
+The Worker passes `RVW_GITHUB_LOGIN=<app-slug>[bot]` into the review process (read from
+the check-run creation response, or from the existing check run when a job re-enters) so
+Python can recognise, reuse, and resolve its own inline review threads and dismiss its own
+earlier REQUEST_CHANGES reviews. Reading and resolving review threads and dismissing
+reviews use the `pull_requests: write` permission the App manifest already declares; no
+new permission is needed. The Worker never chooses the review event: the consuming
+repository's `.rvw/policies/auto.yaml` at the base ref does, and the check `text` carries
+the resulting `publish` facts and any `publication_skipped` reason verbatim. The App argv
+uses `--publish github-review`; the earlier `github-comment` spelling remains accepted by
+the container for one release. Because a container rollout is asynchronous, a sandbox can
+briefly run the previous image after a Worker deploy; such a job ends as a neutral check.
+
 ### Observe and operate jobs
 
 Each runtime execution inside the review receives the explicit `--deadline`

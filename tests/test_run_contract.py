@@ -547,7 +547,7 @@ def test_run_auto_exit_matrix(
     selected = policy if case != "policy" else tmp_path / "missing.yaml"
     args = [command, "--target", "42", "--policy", str(selected), "--out", str(out), "--json"]
     if case == "publication":
-        args.extend(["--publish"] if command == "auto" else ["--publish", "github-comment"])
+        args.extend(["--publish"] if command == "auto" else ["--publish", "github-review"])
     result = runner.invoke(cli.app, args)
     assert result.exit_code == exit_code, result.output
     process = json.loads((out / "process.json").read_text())
