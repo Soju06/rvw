@@ -132,13 +132,18 @@ export function parseProcessResult(output: string): ProcessResult {
     throw new Error("process lane sources are invalid");
   }
   const runtime = recordValue(value.runtime, "process runtime");
+  // Watchdog and reasoning-summary settings are additive; legacy envelopes omit them.
   fields(runtime, ["replicas", "adjudicate_replicas", "concurrency", "deadline", "discovery_mode",
-    "publish", "host_concurrency", "sandbox"], "process runtime");
+    "publish", "host_concurrency", "sandbox",
+    ...["no_output_seconds", "reasoning_summary"].filter((key) => key in runtime)], "process runtime");
   if (["replicas", "adjudicate_replicas", "concurrency", "deadline"].some((key) => !integer(runtime[key], 1)) ||
       Number(runtime.deadline) > 1800 || !integer(runtime.host_concurrency) ||
       !["agentic", "inline"].includes(runtime.discovery_mode as string) ||
       !["none", "github-comment"].includes(runtime.publish as string) ||
-      !["read-only", "danger-full-access"].includes(runtime.sandbox as string)) {
+      !["read-only", "danger-full-access"].includes(runtime.sandbox as string) ||
+      ("no_output_seconds" in runtime && !integer(runtime.no_output_seconds, 1)) ||
+      ("reasoning_summary" in runtime &&
+        (typeof runtime.reasoning_summary !== "string" || runtime.reasoning_summary.length === 0))) {
     throw new Error("process runtime settings are invalid");
   }
   artifactManifest(output);

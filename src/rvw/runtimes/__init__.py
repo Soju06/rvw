@@ -45,6 +45,8 @@ class RunUsage(BaseModel):
 
     model: str
     reasoning_effort: str
+    reasoning_summary: str | None = None
+    no_output_seconds: int | None = Field(default=None, ge=1)
     runtime_mode: str | None = None
     status: RunUsageStatus
     wall_seconds: float = Field(ge=0)
@@ -55,6 +57,7 @@ class RunUsage(BaseModel):
     cli_tokens_used: int | None = Field(default=None, ge=0)
     turns: int | None = Field(default=None, ge=0)
     tool_calls: int | None = Field(default=None, ge=0)
+    assistant_messages: int | None = Field(default=None, ge=0)
 
 
 @dataclass(frozen=True, slots=True)

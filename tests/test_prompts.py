@@ -1,12 +1,15 @@
+import importlib.util
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 
 from rvw.lane import Lane, load_lane
-from rvw.prompts import build_agentic_lane_prompt, build_lane_prompt
+from rvw.prompts import DEFAULT_TOOL_CALL_BUDGET, build_agentic_lane_prompt, build_lane_prompt
 
+ROOT = Path(__file__).parent.parent
 FIXTURES = Path(__file__).parent / "fixtures" / "lanes"
+NEUTRALITY_GATE = ROOT / "scripts" / "check-deployer-neutral.py"
 
 LOCALE_CONTRACT = (
     "Write every explanatory field (title, body, reason, recommendation) in {language}. "
@@ -162,3 +165,155 @@ def test_agentic_prompt_is_minimal_and_contains_no_diff_content() -> None:
     assert "excluded" not in prompt.lower()
     assert "Already covered by other lanes" not in prompt
     assert "Review brief" not in prompt
+
+
+WALL_BUDGET = "This run has a wall-clock budget of {seconds} seconds"
+EXPIRY = (
+    "when it expires the process is terminated and any output that has not been returned is lost."
+)
+COVERAGE_FIRST = "Cover every changed region first."
+EMIT_IMMEDIATELY = "emit the final structured output immediately"
+OUT_OF_SCOPE = (
+    "exploration beyond the changed regions is out of scope unless a finding's evidence "
+    "requires it."
+)
+TOOL_BUDGET = "Plan for at most {budget} tool calls; this is guidance, not a hard limit."
+REMOTE_GUARD = (
+    "Do not fetch, clone, or query remote repositories or APIs; the checkout is complete and "
+    "the base and head are available locally."
+)
+
+
+def agentic_prompt(
+    lane: Lane,
+    *,
+    deadline_seconds: int | None = None,
+    tool_call_budget: int | None = DEFAULT_TOOL_CALL_BUDGET,
+) -> str:
+    return build_agentic_lane_prompt(
+        lane,
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        deadline_seconds=deadline_seconds,
+        tool_call_budget=tool_call_budget,
+    )
+
+
+def inline_prompt(lane: Lane, *, deadline_seconds: int | None = None) -> str:
+    return build_lane_prompt(
+        lane,
+        diff="tiny diff",
+        brief=None,
+        brief_source=None,
+        covered_rules={},
+        deadline_seconds=deadline_seconds,
+    )
+
+
+def deployer_tokens() -> tuple[str, ...]:
+    """Load the forbidden identifiers from the neutrality gate so no test spells them."""
+
+    spec = importlib.util.spec_from_file_location("check_deployer_neutral", NEUTRALITY_GATE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return tuple(cast(tuple[str, ...], module.TOKENS))
+
+
+def test_agentic_prompt_states_wall_budget_tool_budget_and_remote_access_guard() -> None:
+    lane = load_lane(FIXTURES / "slop-hygiene.md")
+
+    prompt = agentic_prompt(lane, deadline_seconds=900)
+
+    assert DEFAULT_TOOL_CALL_BUDGET == 40
+    assert WALL_BUDGET.format(seconds=900) in prompt
+    assert EXPIRY in prompt
+    assert COVERAGE_FIRST in prompt
+    assert EMIT_IMMEDIATELY in prompt
+    assert OUT_OF_SCOPE in prompt
+    assert TOOL_BUDGET.format(budget=40) in prompt
+    assert REMOTE_GUARD in prompt
+    modify = prompt.index("Do not modify files.") + len("Do not modify files.")
+    budget = prompt.index(WALL_BUDGET.format(seconds=900))
+    budget_end = prompt.index(REMOTE_GUARD) + len(REMOTE_GUARD)
+    locale = prompt.index("Write every explanatory field")
+    assert modify < budget < budget_end < locale
+    assert prompt[modify:budget] == "\n\n"
+    assert prompt[budget_end:locale] == "\n\n"
+    assert prompt.endswith(LOCALE_CONTRACT.format(language="English"))
+
+
+def test_inline_prompt_states_wall_budget_without_tool_sentences() -> None:
+    prompt = inline_prompt(dynamic_lane(), deadline_seconds=600)
+
+    assert WALL_BUDGET.format(seconds=600) in prompt
+    assert EXPIRY in prompt
+    assert COVERAGE_FIRST in prompt
+    assert EMIT_IMMEDIATELY in prompt
+    assert OUT_OF_SCOPE in prompt
+    assert "tool calls" not in prompt
+    assert "Do not fetch" not in prompt
+    assert "remote repositories" not in prompt
+    assert (
+        prompt.index("Do not modify files.")
+        < prompt.index("wall-clock budget")
+        < prompt.index("Write every explanatory field")
+    )
+
+
+def test_prompts_without_a_deadline_omit_the_budget_contract() -> None:
+    lane = load_lane(FIXTURES / "slop-hygiene.md")
+
+    for prompt in (agentic_prompt(lane), inline_prompt(lane)):
+        assert "wall-clock budget" not in prompt
+        assert "tool calls" not in prompt
+        assert "Do not fetch" not in prompt
+        assert "Do not modify files.\n\n" + LOCALE_CONTRACT.format(language="English") in prompt
+
+
+def test_agentic_prompt_uses_a_custom_tool_call_budget() -> None:
+    lane = load_lane(FIXTURES / "slop-hygiene.md")
+
+    prompt = agentic_prompt(lane, deadline_seconds=900, tool_call_budget=12)
+
+    assert TOOL_BUDGET.format(budget=12) in prompt
+    assert "40 tool calls" not in prompt
+    assert REMOTE_GUARD in prompt
+
+
+def test_agentic_prompt_without_a_tool_budget_keeps_only_the_time_sentences() -> None:
+    lane = load_lane(FIXTURES / "slop-hygiene.md")
+
+    prompt = agentic_prompt(lane, deadline_seconds=900, tool_call_budget=None)
+
+    assert WALL_BUDGET.format(seconds=900) in prompt
+    assert "tool calls" not in prompt
+    assert "Do not fetch" not in prompt
+
+
+@pytest.mark.parametrize("deadline_seconds", [0, -5])
+def test_budget_contract_rejects_a_non_positive_deadline(deadline_seconds: int) -> None:
+    lane = load_lane(FIXTURES / "slop-hygiene.md")
+    with pytest.raises(ValueError, match="deadline_seconds"):
+        agentic_prompt(lane, deadline_seconds=deadline_seconds)
+    with pytest.raises(ValueError, match="deadline_seconds"):
+        inline_prompt(lane, deadline_seconds=deadline_seconds)
+
+
+def test_budget_contract_rejects_a_non_positive_tool_call_budget() -> None:
+    lane = load_lane(FIXTURES / "slop-hygiene.md")
+    with pytest.raises(ValueError, match="tool_call_budget"):
+        agentic_prompt(lane, deadline_seconds=900, tool_call_budget=0)
+
+
+def test_budget_prompts_name_no_deployer() -> None:
+    tokens = deployer_tokens()
+    assert tokens
+    lane = load_lane(FIXTURES / "slop-hygiene.md")
+
+    for prompt in (
+        agentic_prompt(lane, deadline_seconds=900),
+        inline_prompt(dynamic_lane(), deadline_seconds=600),
+    ):
+        lowered = prompt.casefold()
+        assert [token for token in tokens if token in lowered] == []

@@ -10,8 +10,9 @@ import shutil
 import signal
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, BinaryIO, cast
@@ -41,6 +42,16 @@ _TOOL_LESS_DISABLED_FEATURES = (
 )
 _SANDBOX_ENV = "RVW_CODEX_SANDBOX"
 _SANDBOX_VALUES = frozenset({"read-only", "danger-full-access"})
+DEFAULT_NO_OUTPUT_SECONDS = 660
+NO_OUTPUT_SECONDS_ENV = "RVW_NO_OUTPUT_SECONDS"
+NO_OUTPUT_REASON_PREFIX = "no_output_after:"
+_WATCHDOG_POLL_SECONDS = 2.0
+# The runtime child, and every tool command it spawns, runs in the review phase: the image's
+# PATH shims refuse remote git, gh, curl, and wget when RVW_PHASE is "review", and git's own
+# transport check refuses every remote protocol regardless of which git binary is invoked.
+# The rvw process itself never carries these values, so its checkout and publication keep
+# their network access.
+REVIEW_PHASE_ENVIRONMENT: Mapping[str, str] = {"RVW_PHASE": "review", "GIT_ALLOW_PROTOCOL": "none"}
 
 
 def _sandbox_mode() -> str:
@@ -51,11 +62,61 @@ def _sandbox_mode() -> str:
     return value
 
 
+def resolve_no_output_seconds(explicit: int | None, environ: Mapping[str, str] = os.environ) -> int:
+    """Resolve the no-output watchdog: explicit option, then environment, then default."""
+
+    if explicit is not None:
+        if explicit < 1:
+            raise ValueError("no_output_seconds must be at least 1")
+        return explicit
+    raw = environ.get(NO_OUTPUT_SECONDS_ENV)
+    if raw is None:
+        return DEFAULT_NO_OUTPUT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{NO_OUTPUT_SECONDS_ENV} must be a positive integer, got {raw!r}"
+        ) from exc
+    if value < 1:
+        raise ValueError(f"{NO_OUTPUT_SECONDS_ENV} must be a positive integer, got {raw!r}")
+    return value
+
+
 class CodexRuntimeMode(StrEnum):
     """The evidence and tool boundary for one Codex execution."""
 
     TOOL_LESS = "tool-less"
     AGENTIC = "agentic"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeLogCounts:
+    """Tool commands and assistant messages counted from a Codex ``run.log``."""
+
+    tool_calls: int
+    assistant_messages: int
+
+
+def count_runtime_log_turns(log_text: str) -> RuntimeLogCounts:
+    """Count the ``exec`` and ``codex`` item headers the Codex human output prints.
+
+    Codex prints a line that is exactly ``exec`` before each tool command and a line
+    that is exactly ``codex`` before each assistant message. Only whole lines match,
+    after stripping a trailing carriage return, so an indented or prefixed ``exec``
+    inside tool output does not count. The counts are telemetry: a tool whose output
+    contains such a bare line can over-count, which is why nothing is enforced on them.
+    """
+
+    tool_calls = 0
+    assistant_messages = 0
+    for raw_line in log_text.split("\n"):
+        line = raw_line.removesuffix("\r")
+        if line == "exec":
+            tool_calls += 1
+        elif line == "codex":
+            assistant_messages += 1
+    return RuntimeLogCounts(tool_calls=tool_calls, assistant_messages=assistant_messages)
 
 
 def _process_group_exists(pgid: int) -> bool:
@@ -170,10 +231,16 @@ async def _cleanup_before_unwind(
     cleanup.result()
 
 
+def review_phase_environment(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return the runtime child's environment: the parent's plus the review-phase markers."""
+
+    return {**(os.environ if base is None else base), **REVIEW_PHASE_ENVIRONMENT}
+
+
 async def _spawn(
     cmd: list[str], stdin_text: str, log_path: Path, *, cwd: Path | None = None
 ) -> int:
-    """Run a command without a shell and combine its output in one log."""
+    """Run a command without a shell, in the review phase, combining its output in one log."""
 
     spawn_command = cmd
     if sys.platform.startswith("linux"):
@@ -187,6 +254,7 @@ async def _spawn(
             stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
+            env=review_phase_environment(),
             start_new_session=True,
         )
         pgid = process.pid if os.name == "posix" else None
@@ -198,6 +266,111 @@ async def _spawn(
     if process.returncode is None:
         raise RuntimeError("subprocess completed without a return code")
     return process.returncode
+
+
+def _log_size(log_path: Path) -> int:
+    """Return the combined log size, or 0 before the runtime has created the file."""
+
+    try:
+        return log_path.stat().st_size
+    except OSError:
+        return 0
+
+
+@dataclass(slots=True)
+class _WatchdogState:
+    """Whether the watchdog terminated the runtime, so a later deadline cannot reclassify it."""
+
+    fired: bool = False
+
+
+async def _await_cancelled_spawn(spawn_task: asyncio.Task[int]) -> bool:
+    """Wait for a cancelled spawn task to finish terminating and reaping its process group.
+
+    Cancellation of the waiting task is absorbed so cleanup always completes; the return
+    value reports whether such a cancellation arrived while waiting. The waiting task's
+    own cancel count is the discriminator: the ``CancelledError`` that ``shield`` raises
+    when the spawn task settles never increments it, while ``Task.cancel`` from the
+    deadline or the dispatcher always does, even when both land in the same loop tick.
+    """
+
+    task = asyncio.current_task()
+    if task is None:
+        raise RuntimeError("_await_cancelled_spawn requires a running task")
+    cancels_before = task.cancelling()
+    while not spawn_task.done():
+        try:
+            await asyncio.shield(spawn_task)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    return task.cancelling() > cancels_before
+
+
+def _spawn_cleanup_error(spawn_task: asyncio.Task[int]) -> BaseException | None:
+    """Return the exception a settled spawn task ended with, marking it retrieved."""
+
+    if spawn_task.cancelled():
+        return None
+    return spawn_task.exception()
+
+
+async def _spawn_with_watchdog(
+    cmd: list[str],
+    stdin_text: str,
+    log_path: Path,
+    *,
+    cwd: Path | None,
+    no_output_seconds: int,
+    state: _WatchdogState,
+) -> int | None:
+    """Run ``_spawn`` as a task and cancel it once the combined log stops growing.
+
+    Returns the runtime exit code, or ``None`` when the watchdog terminated the runtime
+    because ``log_path`` did not grow for ``no_output_seconds``; ``state.fired`` is set
+    before that kill starts so a deadline expiring while the kill is reaped does not
+    reclassify it. Growth is measured on the combined stdout and stderr log, so a runtime
+    that keeps reporting reconnects stays alive. The silence clock starts at spawn time,
+    so a runtime that never writes a byte is terminated after the same interval. Any
+    exception raised while polling, including deadline or dispatcher cancellation,
+    cancels the spawn task, waits for its process group to be reaped, and then
+    propagates unchanged. A cancellation that arrives while the watchdog's own kill is
+    being reaped propagates after cleanup, and a kill whose terminate-and-reap failed
+    re-raises that failure instead of reporting a clean kill.
+    """
+
+    spawn_task = asyncio.create_task(_spawn(cmd, stdin_text, log_path, cwd=cwd))
+    last_size = _log_size(log_path)
+    last_growth = time.monotonic()
+    try:
+        while True:
+            done, _ = await asyncio.wait({spawn_task}, timeout=_WATCHDOG_POLL_SECONDS)
+            if done:
+                return spawn_task.result()
+            size = _log_size(log_path)
+            now = time.monotonic()
+            if size != last_size:
+                last_size = size
+                last_growth = now
+            elif now - last_growth >= no_output_seconds:
+                break
+    except BaseException:
+        spawn_task.cancel()
+        await _await_cancelled_spawn(spawn_task)
+        # The original exception is the classification; a cleanup failure is retrieved
+        # here so it is not reported as an unretrieved task exception.
+        _spawn_cleanup_error(spawn_task)
+        raise
+    state.fired = True
+    spawn_task.cancel()
+    interrupted = await _await_cancelled_spawn(spawn_task)
+    cleanup_error = _spawn_cleanup_error(spawn_task)
+    if interrupted:
+        raise asyncio.CancelledError
+    if cleanup_error is not None:
+        raise cleanup_error
+    return None
 
 
 def validate_output(lane: Lane, raw: object) -> RuntimeLaneOutput:
@@ -226,9 +399,13 @@ class CodexRuntime:
         *,
         policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
         mode: CodexRuntimeMode = CodexRuntimeMode.AGENTIC,
+        no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
     ) -> None:
+        if no_output_seconds < 1:
+            raise ValueError("no_output_seconds must be at least 1")
         self.policy = policy
         self.mode = mode
+        self.no_output_seconds = no_output_seconds
         self.name = f"codex-exec-{self.mode}"
 
     def _mode_command_args(self) -> tuple[str, ...]:
@@ -261,21 +438,34 @@ class CodexRuntime:
         started: float,
         log_path: Path,
     ) -> RunUsage:
+        log_text: str | None
         try:
             log_text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            log_text = ""
-        marker = _CLI_TOKENS_USED.search(log_text)
+            log_text = None
+        marker = _CLI_TOKENS_USED.search(log_text or "")
         cli_tokens_used = int(marker.group(1).replace(",", "")) if marker is not None else None
+        # Telemetry only: an unreadable log leaves the counts unknown, except that a
+        # tool-less run can never have issued a tool command.
+        counts = count_runtime_log_turns(log_text) if log_text is not None else None
+        tool_less = self.mode is CodexRuntimeMode.TOOL_LESS
+        if tool_less:
+            tool_calls: int | None = 0
+        else:
+            tool_calls = counts.tool_calls if counts is not None else None
+        assistant_messages = counts.assistant_messages if counts is not None else None
         return RunUsage(
             model=self.policy.model,
             reasoning_effort=self.policy.reasoning_effort,
+            reasoning_summary=self.policy.reasoning_summary,
+            no_output_seconds=self.no_output_seconds,
             runtime_mode=self.mode,
             status=status,
             wall_seconds=time.perf_counter() - started,
             cli_tokens_used=cli_tokens_used,
-            turns=1 if self.mode is CodexRuntimeMode.TOOL_LESS else None,
-            tool_calls=0 if self.mode is CodexRuntimeMode.TOOL_LESS else None,
+            turns=1 if tool_less else None,
+            tool_calls=tool_calls,
+            assistant_messages=assistant_messages,
         )
 
     @staticmethod
@@ -370,9 +560,18 @@ class CodexRuntime:
         ]
 
         started = time.perf_counter()
+        watchdog = _WatchdogState()
+        exit_code: int | None
         try:
             exit_code = await asyncio.wait_for(
-                _spawn(command, prompt, log_path, cwd=workdir),
+                _spawn_with_watchdog(
+                    command,
+                    prompt,
+                    log_path,
+                    cwd=workdir,
+                    no_output_seconds=self.no_output_seconds,
+                    state=watchdog,
+                ),
                 timeout=deadline_seconds,
             )
         except asyncio.CancelledError:
@@ -386,14 +585,17 @@ class CodexRuntime:
             )
             raise
         except TimeoutError:
-            return self._invalid_result(
-                run_id=run_id,
-                replica=replica,
-                reason="exit_nonzero:124",
-                started=started,
-                run_dir=run_dir,
-                log_path=log_path,
-            )
+            if not watchdog.fired:
+                return self._invalid_result(
+                    run_id=run_id,
+                    replica=replica,
+                    reason="exit_nonzero:124",
+                    started=started,
+                    run_dir=run_dir,
+                    log_path=log_path,
+                )
+            # The watchdog fired first; the deadline only expired while its kill was reaped.
+            exit_code = None
         except OSError as error:
             return self._invalid_result(
                 run_id=run_id,
@@ -405,6 +607,19 @@ class CodexRuntime:
                 log_path=log_path,
             )
 
+        if exit_code is None:
+            return self._invalid_result(
+                run_id=run_id,
+                replica=replica,
+                reason=f"{NO_OUTPUT_REASON_PREFIX}{self.no_output_seconds}s",
+                detail=(
+                    f"run.log did not grow for {self.no_output_seconds}s "
+                    f"(last size {_log_size(log_path)} bytes)"
+                ),
+                started=started,
+                run_dir=run_dir,
+                log_path=log_path,
+            )
         if exit_code != 0:
             return self._invalid_result(
                 run_id=run_id,
@@ -533,4 +748,16 @@ class CodexRuntime:
         )
 
 
-__all__: list[str] = ["CodexRuntime", "CodexRuntimeMode", "validate_output"]
+__all__: list[str] = [
+    "DEFAULT_NO_OUTPUT_SECONDS",
+    "NO_OUTPUT_REASON_PREFIX",
+    "NO_OUTPUT_SECONDS_ENV",
+    "REVIEW_PHASE_ENVIRONMENT",
+    "CodexRuntime",
+    "CodexRuntimeMode",
+    "RuntimeLogCounts",
+    "count_runtime_log_turns",
+    "resolve_no_output_seconds",
+    "review_phase_environment",
+    "validate_output",
+]

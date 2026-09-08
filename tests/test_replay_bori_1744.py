@@ -244,6 +244,8 @@ async def test_discover_json_attempts_carry_wave_and_wall_seconds(tmp_path: Path
             "valid": False,
             "invalid_reason": "exit_nonzero:124",
             "wall_seconds": 600.134,
+            "tool_calls": None,
+            "assistant_messages": None,
         },
         {
             "attempt": 2,
@@ -251,6 +253,8 @@ async def test_discover_json_attempts_carry_wave_and_wall_seconds(tmp_path: Path
             "valid": False,
             "invalid_reason": "exit_nonzero:124",
             "wall_seconds": 600.082,
+            "tool_calls": None,
+            "assistant_messages": None,
         },
     ]
     assert coverage["hygiene"]["runs"][0]["attempts"][0]["invalid_reason"] == "exit_nonzero:1"
@@ -262,6 +266,8 @@ async def test_discover_json_attempts_carry_wave_and_wall_seconds(tmp_path: Path
         "valid": True,
         "invalid_reason": None,
         "wall_seconds": 571.2,
+        "tool_calls": None,
+        "assistant_messages": None,
     }
     assert run.load_discover().coverage == discovered.coverage
 

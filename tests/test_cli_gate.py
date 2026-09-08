@@ -682,6 +682,48 @@ def test_gate_preserves_explicit_split_replica_overrides(
 
 
 @pytest.mark.parametrize(
+    "extra,environment_value,expected",
+    [([], None, 660), ([], "90", 90), (["--no-output-timeout", "120"], "90", 120)],
+)
+def test_gate_threads_no_output_timeout_to_the_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    extra: list[str],
+    environment_value: str | None,
+    expected: int,
+) -> None:
+    out_root = tmp_path / "runs"
+    artifacts = prepared_artifacts(out_root)
+    calls = patch_target_dependencies(monkeypatch, artifacts)
+    monkeypatch.delenv("RVW_NO_OUTPUT_SECONDS", raising=False)
+    if environment_value is not None:
+        monkeypatch.setenv("RVW_NO_OUTPUT_SECONDS", environment_value)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["gate", "--target", "42", "--out", str(out_root), *extra],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert calls[0]["no_output_seconds"] == expected
+
+
+def test_gate_rejects_invalid_no_output_seconds_before_provision_or_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out_root = tmp_path / "runs"
+    artifacts = prepared_artifacts(out_root)
+    calls = patch_target_dependencies(monkeypatch, artifacts)
+    monkeypatch.setenv("RVW_NO_OUTPUT_SECONDS", "nope")
+
+    result = runner.invoke(cli_module.app, ["gate", "--target", "42", "--out", str(out_root)])
+
+    assert result.exit_code == cli_module.EXIT_USER_ERROR
+    assert "RVW_NO_OUTPUT_SECONDS" in result.stderr
+    assert calls == []
+
+
+@pytest.mark.parametrize(
     "args",
     [
         ["gate"],

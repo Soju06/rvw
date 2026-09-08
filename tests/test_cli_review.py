@@ -57,6 +57,28 @@ def test_review_rejects_invalid_host_concurrency_before_pipeline(
     assert called is False
 
 
+def test_review_rejects_invalid_no_output_seconds_before_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def fail_if_called(**_kwargs: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(cli_module, "_review_pipeline", fail_if_called)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["review", "--target", "HEAD"],
+        env={"RVW_NO_OUTPUT_SECONDS": "nope"},
+    )
+
+    assert result.exit_code == cli_module.EXIT_USER_ERROR
+    assert "RVW_NO_OUTPUT_SECONDS" in result.stderr
+    assert called is False
+
+
 def pr_target() -> ResolvedTarget:
     return ResolvedTarget(
         kind="pr",
@@ -335,6 +357,50 @@ def test_review_uses_bounded_agentic_runtime_for_agentic_discovery(
         is CodexRuntimeMode.AGENTIC
     )
     assert calls[0]["deadline_seconds"] == 600
+
+
+@pytest.mark.parametrize(
+    "extra,environment_value,expected",
+    [([], None, 660), ([], "90", 90), (["--no-output-timeout", "120"], "90", 120)],
+)
+def test_review_threads_no_output_timeout_to_every_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    registry_root: Path,
+    extra: list[str],
+    environment_value: str | None,
+    expected: int,
+) -> None:
+    calls: list[dict[str, object]] = []
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+
+    async def fake_execute_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _spec: pr_target())
+    monkeypatch.setattr(cli_module, "execute_pipeline", fake_execute_pipeline)
+    monkeypatch.delenv("RVW_NO_OUTPUT_SECONDS", raising=False)
+    if environment_value is not None:
+        monkeypatch.setenv("RVW_NO_OUTPUT_SECONDS", environment_value)
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "review",
+            "--target",
+            "HEAD",
+            "--registry",
+            str(registry_root),
+            "--repo-dir",
+            str(checkout),
+            *extra,
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    for key in ("runtime", "adjudication_runtime", "expanded_adjudication_runtime"):
+        assert cast(CodexRuntime, calls[0][key]).no_output_seconds == expected
 
 
 def test_review_checkout_verification_failure_is_machine_readable(

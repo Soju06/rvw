@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -34,8 +35,25 @@ class CheckoutVerificationError(RuntimeError):
         return {"error": self.error_code, "reason": self.reason, "message": str(self)}
 
 
+# The CLI's own clone and fetch run in the checkout phase, so the image's review-phase PATH
+# shims pass them through to the real git and gh unchanged.
+CHECKOUT_PHASE_ENVIRONMENT: Mapping[str, str] = {"RVW_PHASE": "checkout"}
+
+
+def checkout_phase_environment(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return the environment for the CLI's own checkout commands."""
+
+    return {**(os.environ if base is None else base), **CHECKOUT_PHASE_ENVIRONMENT}
+
+
 def _run(command: list[str]) -> str:
-    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    completed = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=checkout_phase_environment(),
+    )
     return completed.stdout
 
 
@@ -159,8 +177,10 @@ def provision_local_checkout(
 
 
 __all__ = [
+    "CHECKOUT_PHASE_ENVIRONMENT",
     "CheckoutFailureReason",
     "CheckoutVerificationError",
+    "checkout_phase_environment",
     "provision_checkout",
     "provision_local_checkout",
     "verify_checkout",

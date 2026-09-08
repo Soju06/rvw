@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import stat
 import tomllib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
@@ -139,6 +142,27 @@ def test_dockerfile_pins_complete_multistage_runtime() -> None:
     assert "CODEX_API_KEY=" not in dockerfile
     assert "auth.json" not in dockerfile
     assert "codex.nekos.me" not in dockerfile
+
+
+@pytest.mark.parametrize("name", ["Dockerfile", "cloud/Dockerfile"])
+def test_both_images_install_review_phase_shims_ahead_of_the_real_binaries(name: str) -> None:
+    dockerfile = (ROOT / name).read_text(encoding="utf-8")
+    normalized = dockerfile.replace("\\\n", " ")
+
+    assert "COPY docker/shims/ /opt/rvw-shims/" in dockerfile
+    assert "COPY docker/rvw-shims.sh /etc/profile.d/rvw-shims.sh" in dockerfile
+    assert (
+        "COPY docker/check-review-shims.sh /usr/local/lib/rvw/check-review-shims.sh" in dockerfile
+    )
+    assert "bash /usr/local/lib/rvw/check-review-shims.sh" in normalized
+    path_values = re.findall(r'PATH="([^"]+)"', dockerfile)
+    assert path_values, "expected an ENV PATH assignment"
+    assert all(value.startswith("/opt/rvw-shims:") for value in path_values)
+    # The shims narrow tool commands; the measured sandbox fallback itself is unchanged.
+    assert "RVW_CODEX_SANDBOX=danger-full-access" in dockerfile
+    for tool in ("git", "gh", "curl", "wget"):
+        assert (ROOT / "docker" / "shims" / tool).stat().st_mode & stat.S_IXUSR
+    assert (ROOT / "docker" / "shims" / "rvw-shim-lib.sh").is_file()
 
 
 def test_docker_context_excludes_credentials_and_runtime_artifacts() -> None:

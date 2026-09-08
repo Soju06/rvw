@@ -104,7 +104,13 @@ from rvw.registry import (
     load_repo_presentation,
 )
 from rvw.report import render_report
-from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
+from rvw.runtimes.codex import (
+    DEFAULT_NO_OUTPUT_SECONDS,
+    CodexRuntime,
+    CodexRuntimeMode,
+    resolve_no_output_seconds,
+)
 from rvw.sample import SampleReport, sample_lane
 from rvw.schema import Severity, Tier, Verdict, finding_schema, lane_output_schema
 from rvw.special_publication import render_stack_publication
@@ -269,6 +275,16 @@ def _write_json(payload: Any) -> None:
 def _command_host_gate() -> HostSlotGate | None:
     try:
         return host_slot_gate_from_env()
+    except ValueError as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_USER_ERROR) from exc
+
+
+def _command_no_output_seconds(explicit: int | None) -> int:
+    """Resolve the no-output watchdog before any runtime work, rejecting a malformed env."""
+
+    try:
+        return resolve_no_output_seconds(explicit)
     except ValueError as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_USER_ERROR) from exc
@@ -629,6 +645,9 @@ def review(
     deadline: Annotated[
         int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
     ] = DEFAULT_DEADLINE_SECONDS,
+    no_output_timeout: Annotated[
+        int | None, Option("--no-output-timeout", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = None,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
     pause: Annotated[bool, Option("--pause")] = False,
@@ -642,6 +661,7 @@ def review(
     allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
 ) -> None:
     host_gate = _command_host_gate()
+    no_output_seconds = _command_no_output_seconds(no_output_timeout)
     try:
         asyncio.run(
             _review_pipeline(
@@ -652,6 +672,7 @@ def review(
                 adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
                 deadline_seconds=deadline,
+                no_output_seconds=no_output_seconds,
                 out_root=out_root,
                 json_output=json_output,
                 pause=pause,
@@ -726,6 +747,7 @@ async def _review_pipeline(
     host_gate: HostSlotGate | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
     allow_language_fallback: bool = False,
+    no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
 ) -> None:
     resolved_target: ResolvedTarget | None = None
     if publish:
@@ -749,6 +771,7 @@ async def _review_pipeline(
             host_gate=host_gate,
             allow_worktree_rules=allow_worktree_rules,
             discovery_mode=discovery_mode,
+            no_output_seconds=no_output_seconds,
         )
     except PipelineInfrastructureError as exc:
         artifacts = exc.artifacts
@@ -819,6 +842,7 @@ async def _execute_pipeline(
     run_handle: RunHandle | None = None,
     lane_sources: dict[str, int] | None = None,
     presentation: PresentationConfig | None = None,
+    no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
 ) -> _PipelineArtifacts | None:
     """Execute and persist common review stages without publishing or rendering CLI output."""
     target = resolved_target or _resolve_cli_target(target_spec)
@@ -856,10 +880,15 @@ async def _execute_pipeline(
                     CodexRuntimeMode.AGENTIC
                     if discovery_mode is DiscoveryMode.AGENTIC
                     else CodexRuntimeMode.TOOL_LESS
-                )
+                ),
+                no_output_seconds=no_output_seconds,
             ),
-            adjudication_runtime=CodexRuntime(mode=CodexRuntimeMode.TOOL_LESS),
-            expanded_adjudication_runtime=CodexRuntime(mode=CodexRuntimeMode.AGENTIC),
+            adjudication_runtime=CodexRuntime(
+                mode=CodexRuntimeMode.TOOL_LESS, no_output_seconds=no_output_seconds
+            ),
+            expanded_adjudication_runtime=CodexRuntime(
+                mode=CodexRuntimeMode.AGENTIC, no_output_seconds=no_output_seconds
+            ),
             adjudicator=adjudicate,
             active_lanes=active_lanes,
             repo_dir=checkout,
@@ -1169,6 +1198,9 @@ def gate(
     deadline: Annotated[
         int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
     ] = DEFAULT_DEADLINE_SECONDS,
+    no_output_timeout: Annotated[
+        int | None, Option("--no-output-timeout", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = None,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     execute: Annotated[bool, Option("--execute")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
@@ -1193,6 +1225,7 @@ def gate(
         )
         raise typer.Exit(EXIT_USER_ERROR)
     host_gate = _command_host_gate()
+    no_output_seconds = _command_no_output_seconds(no_output_timeout)
     asyncio.run(
         _gate_pipeline(
             target_spec=target,
@@ -1205,6 +1238,7 @@ def gate(
             adjudicate_replicas=adjudicate_replicas,
             concurrency=concurrency,
             deadline_seconds=deadline,
+            no_output_seconds=no_output_seconds,
             out_root=out_root,
             execute=execute,
             json_output=json_output,
@@ -1233,6 +1267,7 @@ async def _gate_pipeline(
     host_gate: HostSlotGate | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
     allow_language_fallback: bool = False,
+    no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
 ) -> None:
     artifacts: _PipelineArtifacts
     plan: GatePlan
@@ -1287,6 +1322,7 @@ async def _gate_pipeline(
                     resolved_target=resolved,
                     host_gate=host_gate,
                     discovery_mode=discovery_mode,
+                    no_output_seconds=no_output_seconds,
                 )
             if executed is None:
                 raise RuntimeError("gate review stopped before report generation")
@@ -1764,6 +1800,9 @@ def auto(
     deadline: Annotated[
         int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
     ] = DEFAULT_DEADLINE_SECONDS,
+    no_output_timeout: Annotated[
+        int | None, Option("--no-output-timeout", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = None,
     publish: Annotated[bool | None, Option("--publish/--no-publish")] = None,
     allow_approve: Annotated[bool, Option("--allow-approve")] = False,
     json_output: Annotated[bool, Option("--json")] = False,
@@ -1795,6 +1834,7 @@ def auto(
         head_ref,
         out,
         allow_language_fallback,
+        no_output_timeout=no_output_timeout,
     )
 
 
@@ -1811,6 +1851,9 @@ def run_command(
     deadline: Annotated[
         int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
     ] = DEFAULT_DEADLINE_SECONDS,
+    no_output_timeout: Annotated[
+        int | None, Option("--no-output-timeout", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = None,
     replicas: Annotated[int, Option("--replicas", min=1)] = _PLAN_REPLICAS,
     adjudicate_replicas: Annotated[
         int, Option("--adjudicate-replicas", min=1)
@@ -1835,6 +1878,7 @@ def run_command(
         head_ref,
         out,
         allow_language_fallback,
+        no_output_timeout=no_output_timeout,
     )
 
 
@@ -1853,6 +1897,7 @@ def _run_command(
     head_ref: str | None,
     out: Path | None,
     allow_language_fallback: bool = False,
+    no_output_timeout: int | None = None,
 ) -> None:
     started = time.monotonic()
     runtime = RuntimeSettings(
@@ -1862,6 +1907,10 @@ def _run_command(
         deadline=deadline,
         discovery_mode=discovery_mode.value,
         publish=publish or "none",
+        no_output_seconds=(
+            no_output_timeout if no_output_timeout is not None else DEFAULT_NO_OUTPUT_SECONDS
+        ),
+        reasoning_summary=DEFAULT_CODEX_RUNTIME_POLICY.reasoning_summary,
     )
     canonical = ["rvw", "run", "--target", target, "--policy", policy_path]
     for name, value in [
@@ -1900,6 +1949,9 @@ def _run_command(
     previous_sigterm = signal.signal(signal.SIGTERM, terminate)
     try:
         runtime.host_concurrency = parse_host_concurrency(os.environ.get("RVW_HOST_CONCURRENCY"))
+        # The canonical command records the effective watchdog like --publish below.
+        runtime.no_output_seconds = resolve_no_output_seconds(no_output_timeout)
+        process.command.extend(["--no-output-timeout", str(runtime.no_output_seconds)])
         sandbox = os.environ.get("RVW_CODEX_SANDBOX", "read-only")
         if sandbox not in {"read-only", "danger-full-access"}:
             raise ValueError(f"invalid RVW_CODEX_SANDBOX: {sandbox}")
@@ -2003,6 +2055,7 @@ def _run_command(
                         run_handle=run,
                         lane_sources=process.lane_sources,
                         presentation=process.presentation,
+                        no_output_seconds=runtime.no_output_seconds,
                     )
                 )
                 if artifacts is None:
@@ -2468,6 +2521,9 @@ def stack_review(
     deadline: Annotated[
         int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
     ] = DEFAULT_DEADLINE_SECONDS,
+    no_output_timeout: Annotated[
+        int | None, Option("--no-output-timeout", min=1, max=MAX_DEADLINE_SECONDS)
+    ] = None,
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
@@ -2475,6 +2531,7 @@ def stack_review(
     """Review every member and recheck earlier claims at descendant heads."""
 
     host_gate = _command_host_gate()
+    no_output_seconds = _command_no_output_seconds(no_output_timeout)
     try:
         asyncio.run(
             _stack_review_pipeline(
@@ -2484,6 +2541,7 @@ def stack_review(
                 adjudicate_replicas=adjudicate_replicas,
                 concurrency=concurrency,
                 deadline_seconds=deadline,
+                no_output_seconds=no_output_seconds,
                 out_root=out_root,
                 json_output=json_output,
                 host_gate=host_gate,
@@ -2517,6 +2575,7 @@ async def _stack_review_pipeline(
     json_output: bool,
     host_gate: HostSlotGate | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
+    no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
 ) -> None:
     numbers = parse_pr_numbers(prs)
     members = resolve_stack(numbers, cwd=Path.cwd())
@@ -2559,6 +2618,7 @@ async def _stack_review_pipeline(
                 resolved_target=target,
                 host_gate=host_gate,
                 discovery_mode=discovery_mode,
+                no_output_seconds=no_output_seconds,
             )
             if artifacts is None or artifacts.outcome is None:
                 raise RuntimeError(
@@ -2581,7 +2641,7 @@ async def _stack_review_pipeline(
                     pr_number=member.number,
                     member_order=numbers,
                     target=target,
-                    runtime=CodexRuntime(),
+                    runtime=CodexRuntime(no_output_seconds=no_output_seconds),
                     repo_dir=checkout,
                     out_root=handle.dir / "presence-runtime" / f"pr-{member.number}",
                     replicas=adjudicate_replicas,

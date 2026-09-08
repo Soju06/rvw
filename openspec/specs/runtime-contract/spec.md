@@ -91,9 +91,18 @@ Every INVALID result MUST have no output, a non-empty machine-readable `invalid_
 The Codex adapter MUST write `prompt.md`, `schema.json`, `out.json`, `run.log`,
 and `usage.json` beneath an `r<replica>` artifact directory before or during
 execution and MUST derive the replica number from that directory name.
-`usage.json` MUST record model, reasoning effort, wall time, and final
-completed/invalid/canceled state; token, turn, and tool-call fields MAY be
-absent when telemetry is unavailable. Discovery and sampling MUST preserve the
+`usage.json` MUST record model, reasoning effort, the reasoning summary
+setting, the no-output watchdog setting, wall time, and final
+completed/invalid/canceled state. It MUST also record `tool_calls`, counted as
+the lines of `run.log` that are exactly the `exec` item header Codex prints
+before each tool command, and `assistant_messages`, counted as the lines that
+are exactly the `codex` item header printed before each assistant message; a
+tool-less run MUST record zero `tool_calls`, and both counts are optional
+telemetry that MUST be absent when the log cannot be read (except the tool-less
+zero) and MUST never affect validity. Token, turn, and tool-call fields MAY be
+absent when telemetry is unavailable, and usage artifacts persisted before the
+summary, watchdog, and telemetry fields existed MUST load with those fields
+absent. Discovery and sampling MUST preserve the
 existing lane-or-variant `r<replica>` path for a one-chunk plan and MUST insert
 a `c<chunk>` directory immediately before `r<replica>` for a multi-chunk plan.
 
@@ -117,6 +126,25 @@ a `c<chunk>` directory immediately before `r<replica>` for a multi-chunk plan.
 - **WHEN** a runtime task is cancelled after its process starts
 - **THEN** its process group is cleaned up, `usage.json` records `canceled`,
   and cancellation continues to the dispatcher
+
+#### Scenario: Legacy usage artifact loads
+
+- **WHEN** a `usage.json` persisted before the reasoning summary, watchdog,
+  and telemetry fields is loaded
+- **THEN** loading succeeds with those fields absent
+
+#### Scenario: Agentic run with three tool commands
+
+- **WHEN** an agentic run's `run.log` holds three `exec` headers and three
+  `codex` headers
+- **THEN** its `usage.json` records `tool_calls: 3` and
+  `assistant_messages: 3`, and validity is decided only by the existing signals
+
+#### Scenario: Tool-less run records no tool commands
+
+- **WHEN** a tool-less run completes
+- **THEN** its `usage.json` records `tool_calls: 0` and counts its
+  `assistant_messages` from the `codex` headers
 
 ### Requirement: Raw execution supports stage-specific schemas and workdirs
 
@@ -165,7 +193,25 @@ persistent or unverified cleanup in the run log and return so the original
 cancellation or timeout classification can continue. Runtime identity and
 usage MUST record the selected mode so resume cannot reuse a result from
 another mode. The initial default policy MUST be `gpt-5.6-sol` with `max`
-reasoning effort.
+reasoning effort. Every mode MUST pass an explicit `model_reasoning_summary`
+override, whose default is `detailed`, without changing the model or reasoning
+effort. The adapter MUST race every execution against a no-output watchdog
+that polls the combined `run.log` size every few seconds, MUST cancel the
+process-owning task through the same terminate-and-reap path when the log has
+not grown for the configured `no_output_seconds`, and MUST classify that run
+INVALID with reason `no_output_after:<N>s`. Growth MUST be measured on the
+combined stdout and stderr log, so a runtime that keeps printing reconnect
+notices is alive. The deadline race is unchanged and whichever fires first
+wins: a deadline kill remains `exit_nonzero:124`, and `no_output_after:*` is a
+distinct transient reason. `no_output_seconds` MUST be configured per runtime
+from the CLI `--no-output-timeout` option, then `RVW_NO_OUTPUT_SECONDS`, then a
+default of 660 seconds, MUST be rejected when below 1, and MUST be recorded in
+`usage.json`, `process.json`, and `environment.txt`. The adapter MUST spawn Codex
+with `RVW_PHASE=review` and `GIT_ALLOW_PROTOCOL=none` in the child environment
+and MUST NOT set `RVW_PHASE=review` in its own process, so the image's review-phase
+shims and git's transport check govern model-driven tool commands while the CLI's
+own target resolution and publication keep their access. Checkout provisioning
+MUST run its own `git` and `gh` commands with `RVW_PHASE=checkout`.
 
 #### Scenario: Tool-less inline discovery execution
 
@@ -212,6 +258,44 @@ reasoning effort.
 - **THEN** RVW terminates and reaps the full runtime process group and classifies
   the run INVALID with reason `exit_nonzero:124`
 
+#### Scenario: Runtime produces no output
+
+- **WHEN** a runtime prints its banner and prompt echo and then writes nothing
+  for `no_output_seconds`
+- **THEN** RVW terminates and reaps the full runtime process group and classifies
+  the run INVALID with reason `no_output_after:<N>s`
+
+#### Scenario: Runtime keeps reconnecting
+
+- **WHEN** a runtime writes reconnect notices to stderr within every
+  `no_output_seconds` window
+- **THEN** the combined log keeps growing and the watchdog does not terminate it
+
+#### Scenario: Silence begins after the deadline boundary
+
+- **WHEN** a runtime falls silent when fewer than `no_output_seconds` remain
+  before its configured deadline
+- **THEN** the deadline fires first and the run is INVALID with reason
+  `exit_nonzero:124`
+
+#### Scenario: Reasoning summaries are requested
+
+- **WHEN** any RVW Codex invocation is built
+- **THEN** its argv carries `model_reasoning_summary="detailed"` after the
+  reasoning-effort override and its `usage.json` records `reasoning_summary`
+
+#### Scenario: Runtime child environment carries the review phase
+
+- **WHEN** the adapter spawns Codex
+- **THEN** the child environment contains `RVW_PHASE=review` and
+  `GIT_ALLOW_PROTOCOL=none` while the rvw process environment does not
+
+#### Scenario: Checkout commands carry the checkout phase
+
+- **WHEN** rvw provisions or verifies a checkout with its own `git` and `gh` commands
+- **THEN** those commands run with `RVW_PHASE=checkout` and otherwise inherit the
+  process environment
+
 #### Scenario: Runtime leader exits before its child
 
 - **WHEN** TERM ends the runtime leader but a child in its captured process group
@@ -245,7 +329,7 @@ reasoning effort.
 
 ### Requirement: Policy-gated execution owns a versioned process envelope
 
-Python MUST initialize `process.json` before target resolution and finalize it for every `run` or `auto` termination for which the artifact directory can be written. Its strict version-1 schema MUST contain `schema_version: 1`, string `run_id`, `target` with nullable `repo`, `pr`, `base`, and `head`, `status` in `pass|block|invalid|infra_failed`, the corresponding integer `exit_code` in `0|1|2|3`, nonnegative integer `duration_ms`, canonical argument-array `command`, `effective_policy` with nullable `source` and `path`, a `lane_sources` count mapping, `runtime` effective settings, nullable `failure` with `code` and `detail`, resolved `presentation`, nullable nonempty-string `publication_failure` defaulting to null, boolean `language_fallback_used` defaulting to false, an `artifacts` array of relative `path` and nonnegative `size_bytes` records, and nullable `sdk_observations` with nullable `exit_code`, `signal`, `duration_ms`, and wrapper `command`. Policy source MUST be `explicit`, `repository`, `external`, or `package` when known. Runtime settings MUST include `replicas`, `adjudicate_replicas`, `concurrency`, `deadline`, `discovery_mode`, `publish`, `host_concurrency`, and `sandbox`. Before completion, the envelope MUST default to `infra_failed`, exit 3, and failure `execution_incomplete`; it MUST never predeclare PASS. Adapters MUST consume this envelope rather than manufacture a competing result format.
+Python MUST initialize `process.json` before target resolution and finalize it for every `run` or `auto` termination for which the artifact directory can be written. Its strict version-1 schema MUST contain `schema_version: 1`, string `run_id`, `target` with nullable `repo`, `pr`, `base`, and `head`, `status` in `pass|block|invalid|infra_failed`, the corresponding integer `exit_code` in `0|1|2|3`, nonnegative integer `duration_ms`, canonical argument-array `command`, `effective_policy` with nullable `source` and `path`, a `lane_sources` count mapping, `runtime` effective settings, nullable `failure` with `code` and `detail`, resolved `presentation`, nullable nonempty-string `publication_failure` defaulting to null, boolean `language_fallback_used` defaulting to false, an `artifacts` array of relative `path` and nonnegative `size_bytes` records, and nullable `sdk_observations` with nullable `exit_code`, `signal`, `duration_ms`, and wrapper `command`. Policy source MUST be `explicit`, `repository`, `external`, or `package` when known. Runtime settings MUST include `replicas`, `adjudicate_replicas`, `concurrency`, `deadline`, `discovery_mode`, `publish`, `host_concurrency`, `sandbox`, `no_output_seconds`, and `reasoning_summary`; adapters MUST accept envelopes persisted before the last two existed and MUST reject a present `no_output_seconds` below 1 or an empty `reasoning_summary`. Before completion, the envelope MUST default to `infra_failed`, exit 3, and failure `execution_incomplete`; it MUST never predeclare PASS. Adapters MUST consume this envelope rather than manufacture a competing result format.
 
 #### Scenario: Resolution fails before discovery
 
@@ -256,6 +340,11 @@ Python MUST initialize `process.json` before target resolution and finalize it f
 
 - **WHEN** an adapter observes forced termination after Python initialized its contract
 - **THEN** the incomplete envelope remains a failure and the adapter merges SDK-observed supplemental termination evidence into that same contract without inventing a policy verdict
+
+#### Scenario: Legacy envelope omits watchdog settings
+
+- **WHEN** an adapter parses a `process.json` whose `runtime` lacks `no_output_seconds` and `reasoning_summary`
+- **THEN** parsing succeeds, while an envelope carrying `no_output_seconds: 0` or an empty `reasoning_summary` is rejected as invalid runtime settings
 
 ### Requirement: Every terminal execution retains shared diagnostics
 

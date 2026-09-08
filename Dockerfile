@@ -23,6 +23,9 @@ ENV HOME=/root \
     PYTHONUNBUFFERED=1 \
     RVW_CODEX_DEFAULT_BASE_URL="${CODEX_BASE_URL}" \
     RVW_CODEX_SANDBOX=danger-full-access
+# Review-phase shims precede the real binaries; /etc/profile.d/rvw-shims.sh restores the
+# prefix in login shells, where Debian resets PATH before sourcing profile.d.
+ENV PATH="/opt/rvw-shims:${PATH}"
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
@@ -54,6 +57,12 @@ RUN uv pip install --system --no-cache . \
     && codex --version
 
 COPY docker/codex-config.toml /etc/rvw/codex-config.toml
+COPY docker/shims/ /opt/rvw-shims/
+COPY docker/rvw-shims.sh /etc/profile.d/rvw-shims.sh
+COPY docker/check-review-shims.sh /usr/local/lib/rvw/check-review-shims.sh
+RUN chmod 0755 /opt/rvw-shims/git /opt/rvw-shims/gh /opt/rvw-shims/curl /opt/rvw-shims/wget \
+        /usr/local/lib/rvw/check-review-shims.sh \
+    && bash /usr/local/lib/rvw/check-review-shims.sh
 
 RUN mkdir -p /workspace
 WORKDIR /workspace

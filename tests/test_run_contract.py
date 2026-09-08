@@ -194,7 +194,14 @@ def test_publication_exception_is_infrastructure_failure(
 
 @pytest.mark.parametrize("command", ["run", "auto"])
 @pytest.mark.parametrize(
-    "option,value", [("--deadline", "0"), ("--replicas", "wat"), ("--discovery-mode", "bad")]
+    "option,value",
+    [
+        ("--deadline", "0"),
+        ("--replicas", "wat"),
+        ("--discovery-mode", "bad"),
+        ("--no-output-timeout", "0"),
+        ("--no-output-timeout", "1801"),
+    ],
 )
 def test_usage_errors_persist_invalid_contract(
     tmp_path: Path, command: str, option: str, value: str
@@ -233,6 +240,92 @@ def test_explicit_deadline_reaches_the_process_contract(
     command = process["command"]
     assert command[command.index("--deadline") + 1] == "900"
     assert "deadline=900" in (out / "environment.txt").read_text().splitlines()
+
+
+def test_no_output_timeout_reaches_the_process_contract(
+    monkeypatch: pytest.MonkeyPatch, artifacts: PipelineArtifacts, tmp_path: Path
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def execute(**kwargs: object) -> PipelineArtifacts:
+        observed.update(kwargs)
+        raise RuntimeError("fixture runtime unavailable")
+
+    monkeypatch.setattr(cli, "_execute_pipeline", execute)
+    monkeypatch.setattr(cli, "_resolve_cli_target", lambda _: artifacts.target)
+    monkeypatch.setenv("RVW_NO_OUTPUT_SECONDS", "90")
+    out = tmp_path / "result"
+    result = runner.invoke(
+        cli.app,
+        ["run", "--target", "42", "--out", str(out), "--no-output-timeout", "120", "--json"],
+    )
+
+    assert result.exit_code == 3, result.output
+    assert observed["no_output_seconds"] == 120
+    process = json.loads((out / "process.json").read_text())
+    assert process["runtime"]["no_output_seconds"] == 120
+    assert process["runtime"]["reasoning_summary"] == "detailed"
+    command = process["command"]
+    assert command[command.index("--no-output-timeout") + 1] == "120"
+    environment = (out / "environment.txt").read_text().splitlines()
+    assert "no_output_seconds=120" in environment
+    assert "reasoning_summary=detailed" in environment
+
+
+@pytest.mark.parametrize("environment_value,expected", [(None, 660), ("90", 90)])
+def test_no_output_timeout_falls_back_to_environment_then_default(
+    monkeypatch: pytest.MonkeyPatch,
+    artifacts: PipelineArtifacts,
+    tmp_path: Path,
+    environment_value: str | None,
+    expected: int,
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def execute(**kwargs: object) -> PipelineArtifacts:
+        observed.update(kwargs)
+        raise RuntimeError("fixture runtime unavailable")
+
+    monkeypatch.setattr(cli, "_execute_pipeline", execute)
+    monkeypatch.setattr(cli, "_resolve_cli_target", lambda _: artifacts.target)
+    monkeypatch.delenv("RVW_NO_OUTPUT_SECONDS", raising=False)
+    if environment_value is not None:
+        monkeypatch.setenv("RVW_NO_OUTPUT_SECONDS", environment_value)
+    out = tmp_path / "result"
+    result = runner.invoke(cli.app, ["run", "--target", "42", "--out", str(out), "--json"])
+
+    assert result.exit_code == 3, result.output
+    assert observed["no_output_seconds"] == expected
+    process = json.loads((out / "process.json").read_text())
+    assert process["runtime"]["no_output_seconds"] == expected
+    command = process["command"]
+    assert command[command.index("--no-output-timeout") + 1] == str(expected)
+    assert f"no_output_seconds={expected}" in (out / "environment.txt").read_text().splitlines()
+
+
+@pytest.mark.parametrize("command", ["run", "auto"])
+def test_malformed_no_output_environment_is_invalid_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, command: str
+) -> None:
+    async def forbidden(**kwargs: object) -> None:
+        pytest.fail("malformed RVW_NO_OUTPUT_SECONDS reached the pipeline")
+
+    def forbidden_target(_: str) -> None:
+        pytest.fail("target resolution ran before configuration validation")
+
+    monkeypatch.setattr(cli, "_execute_pipeline", forbidden)
+    monkeypatch.setattr(cli, "_resolve_cli_target", forbidden_target)
+    monkeypatch.setenv("RVW_NO_OUTPUT_SECONDS", "bad")
+    out = tmp_path / "result"
+    result = runner.invoke(cli.app, [command, "--target", "42", "--out", str(out), "--json"])
+
+    assert result.exit_code == 2, result.output
+    process = json.loads((out / "process.json").read_text())
+    assert process["status"] == "invalid"
+    assert process["failure"]["code"] == "invalid_configuration"
+    assert "RVW_NO_OUTPUT_SECONDS" in process["failure"]["detail"]
+    assert json.loads(result.stdout) == process
+    assert_manifest(out, process)
 
 
 def test_failed_review_does_not_evaluate_policy(

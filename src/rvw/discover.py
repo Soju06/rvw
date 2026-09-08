@@ -60,6 +60,9 @@ class RunAttempt(BaseModel):
     valid: bool
     invalid_reason: str | None
     wall_seconds: float | None = Field(default=None, ge=0)
+    # Runtime telemetry copied from usage when the runtime reported it; never affects validity.
+    tool_calls: int | None = Field(default=None, ge=0)
+    assistant_messages: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="before")
     @classmethod
@@ -270,12 +273,15 @@ def _effective_brief(
 
 
 def _run_attempt(attempt: int, wave: AttemptWave, result: RunResult) -> RunAttempt:
+    usage = result.usage
     return RunAttempt(
         attempt=attempt,
         wave=wave,
         valid=result.status is RunStatus.VALID,
         invalid_reason=result.invalid_reason,
         wall_seconds=result.wall_seconds,
+        tool_calls=usage.tool_calls if usage is not None else None,
+        assistant_messages=usage.assistant_messages if usage is not None else None,
     )
 
 
@@ -343,6 +349,7 @@ async def discover(
                     brief_source=effective_brief_source,
                     covered_rules=covered_rules,
                     locale=locale,
+                    deadline_seconds=deadline_seconds,
                     chunk_context=build_chunk_context(
                         chunk=chunk.index,
                         chunk_count=len(chunks),
@@ -376,6 +383,7 @@ async def discover(
                     base_sha=target.base_sha,
                     head_sha=target.head_sha,
                     locale=locale,
+                    deadline_seconds=deadline_seconds,
                 ),
                 replica=replica,
                 workdir=repo_dir,
