@@ -20,7 +20,7 @@ Goals: remove the deterministic third discovery barrier for dead lanes; make eve
 
 - A lane that would have recovered on a third identical attempt is no longer retried → the measured timeout is deterministic on bori; the skip is recorded and the operator can raise the deadline var instead.
 - Strict Worker parsing rejects summaries with unknown fields → the parser accepts the new fields as optional so the same release deploys Python and Worker together while fixtures without them still parse.
-- A deployer overriding `RVW_JOB_DEADLINE_MINUTES` below the budget → fails closed with a machine-readable reason at config load; the reusable workflow default of 90 still satisfies the check for D=900.
+- A deployer overriding `RVW_JOB_DEADLINE_MINUTES` below the budget → fails closed with a machine-readable reason at config load; the reusable workflow default is raised to 120 alongside the committed value so a caller that omits the input does not overlay a lower cap.
 
 ## Migration Plan
 

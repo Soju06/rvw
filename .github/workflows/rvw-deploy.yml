@@ -34,10 +34,10 @@ on:
         type: string
         required: true
       job_deadline_minutes:
-        description: Hard review deadline in minutes.
+        description: Hard review deadline in minutes. Must satisfy the Worker coherence check (>= 5 * RVW_REVIEW_DEADLINE_SECONDS / 60 + 10); 120 matches cloud/wrangler.jsonc for D=900.
         type: number
         required: false
-        default: 90
+        default: 120
       account_id:
         description: Cloudflare account ID.
         type: string
