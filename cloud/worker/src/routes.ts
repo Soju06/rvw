@@ -8,7 +8,7 @@ import {
 
 const MAX_LOG_CHARS = 24_000;
 
-function reviewScript(repoUrl: string, targetSha: string): string { return String.raw`#!/usr/bin/env bash
+function reviewScript(repoUrl: string, targetSha: string, deadlineSeconds: number): string { return String.raw`#!/usr/bin/env bash
 set -u
 LOG=/workspace/rvw-a0.log
 RESULT=/workspace/result
@@ -32,7 +32,7 @@ set -e
 git clone '${repoUrl}' "$TARGET"; git -C "$TARGET" checkout --detach '${targetSha}'
 cd "$TARGET"
 set +e
-env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint run --target '${targetSha}' --repo-dir "$TARGET" --out "$RESULT" --policy auto --publish none --json
+env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint run --target '${targetSha}' --repo-dir "$TARGET" --out "$RESULT" --deadline ${deadlineSeconds} --policy auto --publish none --json
 review_rc=$?
 printf 'A0_REVIEW_EXIT_CODE=%s\n' "$review_rc"
 printf 'A0_RUN_FINISHED_EPOCH_MS=%s\n' "$(date +%s%3N)"
@@ -50,7 +50,7 @@ export async function start(env: Env, config: RequiredConfig, url: URL): Promise
   const sandboxId = `rvw-spike-${crypto.randomUUID()}`;
   const sandbox = sandboxFor(env, sandboxId);
   await configureOutbound(sandbox, config.codexProxyHost);
-  await sandbox.writeFile("/workspace/run-review.sh", reviewScript(target.repoUrl, target.targetSha));
+  await sandbox.writeFile("/workspace/run-review.sh", reviewScript(target.repoUrl, target.targetSha, config.reviewDeadlineSeconds));
   await sandbox.exec("chmod 0755 /workspace/run-review.sh");
   const process = await sandbox.startProcess("/workspace/run-review.sh", {env: buildSandboxProcessEnv(config.codexProxyHost)});
   return json({sandboxId, processId: process.id, repo: target.repoUrl, target: target.targetSha}, {status: 202});

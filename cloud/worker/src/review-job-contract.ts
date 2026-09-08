@@ -50,12 +50,6 @@ export function shouldRestartForRerequest(
   );
 }
 
-export function deadlineMinutes(raw: string | undefined): number {
-  if (raw === undefined || !/^\d+$/.test(raw)) return 90;
-  const value = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : 90;
-}
-
 export function isDeadlineReached(nowMs: number, deadlineMs: number): boolean {
   return nowMs >= deadlineMs;
 }
@@ -209,9 +203,18 @@ export interface SummaryFailedLane {
   reason: string;
 }
 
+export interface SummaryLanes {
+  dispatched: number;
+  valid: number;
+  /** Lane-hunk receipts: one per (lane, uncovered hunk); rendered as lane_hunk_receipts. */
+  uncovered: number;
+  /** Distinct changed regions no lane covered; null for legacy summaries. */
+  uncovered_regions: number | null;
+}
+
 export interface ArtifactSummary extends PublicationFacts {
   schema_version: 1;
-  lanes: {dispatched: number; valid: number; uncovered: number};
+  lanes: SummaryLanes;
   failed_lanes: SummaryFailedLane[];
   wave_wall_seconds: WaveWallSeconds | null;
   findings: Record<"blocker" | "warning" | "suggestion", number>;
@@ -267,7 +270,7 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
     throw new Error("summary blockers must be strings");
   }
   const lanes = recordValue(value.lanes, "summary lanes");
-  fields(lanes, ["dispatched", "valid", "uncovered"], "summary lanes");
+  fields(lanes, ["dispatched", "valid", "uncovered", ...("uncovered_regions" in lanes ? ["uncovered_regions"] : [])], "summary lanes");
   if (value.schema_version !== 1 || typeof value.markdown !== "string") {
     throw new Error("summary artifact has an unsupported schema");
   }
@@ -279,8 +282,14 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
   const dispatched = lanes.dispatched as number;
   const valid = lanes.valid as number;
   const uncovered = lanes.uncovered as number;
+  const rawRegions = lanes.uncovered_regions;
+  if (rawRegions !== undefined && (!integer(rawRegions) || (rawRegions as number) > uncovered)) {
+    throw new Error("summary lanes uncovered_regions must be a non-negative integer no greater than the receipt count");
+  }
+  const uncoveredRegions = rawRegions === undefined ? null : (rawRegions as number);
   if (valid === 0 || valid > dispatched) throw new Error("review coverage has no valid lanes or exceeds dispatched lanes");
-  return {schema_version: 1, lanes: {dispatched, valid, uncovered}, markdown: value.markdown, presentation, ...publication,
+  return {schema_version: 1, lanes: {dispatched, valid, uncovered, uncovered_regions: uncoveredRegions},
+    markdown: value.markdown, presentation, ...publication,
     failed_lanes: failedLanes(value.failed_lanes), wave_wall_seconds: waveWallSeconds(value.wave_wall_seconds),
     findings: value.findings as ArtifactSummary["findings"],
     verdicts: value.verdicts as ArtifactSummary["verdicts"], blockers: value.blockers as string[]};

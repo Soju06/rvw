@@ -101,16 +101,27 @@ describe("review process environment", () => {
 
   it("runs the canonical command with webhook anchors and the artifact root", () => {
     const options = {owner: "acme", repo: "rockets", prNumber: 42,
-      baseSha: "b".repeat(40), headSha: "a".repeat(40)};
+      baseSha: "b".repeat(40), headSha: "a".repeat(40), deadlineSeconds: 900};
     const command = buildRvwRunInvocation(options);
     expect(command).toContain("python -m rvw.container_entrypoint run ");
     expect(command).toContain("--target 'https://github.com/acme/rockets/pull/42'");
     expect(command).toContain(`--base-ref '${options.baseSha}' --head-ref '${options.headSha}'`);
-    expect(command).toContain("--out '/workspace/result' --policy auto --publish github-comment --json");
+    expect(command).toContain("--out '/workspace/result' --deadline 900 --policy auto --publish github-comment --json");
     expect(command).not.toContain("GH_REPO");
     expect(command).not.toContain("--repo-dir");
     expect(() => buildRvwRunInvocation({...options, prNumber: 0})).toThrow(/positive integer/);
     expect(() => buildRvwRunInvocation({...options, owner: "bad owner"})).toThrow(/path components/);
     expect(() => buildRvwRunInvocation({...options, headSha: "moving"})).toThrow(/anchors/);
+  });
+
+  it("always passes an explicit bounded --deadline instead of relying on the CLI default", () => {
+    const options = {owner: "acme", repo: "rockets", prNumber: 42,
+      baseSha: "b".repeat(40), headSha: "a".repeat(40), deadlineSeconds: 1500};
+    expect(buildRvwRunInvocation(options)).toMatch(/ --deadline 1500 --policy auto /);
+    expect(buildRvwRunInvocation({...options, deadlineSeconds: 1})).toContain(" --deadline 1 ");
+    expect(buildRvwRunInvocation({...options, deadlineSeconds: 1800})).toContain(" --deadline 1800 ");
+    for (const deadlineSeconds of [0, -1, 1801, 900.5, Number.NaN]) {
+      expect(() => buildRvwRunInvocation({...options, deadlineSeconds})).toThrow(/review deadline/);
+    }
   });
 });

@@ -32,6 +32,9 @@ def test_worker_validates_target_and_reads_process_result_artifacts() -> None:
     assert "RVW_CODEX_SANDBOX" not in contract
     assert "env RVW_CODEX_SANDBOX=read-only codex exec" in routes
     assert "env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint" in routes
+    # The spike measures the production path, so it runs under the same explicit deadline.
+    assert "--deadline ${deadlineSeconds} --policy auto --publish none --json" in routes
+    assert "reviewScript(target.repoUrl, target.targetSha, config.reviewDeadlineSeconds)" in routes
     assert "unset RVW_CODEX_DEFAULT_BASE_URL RVW_CODEX_SANDBOX" in routes
 
 

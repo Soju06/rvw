@@ -12,9 +12,9 @@
 
 ## 3. Pass an explicit review deadline and check job-cap coherence
 
-- [ ] 3.1 Add failing Vitest coverage for `RVW_REVIEW_DEADLINE_SECONDS` parsing, the coherence check, and `--deadline` in the built argv; add Python tests that the entrypoint forwards `--deadline` and `process.json` records it.
-- [ ] 3.2 Implement config parsing and fail-closed coherence, explicit `--deadline` in the invocation, Wrangler vars (900 / 120 for dev, spike, prod), regenerated Worker types, and the README env table.
-- [ ] 3.3 Amend the cloud-app-platform main spec and context, then commit feat(cloud): pass an explicit review deadline and check job-cap coherence.
+- [x] 3.1 Add failing Vitest coverage for `RVW_REVIEW_DEADLINE_SECONDS` parsing, the coherence check, and `--deadline` in the built argv; add Python tests that the entrypoint forwards `--deadline` and `process.json` records it.
+- [x] 3.2 Implement config parsing and fail-closed coherence, explicit `--deadline` in the invocation, Wrangler vars (900 / 120 for dev, spike, prod), regenerated Worker types, and the README env table.
+- [x] 3.3 Amend the cloud-app-platform main spec and context, then commit feat(cloud): pass an explicit review deadline and check job-cap coherence.
 
 ## 4. Name unfinished rule sets and the slowest phase in the check
 

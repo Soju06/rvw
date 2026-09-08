@@ -4,7 +4,6 @@ import {describe, expect, it} from "vitest";
 import {
   canTransition,
   checkConclusionForResult,
-  deadlineMinutes,
   isDeadlineReached,
   shouldRestartForRerequest,
   parseArtifactSummary,
@@ -73,15 +72,6 @@ describe("durable review state machine", () => {
 });
 
 describe("deadline semantics", () => {
-  it.each([[undefined], [""], ["nope"], ["0"], ["-3"]])(
-    "defaults invalid %s to 90 minutes",
-    (value) => expect(deadlineMinutes(value)).toBe(90),
-  );
-
-  it("accepts a positive configured deadline", () => {
-    expect(deadlineMinutes("120")).toBe(120);
-  });
-
   it("does not time out before the exact hard deadline", () => {
     expect(isDeadlineReached(1_000, 1_001)).toBe(false);
     expect(isDeadlineReached(1_001, 1_001)).toBe(true);
@@ -123,8 +113,21 @@ describe("Python artifact summary", () => {
       verdicts: {CONFIRMED: 1, REJECTED: 0, UNCERTAIN: 0}, blockers: ["group-1"],
       markdown: "Shared Python summary with two valid lanes."};
     expect(parseArtifactSummary(JSON.stringify(summary))).toMatchObject({
-      lanes: summary.lanes, markdown: summary.markdown,
+      lanes: {...summary.lanes, uncovered_regions: null}, markdown: summary.markdown,
     });
+  });
+  it("keeps lane-hunk receipts and distinct uncovered regions as separate facts", () => {
+    const parsed = parseArtifactSummary(JSON.stringify(summaryFixture({
+      lanes: {dispatched: 6, valid: 4, uncovered: 26, uncovered_regions: 13}})));
+    expect(parsed.lanes).toEqual({dispatched: 6, valid: 4, uncovered: 26, uncovered_regions: 13});
+  });
+  it.each([
+    {dispatched: 6, valid: 4, uncovered: 26, uncovered_regions: 27},
+    {dispatched: 6, valid: 4, uncovered: 26, uncovered_regions: -1},
+    {dispatched: 6, valid: 4, uncovered: 26, uncovered_regions: 1.5},
+    {dispatched: 6, valid: 4, uncovered: 26, uncovered_regions: "13"},
+  ])("rejects inconsistent uncovered region counts %#", (lanes) => {
+    expect(() => parseArtifactSummary(JSON.stringify(summaryFixture({lanes})))).toThrow();
   });
   it("rejects zero-valid coverage", () => {
     expect(() => parseArtifactSummary(JSON.stringify(summaryFixture({

@@ -24,7 +24,7 @@ vi.mock("./sandbox", () => ({
 }));
 vi.mock("./github-app", async (importOriginal) => ({...await importOriginal<typeof import("./github-app")>(), ...mocks}));
 
-import {RvwReviewJob} from "./review-job";
+import {RvwReviewJob, reviewScript} from "./review-job";
 import {idempotencyKey, type ReviewJobMessage} from "./webhook";
 
 const message: ReviewJobMessage = {
@@ -34,7 +34,7 @@ const message: ReviewJobMessage = {
   headSha: "a".repeat(40), baseSha: "b".repeat(40), event: "pull_request.opened",
   attempt: 1, deliveryId: "delivery-1", enqueuedAt: "2026-09-05T00:00:00.000Z",
 };
-function setup(state: string) {
+function setup(state: string, envOverrides: Record<string, string> = {}) {
   let record: Record<string, unknown> = {
     schemaVersion: 1, jobId: message.jobId, message, state,
     createdAt: message.enqueuedAt, updatedAt: message.enqueuedAt,
@@ -75,7 +75,8 @@ function setup(state: string) {
     return {key, size: value.length, etag: "etag", uploaded: new Date()};
   });
   const ctx = {storage} as unknown as DurableObjectState;
-  const env = {CODEX_PROXY_HOST: "proxy.example", GITHUB_APP_ID: "1", RVW_ARTIFACTS: {put}} as unknown as Env;
+  const env = {CODEX_PROXY_HOST: "proxy.example", GITHUB_APP_ID: "1", RVW_REVIEW_DEADLINE_SECONDS: "900",
+    RVW_JOB_DEADLINE_MINUTES: "120", RVW_ARTIFACTS: {put}, ...envOverrides} as unknown as Env;
   return {job: new RvwReviewJob(ctx, env), events, put, sandbox, storage, files, record: () => record};
 }
 beforeEach(() => { vi.clearAllMocks(); });
@@ -107,6 +108,35 @@ it("initializes diagnostics before an actual SDK start failure and finalizes thr
   )).toBe(true);
   expect(test.events.indexOf("put:process.json")).toBeLessThan(test.events.indexOf("destroy"));
   expect(test.sandbox.writeFile.mock.calls.every(([path]) => !path.endsWith("process.json"))).toBe(true);
+});
+
+it("writes the review script with the explicit configured deadline and a matching job cap", async () => {
+  const test = setup("provisioning");
+  delete test.record().processId;
+  await expect(test.job.start(message)).rejects.toThrow("process failed to start");
+  const script = test.sandbox.writeFile.mock.calls.find(([path]) => path === "/workspace/run-review.sh")?.[1];
+  expect(script).toContain("--deadline 900 --policy auto --publish github-comment --json");
+  expect(script).toBe(reviewScript(message, 900));
+  expect(reviewScript(message, 1200)).toContain("--deadline 1200 ");
+});
+
+it("fails closed before provisioning when the job cap cannot cover the review budget", async () => {
+  const test = setup("provisioning", {RVW_JOB_DEADLINE_MINUTES: "84"});
+  await expect(test.job.start(message)).rejects.toMatchObject({code: "config_incoherent",
+    reason: "job_deadline_below_review_budget", minimumJobDeadlineMinutes: 85});
+  expect(mocks.createCheckRun).not.toHaveBeenCalled();
+  expect(mocks.sandboxFor).not.toHaveBeenCalled();
+});
+
+it("uses the configured job cap for the deadline recorded at start", async () => {
+  const test = setup("provisioning");
+  test.sandbox.startProcess.mockImplementationOnce((async () => ({id: "process-2", command: "/workspace/run-review.sh",
+    startTime: new Date("2026-09-07T10:13:27.000Z")})) as never);
+  const before = Date.now();
+  await test.job.start(message);
+  const deadlineAt = Date.parse(test.record().deadlineAt as string);
+  expect(deadlineAt - before).toBeGreaterThanOrEqual(120 * 60_000 - 5_000);
+  expect(deadlineAt - before).toBeLessThanOrEqual(120 * 60_000 + 5_000);
 });
 
 it("continues all artifact attempts after an R2 failure", async () => {

@@ -35,7 +35,7 @@ describe("runtime Codex egress registration", () => {
     for (const hostname of ["proxy-one.example", "proxy-two.example"]) {
       const response = await codexOutboundHandler(
         new Request(`https://${hostname}/backend-api/codex`),
-        {CODEX_PROXY_HOST: hostname, GITHUB_APP_ID: "123", CODEX_API_KEY: "secret"},
+        {CODEX_PROXY_HOST: hostname, GITHUB_APP_ID: "123", RVW_REVIEW_DEADLINE_SECONDS: "900", CODEX_API_KEY: "secret"},
         fetcher,
       );
       await expect(response.json()).resolves.toEqual({authorization: "Bearer secret"});
@@ -43,7 +43,7 @@ describe("runtime Codex egress registration", () => {
     await expect(
       codexOutboundHandler(
         new Request("https://stale.example/backend-api/codex"),
-        {CODEX_PROXY_HOST: "proxy-two.example", GITHUB_APP_ID: "123", CODEX_API_KEY: "secret"},
+        {CODEX_PROXY_HOST: "proxy-two.example", GITHUB_APP_ID: "123", RVW_REVIEW_DEADLINE_SECONDS: "900", CODEX_API_KEY: "secret"},
         fetcher,
       ),
     ).rejects.toThrow("outbound host does not match CODEX_PROXY_HOST");
@@ -55,7 +55,7 @@ describe("runtime Codex egress registration", () => {
     await expect(
       codexOutboundHandler(
         new Request("https://stale.example/backend-api/codex"),
-        {CODEX_PROXY_HOST: "", GITHUB_APP_ID: "123", CODEX_API_KEY: "secret"},
+        {CODEX_PROXY_HOST: "", GITHUB_APP_ID: "123", RVW_REVIEW_DEADLINE_SECONDS: "900", CODEX_API_KEY: "secret"},
         fetcher,
       ),
     ).rejects.toThrow("config_missing: CODEX_PROXY_HOST");
