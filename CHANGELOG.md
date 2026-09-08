@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/Soju06/rvw/compare/v0.14.0...v0.15.0) (2026-09-08)
+
+
+### Features
+
+* stop dead-lane redispatch, pass an explicit App review deadline, and surface lane failures ([#82](https://github.com/Soju06/rvw/issues/82)) ([ff79de6](https://github.com/Soju06/rvw/commit/ff79de6754c0093a13bb8ebd0e025e15f56e4916))
+
 ## [0.14.0](https://github.com/Soju06/rvw/compare/v0.13.0...v0.14.0) (2026-09-07)
 
 
