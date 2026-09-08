@@ -87,7 +87,7 @@ from rvw.pipeline import (
     optional_outcome,
     verdict_counts,
 )
-from rvw.policy import PolicyNotFound, evaluate, resolve_auto_policy
+from rvw.policy import PolicyNotFound, PublishPolicyInvalid, evaluate, resolve_auto_policy
 from rvw.presentation import WORKTREE_RULE_WARNING, PresentationConfig, PresentationConfigInvalid
 from rvw.provenance import current_build_provenance, version_label
 from rvw.publish import (
@@ -2141,6 +2141,9 @@ def _run_command(
             code = exc.reason
             process.publication_failure = exc.reason
         if isinstance(exc, PresentationConfigInvalid):
+            code = exc.reason
+            invalid = True
+        if isinstance(exc, PublishPolicyInvalid):
             code = exc.reason
             invalid = True
         if isinstance(exc, PolicyNotFound):
