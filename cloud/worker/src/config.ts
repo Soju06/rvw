@@ -1,10 +1,12 @@
-import {MAX_REVIEW_DEADLINE_SECONDS} from "./sandbox-auth";
+import {MAX_REVIEW_DEADLINE_SECONDS, REASONING_EFFORT_VALUES, isReasoningEffort, type ReasoningEffort} from "./sandbox-auth";
 
 export type RequiredVariable =
   | "CODEX_PROXY_HOST"
   | "GITHUB_APP_ID"
   | "RVW_REVIEW_DEADLINE_SECONDS"
-  | "RVW_JOB_DEADLINE_MINUTES";
+  | "RVW_JOB_DEADLINE_MINUTES"
+  | "RVW_CODEX_MODEL"
+  | "RVW_CODEX_REASONING_EFFORT";
 
 /** Job cap used when `RVW_JOB_DEADLINE_MINUTES` is absent; a present but malformed value fails closed. */
 export const DEFAULT_JOB_DEADLINE_MINUTES = 90;
@@ -20,6 +22,8 @@ export interface ConfigEnvironment {
   GITHUB_APP_ID?: string;
   RVW_REVIEW_DEADLINE_SECONDS?: string;
   RVW_JOB_DEADLINE_MINUTES?: string;
+  RVW_CODEX_MODEL?: string;
+  RVW_CODEX_REASONING_EFFORT?: string;
 }
 
 export interface RequiredConfig {
@@ -29,6 +33,10 @@ export interface RequiredConfig {
   reviewDeadlineSeconds: number;
   /** Hard job cap enforced by the Durable Object alarm, in minutes. */
   jobDeadlineMinutes: number;
+  /** `--model` override for every review runtime; absent keeps the packaged CLI default. */
+  codexModel?: string;
+  /** `--reasoning-effort` override for every review runtime; absent keeps the packaged CLI default. */
+  codexReasoningEffort?: ReasoningEffort;
 }
 
 export class ConfigMissingError extends Error {
@@ -106,6 +114,26 @@ export function jobDeadlineMinutes(raw: string | undefined): number {
   return value;
 }
 
+/** Parse the optional Codex model override; absent means the CLI default, present but blank fails closed. */
+export function optionalCodexModel(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new ConfigInvalidError("RVW_CODEX_MODEL", "must be a non-empty model identifier when set");
+  }
+  return trimmed;
+}
+
+/** Parse the optional reasoning effort override; absent means the CLI default, off-enum fails closed. */
+export function optionalReasoningEffort(raw: string | undefined): ReasoningEffort | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (!isReasoningEffort(trimmed)) {
+    throw new ConfigInvalidError("RVW_CODEX_REASONING_EFFORT", `must be one of: ${REASONING_EFFORT_VALUES.join(", ")}`);
+  }
+  return trimmed;
+}
+
 /** Smallest job cap (whole minutes) that covers `REVIEW_BUDGET_WAVES * D + JOB_SLACK_SECONDS`. */
 export function minimumJobDeadlineMinutes(reviewDeadline: number): number {
   return Math.ceil((REVIEW_BUDGET_WAVES * reviewDeadline + JOB_SLACK_SECONDS) / 60);
@@ -123,11 +151,15 @@ export function requiredConfig(env: ConfigEnvironment): RequiredConfig {
   if (!jobDeadlineCoversReviewBudget(jobMinutes, reviewDeadline)) {
     throw new ConfigIncoherentError(jobMinutes, reviewDeadline, minimumJobDeadlineMinutes(reviewDeadline));
   }
+  const codexModel = optionalCodexModel(env.RVW_CODEX_MODEL);
+  const codexReasoningEffort = optionalReasoningEffort(env.RVW_CODEX_REASONING_EFFORT);
   return Object.freeze({
     codexProxyHost,
     githubAppId,
     reviewDeadlineSeconds: reviewDeadline,
     jobDeadlineMinutes: jobMinutes,
+    ...(codexModel === undefined ? {} : {codexModel}),
+    ...(codexReasoningEffort === undefined ? {} : {codexReasoningEffort}),
   });
 }
 

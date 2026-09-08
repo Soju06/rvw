@@ -97,7 +97,13 @@ function initializeInvocation(message: ReviewJobMessage): string {
     `--base-ref ${shellQuote(message.baseSha)} --head-ref ${shellQuote(message.headSha)}`;
 }
 
-export function reviewScript(message: ReviewJobMessage, deadlineSeconds: number): string {
+/** Codex runtime overrides forwarded to `rvw run`; an absent field keeps the packaged CLI default. */
+export interface ReviewRuntimePolicy {
+  model?: string;
+  reasoningEffort?: string;
+}
+
+export function reviewScript(message: ReviewJobMessage, deadlineSeconds: number, policy: ReviewRuntimePolicy = {}): string {
   return String.raw`#!/usr/bin/env bash
 set -euo pipefail
 mkdir -p /workspace/result /root/.config/gh
@@ -110,7 +116,7 @@ github.com:
 RVW_GH_CONFIG
 chmod 0600 /root/.config/gh/hosts.yml
 unset GH_TOKEN GITHUB_TOKEN RVW_CODEX_DEFAULT_BASE_URL RVW_CODEX_SANDBOX
-exec ${buildRvwRunInvocation({...message, deadlineSeconds})}
+exec ${buildRvwRunInvocation({...message, deadlineSeconds, ...policy})}
 `;
 }
 
@@ -167,6 +173,9 @@ function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSumm
     // Publication facts come verbatim from Python: the event, its policy source, and every
     // thread and review publication touched or deliberately left alone.
     publication_skipped: summary?.publication_skipped ?? null, publish: summary?.publish ?? null,
+    // The effective Codex model and reasoning effort Python recorded in process.json (null when
+    // process.json is missing or unparseable; per-field null for legacy envelopes).
+    runtime: mapping?.runtime ?? null,
     artifact_key: `jobs/${record.jobId}/`, artifacts: record.artifacts}, presentation);
 }
 
@@ -350,7 +359,8 @@ export class RvwReviewJob extends DurableObject<Env> {
     }
     await sandbox.exec(initializeInvocation(message));
     await configureOutbound(sandbox, config.codexProxyHost, token);
-    await sandbox.writeFile("/workspace/run-review.sh", reviewScript(message, config.reviewDeadlineSeconds));
+    await sandbox.writeFile("/workspace/run-review.sh", reviewScript(message, config.reviewDeadlineSeconds,
+      {model: config.codexModel, reasoningEffort: config.codexReasoningEffort}));
     await sandbox.exec("chmod 0755 /workspace/run-review.sh");
     const process = await sandbox.startProcess("/workspace/run-review.sh", {
       autoCleanup: false,

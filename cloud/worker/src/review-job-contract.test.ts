@@ -297,3 +297,47 @@ describe("process runtime watchdog settings", () => {
     expect(() => parseProcessResult(JSON.stringify({...process, runtime}))).toThrow("process runtime settings are invalid");
   });
 });
+
+describe("process runtime model and reasoning effort", () => {
+  it("passes the recorded model and effort through to the mapping", () => {
+    const runtime = processFixture().runtime as Record<string, unknown>;
+    expect(runtime).toMatchObject({model: "gpt-5.6-sol", reasoning_effort: "max"});
+    expect(parseProcessResult(JSON.stringify(processFixture())).runtime).toEqual({model: "gpt-5.6-sol", reasoning_effort: "max"});
+    expect(checkConclusionForResult(0, JSON.stringify(processFixture()))).toMatchObject({
+      conclusion: "success", runtime: {model: "gpt-5.6-sol", reasoning_effort: "max"}});
+    const overridden = processFixture();
+    Object.assign(overridden.runtime as Record<string, unknown>, {model: "gpt-6-astra", reasoning_effort: "high"});
+    expect(checkConclusionForResult(0, JSON.stringify(overridden)).runtime).toEqual({model: "gpt-6-astra", reasoning_effort: "high"});
+  });
+  it("parses legacy envelopes without the keys as null fields", () => {
+    const process = processFixture();
+    const runtime: Record<string, unknown> = {...(process.runtime as Record<string, unknown>)};
+    delete runtime.model;
+    delete runtime.reasoning_effort;
+    expect(parseProcessResult(JSON.stringify({...process, runtime})).runtime).toEqual({model: null, reasoning_effort: null});
+    expect(checkConclusionForResult(0, JSON.stringify({...process, runtime}))).toMatchObject({
+      conclusion: "success", runtime: {model: null, reasoning_effort: null}});
+    delete runtime.no_output_seconds;
+    delete runtime.reasoning_summary;
+    expect(checkConclusionForResult(0, JSON.stringify({...process, runtime})).conclusion).toBe("success");
+    const modelOnly = {...(process.runtime as Record<string, unknown>)};
+    delete modelOnly.reasoning_effort;
+    expect(parseProcessResult(JSON.stringify({...process, runtime: modelOnly})).runtime).toEqual({model: "gpt-5.6-sol", reasoning_effort: null});
+  });
+  it.each([
+    {model: ""},
+    {model: 1},
+    {model: null},
+    {reasoning_effort: ""},
+    {reasoning_effort: 2},
+    {reasoning_effort: null},
+  ])("rejects an invalid runtime model or effort %#", (overrides) => {
+    const process = processFixture();
+    const runtime = {...(process.runtime as Record<string, unknown>), ...overrides};
+    expect(() => parseProcessResult(JSON.stringify({...process, runtime}))).toThrow("process runtime settings are invalid");
+    expect(checkConclusionForResult(0, JSON.stringify({...process, runtime}))).toMatchObject({conclusion: "neutral", reasonCode: "process_invalid"});
+  });
+  it("leaves runtime undefined when process.json cannot be parsed", () => {
+    expect(checkConclusionForResult(0, "not json")).not.toHaveProperty("runtime");
+  });
+});

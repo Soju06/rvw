@@ -54,9 +54,28 @@ finish() {
 }
 trap finish EXIT
 
+# Optional Codex runtime overrides: when RVW_CODEX_MODEL or RVW_CODEX_REASONING_EFFORT is set in
+# the driver's environment it travels as the /start JSON body; otherwise the request is unchanged
+# and the Worker var (or the packaged CLI default) applies. A set-but-empty value is forwarded so
+# the Worker rejects it instead of silently running the default cell.
+start_body_args=()
+override_args=()
+if [[ -n "${RVW_CODEX_MODEL+set}" ]]; then
+  override_args+=(--arg model "$RVW_CODEX_MODEL")
+fi
+if [[ -n "${RVW_CODEX_REASONING_EFFORT+set}" ]]; then
+  override_args+=(--arg reasoning_effort "$RVW_CODEX_REASONING_EFFORT")
+fi
+if ((${#override_args[@]} > 0)); then
+  start_body=$(jq -n "${override_args[@]}" '$ARGS.named')
+  printf '%s\n' "$start_body" > "$evidence/start-body.json"
+  start_body_args=(--header 'Content-Type: application/json' --data "$start_body")
+fi
+
 date +%s%3N > "$evidence/start-request-epoch-ms.txt"
 if ! curl --fail-with-body --silent --show-error \
   --request POST "$base_url/start?repo=$repo_url&target=$target_sha" \
+  ${start_body_args[@]+"${start_body_args[@]}"} \
   --output "$evidence/start.json"; then
   summary="transport/API failure while starting the review"
   exit 3

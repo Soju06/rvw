@@ -1,14 +1,17 @@
 import {describe, expect, it, vi} from "vitest";
 
 import {
+  REASONING_EFFORT_VALUES,
   botLoginForAppSlug,
   buildGitCloneUrl,
   buildReviewProcessEnv,
   buildRvwRunInvocation,
+  codexPolicyArguments,
   credentialKindForHost,
   injectCodexCredential,
   injectGitHubApiCredential,
   injectGitHubCloneCredential,
+  isReasoningEffort,
 } from "./sandbox-auth";
 
 describe("egress host matching", () => {
@@ -134,5 +137,53 @@ describe("review process environment", () => {
     for (const deadlineSeconds of [0, -1, 1801, 900.5, Number.NaN]) {
       expect(() => buildRvwRunInvocation({...options, deadlineSeconds})).toThrow(/review deadline/);
     }
+  });
+});
+
+describe("Codex runtime policy overrides", () => {
+  const options = {owner: "acme", repo: "rockets", prNumber: 42,
+    baseSha: "b".repeat(40), headSha: "a".repeat(40), deadlineSeconds: 900};
+
+  it("names exactly the nine Codex 0.152.0 named efforts and rejects everything else", () => {
+    expect([...REASONING_EFFORT_VALUES]).toEqual(
+      ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"]);
+    for (const value of REASONING_EFFORT_VALUES) expect(isReasoningEffort(value)).toBe(true);
+    for (const value of ["turbo", "Max", "MAX", " high", "high ", "", "custom:foo", 3, null, undefined]) {
+      expect(isReasoningEffort(value)).toBe(false);
+    }
+  });
+
+  it("omits both flags when no override is supplied", () => {
+    const command = buildRvwRunInvocation(options);
+    expect(command.endsWith("--publish github-review --json")).toBe(true);
+    expect(command).not.toContain("--model");
+    expect(command).not.toContain("--reasoning-effort");
+    expect(codexPolicyArguments(undefined, undefined)).toBe("");
+  });
+
+  it("appends shell-quoted --model and --reasoning-effort after --json, each only when supplied", () => {
+    expect(buildRvwRunInvocation({...options, model: "gpt-6-astra", reasoningEffort: "high"}))
+      .toMatch(/ --publish github-review --json --model 'gpt-6-astra' --reasoning-effort 'high'$/);
+    const modelOnly = buildRvwRunInvocation({...options, model: "gpt-6-astra"});
+    expect(modelOnly.endsWith("--json --model 'gpt-6-astra'")).toBe(true);
+    expect(modelOnly).not.toContain("--reasoning-effort");
+    const effortOnly = buildRvwRunInvocation({...options, reasoningEffort: "medium"});
+    expect(effortOnly.endsWith("--json --reasoning-effort 'medium'")).toBe(true);
+    expect(effortOnly).not.toContain("--model");
+    expect(buildRvwRunInvocation({...options, model: "it's"})).toContain("--model 'it'\\''s'");
+  });
+
+  it.each(["", "   ", "\t"])("rejects an empty or whitespace model %#", (model) => {
+    expect(() => buildRvwRunInvocation({...options, model})).toThrow(/model override must be a non-empty string/);
+    expect(() => codexPolicyArguments(model, undefined)).toThrow(/model override/);
+  });
+
+  it.each(["turbo", "Max", "", "high ", "custom"])("rejects the off-enum effort %s", (reasoningEffort) => {
+    expect(() => buildRvwRunInvocation({...options, reasoningEffort})).toThrow(/reasoning effort override must be one of: none, minimal, low, medium, high, xhigh, max, ultra, persistent/);
+    expect(() => codexPolicyArguments(undefined, reasoningEffort)).toThrow(/reasoning effort/);
+  });
+
+  it.each([...REASONING_EFFORT_VALUES])("accepts the named effort %s", (reasoningEffort) => {
+    expect(buildRvwRunInvocation({...options, reasoningEffort})).toContain(`--reasoning-effort '${reasoningEffort}'`);
   });
 });

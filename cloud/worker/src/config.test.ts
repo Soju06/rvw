@@ -9,6 +9,8 @@ import {
   jobDeadlineCoversReviewBudget,
   jobDeadlineMinutes,
   minimumJobDeadlineMinutes,
+  optionalCodexModel,
+  optionalReasoningEffort,
   requiredConfig,
   reviewDeadlineSeconds,
 } from "./config";
@@ -139,5 +141,59 @@ describe("job deadline covers the review budget", () => {
       variable: "CODEX_PROXY_HOST",
       message: "config_missing: CODEX_PROXY_HOST",
     });
+  });
+});
+
+describe("optional Codex runtime overrides", () => {
+  const base = {CODEX_PROXY_HOST: "proxy.example", GITHUB_APP_ID: "1", ...DEADLINES};
+
+  it("leaves both overrides absent from the snapshot when the vars are unset", () => {
+    expect(optionalCodexModel(undefined)).toBeUndefined();
+    expect(optionalReasoningEffort(undefined)).toBeUndefined();
+    const config = requiredConfig(base);
+    expect(config).not.toHaveProperty("codexModel");
+    expect(config).not.toHaveProperty("codexReasoningEffort");
+    expect(Object.keys(config)).toEqual(["codexProxyHost", "githubAppId", "reviewDeadlineSeconds", "jobDeadlineMinutes"]);
+  });
+
+  it("trims valid values into the frozen snapshot", () => {
+    expect(optionalCodexModel(" gpt-6-astra ")).toBe("gpt-6-astra");
+    expect(optionalReasoningEffort(" high ")).toBe("high");
+    const config = requiredConfig({...base, RVW_CODEX_MODEL: " gpt-6-astra ", RVW_CODEX_REASONING_EFFORT: " high "});
+    expect(config).toMatchObject({codexModel: "gpt-6-astra", codexReasoningEffort: "high"});
+    expect(Object.isFrozen(config)).toBe(true);
+    expect(requiredConfig({...base, RVW_CODEX_MODEL: "gpt-6-astra"})).not.toHaveProperty("codexReasoningEffort");
+    expect(requiredConfig({...base, RVW_CODEX_REASONING_EFFORT: "medium"})).not.toHaveProperty("codexModel");
+  });
+
+  it.each(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"])(
+    "accepts the named effort %s", (value) => {
+      expect(optionalReasoningEffort(value)).toBe(value);
+    },
+  );
+
+  it.each(["", " ", "\t"])("fails closed on a present but empty model %#", (value) => {
+    expect(() => optionalCodexModel(value)).toThrow(ConfigInvalidError);
+    expect(() => requiredConfig({...base, RVW_CODEX_MODEL: value})).toThrowError(
+      expect.objectContaining({code: "config_invalid", variable: "RVW_CODEX_MODEL"}));
+  });
+
+  it.each(["", " ", "turbo", "Max", "MAX", "custom:foo", "hi gh"])("fails closed on the off-enum effort %s", (value) => {
+    expect(() => optionalReasoningEffort(value)).toThrow(ConfigInvalidError);
+    expect(() => requiredConfig({...base, RVW_CODEX_REASONING_EFFORT: value})).toThrowError(
+      expect.objectContaining({code: "config_invalid", variable: "RVW_CODEX_REASONING_EFFORT",
+        message: expect.stringContaining("none, minimal, low, medium, high, xhigh, max, ultra, persistent")}));
+  });
+
+  it("serializes the new variables as structured config_invalid responses", async () => {
+    for (const [variable, value] of [["RVW_CODEX_MODEL", " "], ["RVW_CODEX_REASONING_EFFORT", "turbo"]] as const) {
+      let caught: unknown;
+      try { requiredConfig({...base, [variable]: value}); } catch (error) { caught = error; }
+      expect(isConfigError(caught)).toBe(true);
+      const response = configErrorResponse(caught as ConfigInvalidError);
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({error: "config_invalid", variable,
+        message: expect.stringContaining(`config_invalid: ${variable}`)});
+    }
   });
 });

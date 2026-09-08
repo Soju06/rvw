@@ -1,14 +1,24 @@
 import {artifactManifest, artifactPath} from "./artifacts";
 import type {RequiredConfig} from "./config";
 import {configureOutbound, optionalFile, processPayload, sandboxFor} from "./sandbox";
+import {codexPolicyArguments} from "./sandbox-auth";
 import {
   buildSandboxProcessEnv,
+  parseStartOverrides,
   validateTargetInput,
 } from "./spike-contract";
 
 const MAX_LOG_CHARS = 24_000;
 
-function reviewScript(repoUrl: string, targetSha: string, deadlineSeconds: number): string { return String.raw`#!/usr/bin/env bash
+/** Codex runtime overrides for one spike run; an absent field keeps the packaged CLI default. */
+interface SpikeRuntimePolicy {
+  model?: string;
+  reasoningEffort?: string;
+}
+
+function reviewScript(repoUrl: string, targetSha: string, deadlineSeconds: number, policy: SpikeRuntimePolicy = {}): string {
+  const policyArguments = codexPolicyArguments(policy.model, policy.reasoningEffort);
+  return String.raw`#!/usr/bin/env bash
 set -u
 LOG=/workspace/rvw-a0.log
 RESULT=/workspace/result
@@ -32,7 +42,7 @@ set -e
 git clone '${repoUrl}' "$TARGET"; git -C "$TARGET" checkout --detach '${targetSha}'
 cd "$TARGET"
 set +e
-env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint run --target '${targetSha}' --repo-dir "$TARGET" --out "$RESULT" --deadline ${deadlineSeconds} --policy auto --publish none --json
+env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint run --target '${targetSha}' --repo-dir "$TARGET" --out "$RESULT" --deadline ${deadlineSeconds} --policy auto --publish none --json${policyArguments}
 review_rc=$?
 printf 'A0_REVIEW_EXIT_CODE=%s\n' "$review_rc"
 printf 'A0_RUN_FINISHED_EPOCH_MS=%s\n' "$(date +%s%3N)"
@@ -44,16 +54,31 @@ function json(value: unknown, init?: ResponseInit): Response { return Response.j
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function required(url: URL, key: string): string | null { return url.searchParams.get(key); }
 
-export async function start(env: Env, config: RequiredConfig, url: URL): Promise<Response> {
+/** Read the optional JSON request body; an empty body selects no override. */
+async function startBody(request: Request): Promise<{body: unknown} | {error: string}> {
+  const text = await request.text();
+  if (text.trim().length === 0) return {body: undefined};
+  try { return {body: JSON.parse(text)}; } catch { return {error: "start body must be valid JSON"}; }
+}
+
+export async function start(request: Request, env: Env, config: RequiredConfig, url: URL): Promise<Response> {
   const target = validateTargetInput(required(url, "repo"), required(url, "target"));
   if (!target) return json({error: "repo must be a safe HTTPS GitHub repository URL and target must be 7-40 lowercase hexadecimal characters"}, {status: 400});
+  const body = await startBody(request);
+  if ("error" in body) return json({error: body.error}, {status: 400});
+  const parsed = parseStartOverrides(body.body);
+  if ("error" in parsed) return json({error: parsed.error}, {status: 400});
+  // Precedence per field: request body > Worker var > the container's own CLI/env/default resolution.
+  const model = parsed.overrides.model ?? config.codexModel;
+  const reasoningEffort = parsed.overrides.reasoning_effort ?? config.codexReasoningEffort;
   const sandboxId = `rvw-spike-${crypto.randomUUID()}`;
   const sandbox = sandboxFor(env, sandboxId);
   await configureOutbound(sandbox, config.codexProxyHost);
-  await sandbox.writeFile("/workspace/run-review.sh", reviewScript(target.repoUrl, target.targetSha, config.reviewDeadlineSeconds));
+  await sandbox.writeFile("/workspace/run-review.sh", reviewScript(target.repoUrl, target.targetSha, config.reviewDeadlineSeconds, {model, reasoningEffort}));
   await sandbox.exec("chmod 0755 /workspace/run-review.sh");
   const process = await sandbox.startProcess("/workspace/run-review.sh", {env: buildSandboxProcessEnv(config.codexProxyHost)});
-  return json({sandboxId, processId: process.id, repo: target.repoUrl, target: target.targetSha}, {status: 202});
+  return json({sandboxId, processId: process.id, repo: target.repoUrl, target: target.targetSha,
+    model: model ?? null, reasoning_effort: reasoningEffort ?? null}, {status: 202});
 }
 
 export async function status(env: Env, url: URL): Promise<Response> {
@@ -98,7 +123,7 @@ export function handleRoute(
   const url = new URL(request.url);
   if (env.RVW_ENV !== "spike") return json({error: "not found"}, {status: 404});
   try {
-    if (request.method === "POST" && url.pathname === "/start") return start(env, config, url);
+    if (request.method === "POST" && url.pathname === "/start") return start(request, env, config, url);
     if (request.method === "GET" && url.pathname === "/status") return status(env, url);
     if (request.method === "GET" && url.pathname === "/result") return result(env, url);
     if (request.method === "POST" && url.pathname === "/destroy") return destroy(env, url);
