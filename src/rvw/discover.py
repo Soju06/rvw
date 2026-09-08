@@ -404,7 +404,7 @@ async def discover(
                 continue
             if dead_by_timeout(lane_final):
                 # Re-running the same prompt under the same deadline is deterministic
-                # waste (bori#1744: a guaranteed third 600 s barrier); record, do not dispatch.
+                # waste (a guaranteed third full-deadline barrier); record, do not dispatch.
                 redispatch_skipped[lane.id] = "dead_by_timeout"
                 continue
             redispatch_runs = [
