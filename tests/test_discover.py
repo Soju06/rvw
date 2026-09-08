@@ -9,9 +9,11 @@ import pytest
 import rvw.discover as discover_module
 from rvw.diffbudget import EmptyReviewDiffError
 from rvw.discover import (
+    DEAD_BY_TIMEOUT_REASON,
     DiscoveryMode,
     RunCoverage,
     covered_hunk_ids,
+    dead_by_timeout,
     discover,
     resolve_lane_path,
 )
@@ -232,7 +234,176 @@ async def test_agentic_coverage_redispatches_incomplete_lane_once(tmp_path: Path
     assert runtime.run_dirs[-1] == tmp_path / "out" / "coverage-redispatch" / "base-review" / "r1"
     assert result.budget is None
     assert result.coverage[0].coverage_redispatched is True
+    assert result.coverage[0].redispatch_skipped is None
     assert result.coverage[0].uncovered == []
+
+
+async def test_agentic_coverage_skips_redispatch_for_lane_dead_by_timeout(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "correctness", Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={"correctness": [RunStatus.INVALID, RunStatus.INVALID]},
+        invalid_reasons={"correctness": [DEAD_BY_TIMEOUT_REASON, DEAD_BY_TIMEOUT_REASON]},
+    )
+    expected = [hunk.hunk_id for hunk in discover_module.parse_hunks(two_file_target().diff)]
+
+    result = await discover(
+        registry=registry(("correctness", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=two_file_target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    assert runtime.calls == [("correctness", 1), ("correctness", 1)]  # initial + retry only
+    assert not any("coverage-redispatch" in run_dir.parts for run_dir in runtime.run_dirs)
+    lane = result.coverage[0]
+    assert lane.coverage_redispatched is False
+    assert lane.redispatch_skipped == "dead_by_timeout"
+    assert lane.valid == 0
+    assert lane.uncovered == expected
+    assert lane.model_dump()["redispatch_skipped"] == "dead_by_timeout"
+
+
+async def test_agentic_coverage_redispatches_lane_failed_for_non_timeout_reasons(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "hygiene", Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={"hygiene": [RunStatus.INVALID, RunStatus.INVALID, RunStatus.VALID]},
+        invalid_reasons={"hygiene": ["exit_nonzero:1", "exit_nonzero:1"]},
+        covered={"hygiene": [[], [], ["src/a.py", "src/b.py"]]},
+    )
+
+    result = await discover(
+        registry=registry(("hygiene", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=two_file_target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    assert len(runtime.calls) == 3
+    assert runtime.run_dirs[-1] == tmp_path / "out" / "coverage-redispatch" / "hygiene" / "r1"
+    assert result.coverage[0].coverage_redispatched is True
+    assert result.coverage[0].redispatch_skipped is None
+    assert result.coverage[0].uncovered == []
+
+
+async def test_agentic_coverage_redispatches_lane_recovered_on_retry_but_incomplete(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "dynamic/goal-parity", Tier.DYNAMIC)
+    runtime = FakeRuntime(
+        statuses={"dynamic/goal-parity": [RunStatus.INVALID, RunStatus.VALID, RunStatus.VALID]},
+        invalid_reasons={"dynamic/goal-parity": [DEAD_BY_TIMEOUT_REASON]},
+        covered={"dynamic/goal-parity": [[], ["src/a.py"], ["src/b.py:10-11"]]},
+    )
+
+    result = await discover(
+        registry=registry(("dynamic/goal-parity", Tier.DYNAMIC)),
+        lanes_root=lanes_root,
+        target=two_file_target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    assert len(runtime.calls) == 3
+    assert result.coverage[0].valid == 1
+    assert result.coverage[0].coverage_redispatched is True
+    assert result.coverage[0].redispatch_skipped is None
+    assert result.coverage[0].uncovered == []
+
+
+async def test_agentic_coverage_skips_redispatch_after_capacity_error_then_timeout(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "hygiene", Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={"hygiene": [RunStatus.INVALID, RunStatus.INVALID]},
+        invalid_reasons={"hygiene": ["exit_nonzero:1", DEAD_BY_TIMEOUT_REASON]},
+    )
+
+    result = await discover(
+        registry=registry(("hygiene", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=two_file_target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    assert len(runtime.calls) == 2
+    lane = result.coverage[0]
+    assert lane.coverage_redispatched is False
+    assert lane.redispatch_skipped == "dead_by_timeout"
+    assert [attempt.invalid_reason for attempt in lane.runs[0].attempts] == [
+        "exit_nonzero:1",
+        DEAD_BY_TIMEOUT_REASON,
+    ]
+
+
+def _final_result(lane_id: str, replica: int, reason: str | None) -> RunResult:
+    if reason is None:
+        return RunResult(
+            lane_id=lane_id,
+            replica=replica,
+            status=RunStatus.VALID,
+            output=RuntimeLaneOutput(verdict="PASS", covered=[], findings=[]),
+            invalid_reason=None,
+            wall_seconds=1.0,
+            artifact_dir=Path(f"/tmp/{lane_id}/r{replica}"),
+        )
+    return RunResult(
+        lane_id=lane_id,
+        replica=replica,
+        status=RunStatus.INVALID,
+        output=None,
+        invalid_reason=reason,
+        wall_seconds=600.1,
+        artifact_dir=Path(f"/tmp/{lane_id}/r{replica}"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("final_reasons", "expected"),
+    [
+        ([DEAD_BY_TIMEOUT_REASON], True),
+        ([DEAD_BY_TIMEOUT_REASON, DEAD_BY_TIMEOUT_REASON], True),
+        ([DEAD_BY_TIMEOUT_REASON, "exit_nonzero:1"], False),
+        (["exit_nonzero:1"], False),
+        ([DEAD_BY_TIMEOUT_REASON, None], False),
+        ([], False),
+    ],
+)
+def test_dead_by_timeout_requires_every_final_execution_to_be_a_deadline_kill(
+    final_reasons: list[str | None], expected: bool
+) -> None:
+    results = [
+        _final_result("lane", replica, reason)
+        for replica, reason in enumerate(final_reasons, start=1)
+    ]
+    assert dead_by_timeout(results) is expected
+
+
+def test_lane_coverage_rejects_redispatched_and_skipped_together() -> None:
+    with pytest.raises(ValueError, match="redispatched and skipped"):
+        LaneCoverageModel = discover_module.LaneCoverage
+        LaneCoverageModel(
+            lane_id="lane",
+            dispatched=0,
+            valid=0,
+            findings=0,
+            runs=[],
+            coverage_redispatched=True,
+            redispatch_skipped="dead_by_timeout",
+        )
 
 
 async def test_agentic_coverage_surfaces_residual_without_third_wave(tmp_path: Path) -> None:
@@ -477,6 +648,7 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
             for replica in (1, 2)
         ],
         "coverage_redispatched": False,
+        "redispatch_skipped": None,
         "uncovered": [],
     }
     assert coverage["bad"].model_dump() == {
@@ -504,6 +676,7 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
             for replica in (1, 2)
         ],
         "coverage_redispatched": False,
+        "redispatch_skipped": None,
         "uncovered": [],
     }
     assert len(runtime.calls) == 6  # two good + two initial bad + two retry bad

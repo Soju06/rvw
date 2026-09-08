@@ -30,6 +30,10 @@ from rvw.target import ResolvedTarget
 
 _COVERED_RANGE = re.compile(r"^(?P<file>.+):(?P<start>[1-9][0-9]*)(?:-(?P<end>[1-9][0-9]*))?$")
 
+# The runtime classifies its own deadline kill as this normalized reason.
+DEAD_BY_TIMEOUT_REASON = "exit_nonzero:124"
+RedispatchSkip = Literal["dead_by_timeout"]
+
 
 class DiscoveryMode(StrEnum):
     AGENTIC = "agentic"
@@ -110,6 +114,7 @@ class LaneCoverage(BaseModel):
     findings: int = Field(ge=0)
     runs: list[RunCoverage]
     coverage_redispatched: bool = False
+    redispatch_skipped: RedispatchSkip | None = None
     uncovered: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -117,6 +122,8 @@ class LaneCoverage(BaseModel):
         identities = [(run.replica, run.chunk) for run in self.runs]
         if len(identities) != len(set(identities)):
             raise ValueError("coverage run identities must be unique")
+        if self.redispatch_skipped is not None and self.coverage_redispatched:
+            raise ValueError("a lane cannot be both coverage-redispatched and skipped")
         if self.dispatched != len(self.runs):
             raise ValueError("dispatched must equal the number of coverage runs")
         if self.valid != sum(run.valid for run in self.runs):
@@ -174,6 +181,21 @@ def _uncovered_for_lane(hunks: Sequence[Hunk], results: Sequence[RunResult]) -> 
     ]
     covered = covered_hunk_ids(hunks, receipts)
     return [hunk.hunk_id for hunk in hunks if hunk.hunk_id not in covered]
+
+
+def dead_by_timeout(results: Sequence[RunResult]) -> bool:
+    """True when every final planned execution of a lane died at the runtime deadline.
+
+    ``results`` are the final results after the ordinary invalid-result retry, so an
+    execution whose earlier attempt failed for another reason still counts as dead
+    when its final attempt was the deadline kill. A lane with zero planned results
+    is not dead; it simply has nothing to redispatch.
+    """
+
+    return bool(results) and all(
+        result.status is RunStatus.INVALID and result.invalid_reason == DEAD_BY_TIMEOUT_REASON
+        for result in results
+    )
 
 
 def resolve_lane_path(lanes_root: Path, lane_id: str, tier: Tier) -> Path:
@@ -335,15 +357,22 @@ async def discover(
     hunks = parse_hunks(target.diff)
     coverage_results: list[RunResult] = []
     redispatched_lanes: set[str] = set()
+    redispatch_skipped: dict[str, RedispatchSkip] = {}
     if mode is DiscoveryMode.AGENTIC:
         for lane in lanes:
-            lane_initial = [result for result in raw_results if result.lane_id == lane.id]
-            if _uncovered_for_lane(hunks, lane_initial):
-                redispatch_runs = [
-                    run for run in planned_runs if run.lane.id == lane.id and run.replica == 1
-                ]
-                if redispatch_runs:
-                    redispatched_lanes.add(lane.id)
+            lane_final = [result for result in raw_results if result.lane_id == lane.id]
+            if not _uncovered_for_lane(hunks, lane_final):
+                continue
+            if dead_by_timeout(lane_final):
+                # Re-running the same prompt under the same deadline is deterministic
+                # waste (bori#1744: a guaranteed third 600 s barrier); record, do not dispatch.
+                redispatch_skipped[lane.id] = "dead_by_timeout"
+                continue
+            redispatch_runs = [
+                run for run in planned_runs if run.lane.id == lane.id and run.replica == 1
+            ]
+            if redispatch_runs:
+                redispatched_lanes.add(lane.id)
         redispatch_plan = [
             run for run in planned_runs if run.lane.id in redispatched_lanes and run.replica == 1
         ]
@@ -419,6 +448,7 @@ async def discover(
                 + coverage_finding_counts.get(lane.id, 0),
                 runs=runs,
                 coverage_redispatched=lane.id in redispatched_lanes,
+                redispatch_skipped=redispatch_skipped.get(lane.id),
                 uncovered=(
                     _uncovered_for_lane(hunks, lane_results[lane.id])
                     if mode is DiscoveryMode.AGENTIC
@@ -436,13 +466,16 @@ async def discover(
 
 
 __all__: list[str] = [
+    "DEAD_BY_TIMEOUT_REASON",
     "DiscoverResult",
     "DiscoveryMode",
     "EnrichedFinding",
     "LaneCoverage",
+    "RedispatchSkip",
     "RunAttempt",
     "RunCoverage",
     "covered_hunk_ids",
+    "dead_by_timeout",
     "discover",
     "resolve_lane_path",
 ]
