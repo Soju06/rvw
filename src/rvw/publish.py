@@ -71,6 +71,7 @@ from rvw.threads import (
     parse_review_marker,
     read_review_threads,
     reconcile_threads,
+    renamed_paths,
     reply_to_thread,
     resolve_thread,
     strip_markers,
@@ -301,7 +302,10 @@ class GhCliClient:
     def graphql(self, query: str, variables: Mapping[str, object]) -> object:
         body = json.dumps({"query": query, "variables": dict(variables)}, ensure_ascii=False)
         raw = _gh(["gh", "api", "graphql", "--input", "-"], body)
-        data = json.loads(raw) if raw.strip() else {}
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except ValueError as exc:
+            raise GitHubGraphQLError(f"GraphQL response is not JSON: {exc}") from exc
         errors = data.get("errors") if isinstance(data, dict) else None
         if errors:
             raise GitHubGraphQLError(
@@ -564,6 +568,7 @@ def _gather(
         head_sha=target.head_sha,
         lane_valid={lane.lane_id: lane.valid > 0 for lane in coverage},
         changed_paths=frozenset(target.changed_paths),
+        renamed_from=renamed_paths(target.diff),
         excluded_paths=frozenset(budget.excluded_files) if budget is not None else frozenset(),
         head_hunks=parse_hunks(target.diff),
         uncovered={lane.lane_id: frozenset(lane.uncovered) for lane in coverage},
@@ -648,17 +653,29 @@ def _apply_thread_writes(
 ) -> None:
     """Resolve fixed threads and supersede outdated ones after the review write succeeded."""
 
+    def failed(thread_id: str, exc: Exception) -> bool:
+        """Record a failed write; ``True`` means stop touching threads altogether."""
+
+        types = exc.types if isinstance(exc, GitHubGraphQLError) else []
+        if "FORBIDDEN" in types:
+            facts.threads_skipped_reason = "forbidden"
+            return True
+        if "NOT_FOUND" in types:
+            facts.threads_skipped_missing.append(thread_id)
+            return False
+        # Rate limits, locked conversations, transport failures: the review is already live,
+        # so the thread simply stays open and the failure is recorded, never re-raised.
+        facts.threads_skipped_write_failed.append(thread_id)
+        facts.threads_skipped_reason = "write_failed"
+        return False
+
     for thread_id in plan.resolve:
         try:
             confirmed = resolve_thread(github, thread_id)
-        except GitHubGraphQLError as exc:
-            if "FORBIDDEN" in exc.types:
-                facts.threads_skipped_reason = "forbidden"
+        except (PublishError, ValueError, OSError) as exc:
+            if failed(thread_id, exc):
                 return
-            if "NOT_FOUND" in exc.types:
-                facts.threads_skipped_missing.append(thread_id)
-                continue
-            raise
+            continue
         if confirmed:
             facts.resolved_thread_ids.append(thread_id)
     for supersession in plan.supersede:
@@ -669,14 +686,10 @@ def _apply_thread_writes(
         try:
             reply_to_thread(github, supersession.thread_id, replies[supersession.thread_id])
             confirmed = resolve_thread(github, supersession.thread_id)
-        except GitHubGraphQLError as exc:
-            if "FORBIDDEN" in exc.types:
-                facts.threads_skipped_reason = "forbidden"
+        except (PublishError, ValueError, OSError) as exc:
+            if failed(supersession.thread_id, exc):
                 return
-            if "NOT_FOUND" in exc.types:
-                facts.threads_skipped_missing.append(supersession.thread_id)
-                continue
-            raise
+            continue
         if confirmed:
             facts.superseded_thread_ids.append(supersession.thread_id)
 
@@ -704,12 +717,12 @@ def _dismiss_reviews(
         path = f"repos/{repo}/pulls/{pr_number}/reviews/{review.id}"
         try:
             github.rest("PUT", f"{path}/dismissals", {"message": message, "event": "DISMISS"})
-        except PublishError:
+        except (PublishError, ValueError, OSError):
             # 422 covers "already dismissed" but also every other validation failure; only
             # GitHub's own state says whether the block is really lifted.
             try:
                 current = github.rest("GET", path)
-            except PublishError:
+            except (PublishError, ValueError, OSError):
                 current = None
             state = current.get("state") if isinstance(current, Mapping) else None
             if state == "DISMISSED":
@@ -797,7 +810,9 @@ def publish_review(
         thread_policy=thread_policy,
         candidates=candidates,
         coverage=coverage,
-        degraded=degraded,
+        # A policy that could only be read from the run's own snapshot may be forged; it
+        # never earns a resolution.
+        degraded=degraded or not policy_verified,
         attempt=execute or plan_threads,
         cwd=cwd,
     )
@@ -858,6 +873,10 @@ def publish_review(
     clamp_reason: EventClampReason | None = None
     if verdict is None:
         clamp_reason = "no_verdict"
+    elif outcome is None:
+        # Without adjudication every finding is UNCERTAIN and the verdict is PASS by default;
+        # that is not evidence for anything stronger than a COMMENT.
+        clamp_reason = "no_adjudication"
     elif degraded or fallback_used:
         clamp_reason = "degraded"
     elif identity is None and (execute or plan_threads):
@@ -873,13 +892,9 @@ def publish_review(
         or bool(failed_lane_ids(coverage))
         or degraded
     )
+    # The clamp reason is recorded whenever a clamp applies, even when the policy would have
+    # chosen COMMENT anyway, because the same clamp disables dismissal and resolution.
     event = select_event(publish_policy, verdict, clamp=clamp, has_prose=has_prose)
-    if clamp_reason is not None and (
-        verdict is None
-        or select_event(publish_policy, verdict, clamp=False, has_prose=has_prose) == event
-    ):
-        # Nothing was actually clamped: the policy would have chosen the same event.
-        clamp_reason = None if verdict is not None else clamp_reason
     if event_override is not None:
         wanted = _OVERRIDE_EVENT[event_override]
         if wanted != event:
@@ -887,9 +902,9 @@ def publish_review(
                 raise EventOverrideRejected(event_override, event)
             event = "COMMENT"
             clamp_reason = "event_override"
-    if fallback_used and plan is not None:
-        gathered.read_failed = gathered.read_failed  # keep flag; degraded below drops writes
-    reconciliation_degraded = degraded or fallback_used or gathered.read_failed
+    reconciliation_degraded = (
+        degraded or fallback_used or gathered.read_failed or not policy_verified
+    )
 
     facts = _facts_from_plan(plan, identity=identity, reason=gathered.reason)
     facts.event = event
@@ -995,20 +1010,27 @@ def publish_review(
         facts.event = None
         inline_posted = False
 
-    if plan is not None and github is not None and not reconciliation_degraded:
-        _apply_thread_writes(
-            github=github, plan=plan, facts=facts, replies=replies, inline_posted=inline_posted
-        )
-    if to_dismiss and github is not None:
-        _dismiss_reviews(
-            github=github,
-            repo=repo,
-            pr_number=pr_number,
-            reviews=to_dismiss,
-            message=dismiss_message,
-            facts=facts,
-        )
-    record_publish_facts(run.dir, facts, publication_skipped=skipped)
+    try:
+        if plan is not None and github is not None and not reconciliation_degraded:
+            _apply_thread_writes(
+                github=github,
+                plan=plan,
+                facts=facts,
+                replies=replies,
+                inline_posted=inline_posted,
+            )
+        if to_dismiss and github is not None:
+            _dismiss_reviews(
+                github=github,
+                repo=repo,
+                pr_number=pr_number,
+                reviews=to_dismiss,
+                message=dismiss_message,
+                facts=facts,
+            )
+    finally:
+        # The review write is the commit point: whatever happened afterwards is recorded.
+        record_publish_facts(run.dir, facts, publication_skipped=skipped)
     return PublishResult(
         review_url=review_url,
         inline_count=0 if body_fallback_count or skipped else len(comments),

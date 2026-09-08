@@ -41,3 +41,7 @@ Goals: make the review event a repository decision with today's behaviour as the
 ## Migration Plan
 
 Four conventional commits on one branch: policy blocks; fingerprint, markers, thread reconciliation, recorded thread facts (with Worker parser acceptance); policy-selected event with identity, idempotency, and dismissal; App rename, slug plumbing, and check facts. Legacy `summary.json` without the new fields loads with defaults in both Python and the Worker. Threads published before this change carry no marker and are never touched. No push, deployment, or archive.
+
+## Post-implementation verification (2026-09-08)
+
+An adversarial review of the four commits (28 agents, 18 confirmed findings) led to a fifth commit: thread and dismissal writes after the review POST never raise (`write_failed` recorded, facts always persisted); an unverified snapshot and a missing adjudication outcome clamp reconciliation as well as the event; the clamp reason is recorded whenever a clamp applies; a matched outdated thread whose supersession is withheld is reused rather than re-posted; fingerprint uniqueness ignores resolved predecessors; the compare API never reports an absent path as unchanged; renamed paths have not left the diff; local `git diff` disables drivers and prefixes; the deprecated external policy never decides the event; gate resolves its policy before dispatch and publishes with it; publication sites label non-publish faults `invalid_policy`; a `review` dry run tolerates a malformed base policy with a warning.

@@ -202,10 +202,7 @@ def test_publish_and_review_reject_an_invalid_repository_publish_block(
         cli_module.app, ["publish", "--run", artifacts.run.run_id, "--out", str(tmp_path / "runs")]
     )
     assert result.exit_code == 2, result.output
-    assert (
-        "publish_policy_invalid: publish_policy_invalid: approve_not_opted_in"
-        in result.stderr.replace("\n", "")
-    )
+    assert "publish_policy_invalid: approve_not_opted_in" in result.stderr.replace("\n", "")
 
 
 def test_publish_mode_alias_is_accepted_with_a_deprecation_warning_and_normalised(
@@ -265,3 +262,73 @@ def test_publish_mode_alias_is_accepted_with_a_deprecation_warning_and_normalise
     )
     assert canonical.exit_code == 0, canonical.output
     assert "deprecated" not in canonical.stderr
+
+
+def test_run_ignores_the_deprecated_external_publish_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_policy import policy_repo
+
+    from rvw.policy import PublishPolicy, ThreadPolicy
+
+    target = policy_repo(tmp_path / "repo")
+    artifacts = fixture_artifacts(tmp_path, adjudicated=True)
+    artifacts.target.base_sha = target.base_sha
+    patch_pipeline(monkeypatch, artifacts)
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _: artifacts.target)
+    external = tmp_path / "external.yaml"
+    external.write_text(
+        policy_file(tmp_path, "comment").read_text() + "publish:\n  on_block: request_changes\n"
+        "threads:\n  resolve_on_fix: false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli_module, "DEFAULT_AUTO_POLICY", external)
+    monkeypatch.chdir(tmp_path / "repo")
+    calls: list[dict[str, object]] = []
+
+    def fake_publish(**kwargs: object) -> PublishResult:
+        calls.append(kwargs)
+        return PublishResult(
+            review_url="https://example.test/r/1",
+            inline_count=0,
+            body_fallback_count=0,
+            state="commented",
+        )
+
+    monkeypatch.setattr(cli_module, "publish_review", fake_publish)
+    out = tmp_path / "result"
+    with pytest.warns(FutureWarning):
+        result = runner.invoke(
+            cli_module.app,
+            ["run", "--target", "42", "--out", str(out), "--publish", "github-review", "--json"],
+        )
+    assert result.exit_code == 1, result.output
+    process = json.loads((out / "process.json").read_text())
+    assert process["effective_policy"]["source"] == "external"
+    assert (
+        calls[0]["publish_policy"] == PublishPolicy()
+        and calls[0]["thread_policy"] == ThreadPolicy()
+    )
+    assert calls[0]["policy_source"] == "default"
+
+
+def test_review_dry_run_tolerates_a_malformed_base_policy_but_publish_fails_before_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_policy import policy_repo
+
+    target = policy_repo(tmp_path / "repo", repository_policy="drop: {agreement_at_most: -1}\n")
+    monkeypatch.chdir(tmp_path / "repo")
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _: target)
+    dispatched: list[bool] = []
+
+    async def forbidden(**kwargs: object) -> None:
+        dispatched.append(True)
+        raise AssertionError("review dispatched with an invalid policy")
+
+    monkeypatch.setattr(cli_module, "_execute_pipeline", forbidden)
+    result = runner.invoke(
+        cli_module.app, ["review", "--target", "42", "--publish", "--out", str(tmp_path / "runs")]
+    )
+    assert result.exit_code == 2, result.output
+    assert "invalid_policy:" in result.stderr and dispatched == []

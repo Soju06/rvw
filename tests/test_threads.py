@@ -674,8 +674,9 @@ def test_policy_switches_disable_reuse_and_resolution_independently() -> None:
     no_resolve = reconcile_threads(threads, candidates, context(resolve_on_fix=False))
     assert no_resolve.resolve == [] and no_resolve.supersede == []
     assert no_resolve.outcomes["T-fixed"] == "skipped_policy"
-    assert no_resolve.reused == {"C-same": "T-same"} and no_resolve.post_inline == ["C-old"]
-    assert no_resolve.outcomes["T-old"] == "superseded"
+    # a withheld supersession falls back to reuse: nothing is re-posted inline
+    assert no_resolve.reused == {"C-same": "T-same", "C-old": "T-old"}
+    assert no_resolve.post_inline == [] and no_resolve.outcomes["T-old"] == "reused"
 
 
 def test_degraded_context_keeps_reuse_but_drops_every_resolution() -> None:
@@ -705,8 +706,9 @@ def test_degraded_context_keeps_reuse_but_drops_every_resolution() -> None:
         candidate("C-old", path="c.py", line=30, rule="r/o", evidence="c"),
     ]
     plan = reconcile_threads(threads, candidates, context(degraded=True))
-    assert plan.reused == {"C-same": "T-same"} and plan.resolve == [] and plan.supersede == []
-    assert plan.outcomes["T-fixed"] == "skipped_degraded" and plan.post_inline == ["C-old"]
+    assert plan.reused == {"C-same": "T-same", "C-old": "T-old"}
+    assert plan.resolve == [] and plan.supersede == []
+    assert plan.outcomes["T-fixed"] == "skipped_degraded" and plan.post_inline == []
 
 
 class FakeGitHub:
@@ -872,7 +874,7 @@ def test_compare_hunks_synthesises_headers_and_requires_the_merge_base_to_be_the
     hunks = compare_hunks(ok, "owner/repo", H1, H2, "b.py")
     assert hunks is not None and len(hunks) == 1 and hunks[0].file == "b.py"
     assert map_old_line(hunks, 2).kind == "deleted" and map_old_line(hunks, 3).line == 4
-    assert compare_hunks(ok, "owner/repo", H1, H2, "untouched.py") == []
+    assert compare_hunks(ok, "owner/repo", H1, H2, "untouched.py") is None
     assert compare_hunks(ok, "owner/repo", H1, H2, "big.bin") is None
     renamed = FakeGitHub(
         rest={
@@ -896,3 +898,100 @@ def test_graphql_error_types_are_extracted_from_the_response_body() -> None:
     body = '{"data": null, "errors": [{"type": "FORBIDDEN", "message": "no"}, {"message": "typeless"}]}'
     assert graphql_error_types(body) == ["FORBIDDEN"]
     assert graphql_error_types("not json") == [] and graphql_error_types("[]") == []
+
+
+def test_compare_absent_path_is_unavailable_not_unchanged() -> None:
+    path = f"repos/owner/repo/compare/{H1}...{H2}"
+    many = FakeGitHub(
+        rest={
+            path: {
+                "merge_base_commit": {"sha": H1},
+                "files": [
+                    {"filename": f"other{n}.py", "patch": "@@ -1 +1 @@\n-a\n+b"} for n in range(300)
+                ],
+            }
+        }
+    )
+    assert compare_hunks(many, "owner/repo", H1, H2, "src/z.py") is None
+
+
+def test_renamed_file_is_not_treated_as_having_left_the_diff() -> None:
+    from rvw.threads import renamed_paths
+
+    head_diff = (
+        "diff --git a/old.py b/new.py\nsimilarity index 90%\nrename from old.py\nrename to new.py\n"
+    )
+    assert renamed_paths(head_diff) == frozenset({"old.py"})
+    item = gone(path="old.py", commit=OTHER)
+    plan = reconcile_threads(
+        [item],
+        [],
+        context(
+            changed_paths=frozenset({"new.py"}),
+            renamed_from=renamed_paths(head_diff),
+            diff_hunks=lambda *_: None,
+        ),
+    )
+    assert plan.outcomes == {"T": "skipped_unverified"}
+
+
+def test_withheld_supersession_falls_back_to_reuse_and_suppresses_the_repost() -> None:
+    old = thread(
+        "T-old",
+        path="c.py",
+        rule="r/o",
+        lane="correctness",
+        fp=fingerprint("r/o", "c.py", "c"),
+        original_line=3,
+        outdated=True,
+    )
+    finding = candidate("C-old", path="c.py", line=30, rule="r/o", evidence="c")
+    for ctx in (context(degraded=True), context(resolve_on_fix=False)):
+        plan = reconcile_threads([old], [finding], ctx)
+        assert plan.reused == {"C-old": "T-old"} and plan.supersede == [] and plan.post_inline == []
+        assert plan.outcomes["T-old"] == "reused"
+    engaged = thread(
+        "T-old",
+        path="c.py",
+        rule="r/o",
+        lane="correctness",
+        fp=fingerprint("r/o", "c.py", "c"),
+        original_line=3,
+        outdated=True,
+        engaged=True,
+    )
+    plan = reconcile_threads([engaged], [finding], context())
+    assert plan.reused == {"C-old": "T-old"} and plan.post_inline == []
+
+
+def test_resolved_predecessor_does_not_disable_the_fingerprint_fast_path() -> None:
+    fp = fingerprint("r/x", "a.py", "e")
+    threads = [
+        thread(
+            "T-old",
+            path="a.py",
+            rule="r/x",
+            lane="correctness",
+            fp=fp,
+            original_line=3,
+            resolved=True,
+        ),
+        thread(
+            "T-new", path="a.py", rule="r/x", lane="correctness", fp=fp, original_line=20, line=20
+        ),
+        thread(
+            "T-other",
+            path="a.py",
+            rule="r/x",
+            lane="correctness",
+            fp="9" * 16,
+            original_line=40,
+            line=40,
+        ),
+    ]
+    plan = reconcile_threads(
+        threads, [candidate("C", path="a.py", line=20, rule="r/x", evidence="e")], context()
+    )
+    assert plan.reused == {"C": "T-new"}
+    assert "T-old" not in plan.outcomes or plan.outcomes["T-old"] == "skipped_resolved"
+    assert plan.outcomes["T-other"] == "skipped_unverified"

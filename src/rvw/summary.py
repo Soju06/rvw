@@ -288,6 +288,7 @@ ReviewEventName = Literal["COMMENT", "REQUEST_CHANGES", "APPROVE"]
 PublishPolicySourceName = Literal["default", "repository", "explicit"]
 EventClampReason = Literal[
     "no_verdict",
+    "no_adjudication",
     "degraded",
     "login_unknown",
     "read_failed",
@@ -299,6 +300,7 @@ ThreadsSkippedReason = Literal[
     "read_failed",
     "degraded",
     "forbidden",
+    "write_failed",
     "disabled_by_policy",
     "not_planned",
 ]
@@ -325,6 +327,7 @@ class PublishFacts(ContractModel):
     threads_skipped_unverified: list[str] = Field(default_factory=list)
     threads_skipped_uncovered: list[str] = Field(default_factory=list)
     threads_skipped_missing: list[str] = Field(default_factory=list)
+    threads_skipped_write_failed: list[str] = Field(default_factory=list)
     threads_skipped_reason: ThreadsSkippedReason | None = None
 
 

@@ -202,6 +202,16 @@ def repository_policy_from_contents(raw: object) -> AutoPolicy | None:
     return validate_policy(yaml.safe_load(text))
 
 
+def packaged_policy() -> EffectivePolicy:
+    """The packaged default policy, used when no trustworthy source is reachable."""
+
+    resource_path = "resources/policies/auto-default.yaml"
+    default = files("rvw").joinpath(resource_path).read_text(encoding="utf-8")
+    return EffectivePolicy(
+        validate_policy(yaml.safe_load(default)), "package", f"rvw:{resource_path}"
+    )
+
+
 def publish_policy_source(source: str) -> PublishPolicySource:
     """Collapse effective-policy provenance to the recorded ``publish.policy_source``."""
 
@@ -356,6 +366,7 @@ __all__ = [
     "ThreadPolicy",
     "evaluate",
     "load_policy",
+    "packaged_policy",
     "publish_policy_source",
     "repository_policy_from_contents",
     "resolve_auto_policy",

@@ -124,6 +124,7 @@
             {
               "enum": [
                 "no_verdict",
+                "no_adjudication",
                 "degraded",
                 "login_unknown",
                 "read_failed",
@@ -230,6 +231,13 @@
           "title": "Threads Skipped Missing",
           "type": "array"
         },
+        "threads_skipped_write_failed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threads Skipped Write Failed",
+          "type": "array"
+        },
         "threads_skipped_reason": {
           "anyOf": [
             {
@@ -238,6 +246,7 @@
                 "read_failed",
                 "degraded",
                 "forbidden",
+                "write_failed",
                 "disabled_by_policy",
                 "not_planned"
               ],

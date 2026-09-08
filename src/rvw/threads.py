@@ -343,6 +343,8 @@ class ReconciliationContext:
     # ``None`` means the new head's changed paths are unknown; a thread then never counts
     # as having left the diff.
     changed_paths: frozenset[str] | None = frozenset()
+    # Old names of files the head diff renamed; a thread on one has not left the diff.
+    renamed_from: frozenset[str] = frozenset()
     excluded_paths: frozenset[str] = frozenset()
     head_hunks: Sequence[Hunk] = ()
     uncovered: Mapping[str, frozenset[str]] = field(default_factory=dict)
@@ -386,6 +388,15 @@ def map_old_line(hunks: Sequence[Hunk], line: int) -> LineMapping:
     return LineMapping("mapped", line + offset)
 
 
+_RENAME_FROM = re.compile(r"^rename from (.+)$", re.M)
+
+
+def renamed_paths(diff: str) -> frozenset[str]:
+    """Old names of files a unified diff renames (``rename from`` headers)."""
+
+    return frozenset(match.group(1).strip() for match in _RENAME_FROM.finditer(diff))
+
+
 def diff_hunks_from_text(diff: str, path: str) -> list[Hunk]:
     """Hunks of one unified diff restricted to ``path``."""
 
@@ -427,7 +438,9 @@ def compare_hunks(
                 return None
             diff = f"--- a/{path}\n+++ b/{filename}\n{patch}\n"
             return diff_hunks_from_text(diff, filename)
-    return []
+    # The compare list is capped at 300 files with no truncation flag, and the provider is
+    # only consulted for outdated threads, whose file did change: absence is not evidence.
+    return None
 
 
 def local_hunks(cwd: Path, base: str, head: str, path: str) -> list[Hunk] | None:
@@ -442,7 +455,19 @@ def local_hunks(cwd: Path, base: str, head: str, path: str) -> list[Hunk] | None
                 capture_output=True,
             )
         diff = subprocess.run(
-            ["git", "diff", f"{base}..{head}", "--", path],
+            [
+                "git",
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-relative",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                f"{base}..{head}",
+                "--",
+                f":(top,literal){path}",
+            ],
             cwd=cwd,
             check=True,
             capture_output=True,
@@ -450,7 +475,11 @@ def local_hunks(cwd: Path, base: str, head: str, path: str) -> list[Hunk] | None
         ).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
-    return diff_hunks_from_text(diff, path)
+    hunks = diff_hunks_from_text(diff, path)
+    if diff.strip() and not hunks:
+        # Non-empty output we cannot parse (binary, mode-only, unknown driver): unavailable.
+        return None
+    return hunks
 
 
 def diff_provider(
@@ -513,7 +542,11 @@ def _resolution_outcome(
         return "skipped_human_reply"
     if not context.lane_valid.get(marker.lane_id, False):
         return "skipped_lane_invalid"
-    left_the_diff = context.changed_paths is not None and thread.path not in context.changed_paths
+    left_the_diff = (
+        context.changed_paths is not None
+        and thread.path not in context.changed_paths
+        and thread.path not in context.renamed_from
+    )
     changed = thread.is_outdated or position.kind == "deleted" or position.touched
     if not (changed or left_the_diff):
         return "skipped_unverified"
@@ -554,12 +587,16 @@ def reconcile_threads(
     ]
     pending = list(candidates)
     matched: dict[str, str] = {}
-    # Step 1: unique fingerprint on the same path.
-    thread_fps: dict[tuple[str, str], list[ReviewThread]] = {}
+    # Step 1: unique fingerprint on the same path. Open threads own a fingerprint; a resolved
+    # thread matches only when no open thread carries it, so a superseded thread does not
+    # disable the fast path for its successor.
+    open_fps: dict[tuple[str, str], list[ReviewThread]] = {}
+    resolved_fps: dict[tuple[str, str], list[ReviewThread]] = {}
     for thread in own:
         marker = thread.marker
         assert marker is not None
-        thread_fps.setdefault((thread.path, marker.fingerprint), []).append(thread)
+        bucket = resolved_fps if thread.is_resolved else open_fps
+        bucket.setdefault((thread.path, marker.fingerprint), []).append(thread)
     candidate_fps: dict[tuple[str, str], list[Candidate]] = {}
     for candidate in pending:
         candidate_fps.setdefault((candidate.path, candidate.fingerprint), []).append(candidate)
@@ -568,7 +605,10 @@ def reconcile_threads(
         marker = thread.marker
         assert marker is not None
         key = (thread.path, marker.fingerprint)
-        same_threads = thread_fps[key]
+        if thread.is_resolved:
+            same_threads = [] if key in open_fps else resolved_fps[key]
+        else:
+            same_threads = open_fps[key]
         same_candidates = candidate_fps.get(key, [])
         if len(same_threads) == 1 and len(same_candidates) == 1:
             candidate = same_candidates[0]
@@ -678,19 +718,27 @@ def reconcile_threads(
             del plan.reused[key]
             plan.outcomes.pop(thread.id, None)
             continue
-        if thread.is_outdated and candidate.inline and candidate.line is not None:
+        if (
+            thread.is_outdated
+            and candidate.inline
+            and candidate.line is not None
+            and context.resolve_on_fix
+            and not context.degraded
+            and not thread.human_engaged
+        ):
             plan.outcomes[thread.id] = "superseded"
             del plan.reused[key]
-            if context.resolve_on_fix and not context.degraded and not thread.human_engaged:
-                plan.supersede.append(
-                    Supersession(
-                        thread_id=thread.id,
-                        candidate_key=candidate.key,
-                        path=candidate.path,
-                        line=candidate.line,
-                    )
+            plan.supersede.append(
+                Supersession(
+                    thread_id=thread.id,
+                    candidate_key=candidate.key,
+                    path=candidate.path,
+                    line=candidate.line,
                 )
+            )
             continue
+        # Reused (including an outdated thread whose supersession is withheld): the finding
+        # stays in the body and is not posted inline again.
         if candidate.inline and key not in plan.suppressed_inline:
             plan.suppressed_inline.append(key)
     for key, thread_id in matched.items():
@@ -923,6 +971,7 @@ __all__ = [
     "parse_review_marker",
     "read_review_threads",
     "reconcile_threads",
+    "renamed_paths",
     "reply_to_thread",
     "resolve_thread",
     "strip_markers",

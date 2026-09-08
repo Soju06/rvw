@@ -90,9 +90,12 @@ from rvw.pipeline import (
 from rvw.policy import (
     AutoPolicy,
     PolicyNotFound,
+    PublishPolicy,
     PublishPolicyInvalid,
     PublishPolicySource,
+    ThreadPolicy,
     evaluate,
+    packaged_policy,
     publish_policy_source,
     repository_policy_from_contents,
     resolve_auto_policy,
@@ -764,11 +767,21 @@ async def _review_pipeline(
     no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
 ) -> None:
     resolved_target: ResolvedTarget | None = None
+    selected: _PublicationPolicy | None = None
     if publish:
         resolved_target = _resolve_cli_target(target_spec)
         if resolved_target.kind != "pr":
             _error_console.print("--publish requires a PR target", markup=False)
             raise typer.Exit(EXIT_USER_ERROR)
+        # A policy fault must fail before any lane is dispatched.
+        try:
+            effective = resolve_auto_policy(resolved_target, cwd=Path.cwd(), allow_external=False)
+        except (ValueError, yaml.YAMLError) as exc:
+            _error_console.print(_policy_fault(exc), markup=False)
+            raise typer.Exit(EXIT_USER_ERROR) from exc
+        selected = _PublicationPolicy(
+            effective.policy, publish_policy_source(effective.source), True
+        )
     try:
         artifacts = await _execute_pipeline(
             target_spec=target_spec,
@@ -811,13 +824,18 @@ async def _review_pipeline(
     payload_path: Path | None = None
     if artifacts.target.kind == "pr" and artifacts.target.pr_number is not None:
         github: GhCliClient | None = GhCliClient() if publish else None
-        try:
-            selected = _publication_policy(
-                artifacts.run, artifacts.target, cwd=Path.cwd(), client=github
+        if selected is None:
+            try:
+                selected = _publication_policy(artifacts.run, artifacts.target, cwd=Path.cwd())
+            except (ValueError, yaml.YAMLError) as exc:
+                # A dry run exercises no policy: warn and plan with the packaged default.
+                _error_console.print(_policy_fault(exc), markup=False)
+                default = packaged_policy()
+                selected = _PublicationPolicy(default.policy, "default", False)
+        if publish:
+            artifacts.run.save_policy(
+                resolve_auto_policy(artifacts.target, cwd=Path.cwd(), allow_external=False)
             )
-        except (PublishPolicyInvalid, ValidationError, yaml.YAMLError) as exc:
-            _error_console.print(f"publish_policy_invalid: {exc}", markup=False)
-            raise typer.Exit(EXIT_USER_ERROR) from exc
         publication = publish_review(
             allow_language_fallback=allow_language_fallback,
             run=artifacts.run,
@@ -1301,6 +1319,7 @@ async def _gate_pipeline(
     plan: GatePlan
     inherited_verdict: GateVerdict | None = None
     republish_verdict: GateVerdict | None = None
+    gate_publication: _PublicationPolicy | None = None
     if target_spec is not None:
         try:
             resolved = _resolve_cli_target(target_spec)
@@ -1336,6 +1355,15 @@ async def _gate_pipeline(
                     head_sha=resolved.head_sha,
                     destination=Path(temporary_root) / "checkout",
                 )
+                # The publish policy is read from the captured base before any lane runs.
+                try:
+                    gate_policy = resolve_auto_policy(resolved, cwd=checkout, allow_external=False)
+                except (ValueError, yaml.YAMLError) as exc:
+                    _error_console.print(_policy_fault(exc), markup=False)
+                    raise typer.Exit(EXIT_USER_ERROR) from exc
+                gate_publication = _PublicationPolicy(
+                    gate_policy.policy, publish_policy_source(gate_policy.source), True
+                )
                 executed = await _execute_pipeline(
                     target_spec=target_spec,
                     repo_dir=checkout,
@@ -1353,13 +1381,6 @@ async def _gate_pipeline(
                     no_output_seconds=no_output_seconds,
                 )
                 if executed is not None:
-                    try:
-                        gate_policy = resolve_auto_policy(
-                            resolved, cwd=checkout, allow_external=False
-                        )
-                    except (PublishPolicyInvalid, ValidationError, yaml.YAMLError) as exc:
-                        _error_console.print(f"publish_policy_invalid: {exc}", markup=False)
-                        raise typer.Exit(EXIT_USER_ERROR) from exc
                     executed.run.save_policy(gate_policy)
             if executed is None:
                 raise RuntimeError("gate review stopped before report generation")
@@ -1696,7 +1717,16 @@ async def _gate_pipeline(
         republish=False,
         json_output=json_output,
         allow_language_fallback=allow_language_fallback,
+        policy=gate_publication,
     )
+
+
+def _policy_fault(exc: Exception) -> str:
+    """Name a publication-time policy fault: publish/threads faults keep their own reason."""
+
+    if isinstance(exc, PublishPolicyInvalid):
+        return str(exc)
+    return f"invalid_policy: {exc}"
 
 
 @dataclass(frozen=True)
@@ -1838,8 +1868,8 @@ def _publish_gate_verdict(
         selected = policy or _publication_policy(
             artifacts.run, target, cwd=Path.cwd(), client=github
         )
-    except (PublishPolicyInvalid, ValidationError, yaml.YAMLError) as exc:
-        detail = _redact_subprocess_diagnostic(f"publish_policy_invalid: {exc}")
+    except (ValueError, yaml.YAMLError) as exc:
+        detail = _redact_subprocess_diagnostic(_policy_fault(exc))
         _save_publish_status(
             artifacts.run,
             attempted_at=attempted_at,
@@ -2237,6 +2267,15 @@ def _run_command(
                         stage = "configuration"
                         raise ValueError("github-review publication requires a PR target")
                     github = GhCliClient()
+                    # The deprecated external file may still decide whether to publish and
+                    # the PASS/BLOCK verdict, never the review event or thread handling.
+                    publication_policy = (
+                        effective.policy
+                        if effective.source != "external"
+                        else effective.policy.model_copy(
+                            update={"publish": PublishPolicy(), "threads": ThreadPolicy()}
+                        )
+                    )
                     publication = publish_review(
                         allow_language_fallback=(
                             allow_language_fallback or effective.policy.allow_language_fallback
@@ -2251,9 +2290,9 @@ def _run_command(
                         identity=resolve_own_identity(client=github),
                         github=github,
                         verdict=decision.verdict,
-                        publish_policy=effective.policy.publish,
+                        publish_policy=publication_policy.publish,
                         policy_source=publish_policy_source(effective.source),
-                        thread_policy=effective.policy.threads,
+                        thread_policy=publication_policy.threads,
                         cwd=Path.cwd(),
                     )
                     process.language_fallback_used = publication.language_fallback_used
@@ -2606,8 +2645,8 @@ def publish_command(
     github = GhCliClient()
     try:
         selected = _publication_policy(run, target, cwd=Path.cwd(), client=github)
-    except (PublishPolicyInvalid, ValidationError, yaml.YAMLError) as exc:
-        _error_console.print(f"publish_policy_invalid: {exc}", markup=False)
+    except (ValueError, yaml.YAMLError) as exc:
+        _error_console.print(_policy_fault(exc), markup=False)
         raise typer.Exit(EXIT_USER_ERROR) from exc
     decision = evaluate(selected.policy, merged, outcome)
     try:

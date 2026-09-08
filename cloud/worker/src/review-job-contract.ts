@@ -224,7 +224,7 @@ export const PUBLISH_THREAD_LISTS = [
   "resolved_thread_ids", "reused_thread_ids", "superseded_thread_ids", "threads_ambiguous",
   "threads_skipped_lane_invalid", "threads_skipped_resolved", "threads_skipped_same_head",
   "threads_skipped_human_reply", "threads_skipped_unverified", "threads_skipped_uncovered",
-  "threads_skipped_missing",
+  "threads_skipped_missing", "threads_skipped_write_failed",
 ] as const;
 /** Python publication facts (summary.publish); carried verbatim into the check text. */
 export interface PublishFacts extends Record<(typeof PUBLISH_THREAD_LISTS)[number], string[]>,

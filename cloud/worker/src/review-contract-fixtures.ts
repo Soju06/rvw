@@ -18,7 +18,8 @@ export function publishFactsFixture(overrides: Record<string, unknown> = {}) {
     dismissed_review_ids: [], dismiss_failed_review_ids: [], resolved_thread_ids: [], reused_thread_ids: [],
     superseded_thread_ids: [], threads_ambiguous: [], threads_skipped_lane_invalid: [], threads_skipped_resolved: [],
     threads_skipped_same_head: [], threads_skipped_human_reply: [], threads_skipped_unverified: [],
-    threads_skipped_uncovered: [], threads_skipped_missing: [], threads_skipped_reason: null, ...overrides};
+    threads_skipped_uncovered: [], threads_skipped_missing: [], threads_skipped_write_failed: [],
+    threads_skipped_reason: null, ...overrides};
 }
 export function summaryFixture(overrides: Record<string, unknown> = {}) {
   return {schema_version: 1, presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null}, lanes: {dispatched: 1, valid: 1, uncovered: 0, uncovered_regions: 0},

@@ -793,3 +793,154 @@ def test_publication_policy_prefers_the_base_ref_then_the_api_then_the_unverifie
     fresh = RunStore(tmp_path / "fresh").create(target)
     none = cli_module._publication_policy(fresh, target, cwd=elsewhere)
     assert (none.policy.publish, none.source, none.verified) == (PublishPolicy(), "default", True)
+
+
+def test_write_failures_after_the_review_post_are_recorded_never_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_publish_threads import REPLIED, fixture_threads, threads_page
+
+    from rvw.publish import GitHubGraphQLError
+
+    run, merged, outcome = prepared_run(tmp_path)
+    calls: list[str] = []
+    post_recorder(monkeypatch, calls)
+    github = github_with(
+        [
+            threads_page(fixture_threads()),
+            GitHubGraphQLError("rate limited", types=["RATE_LIMITED"]),  # resolve T-fixed
+            REPLIED,
+            GitHubGraphQLError("gh: network down", types=[]),  # resolve T-old
+        ]
+    )
+    result = publish_review(
+        run=run,
+        repo="owner/repo",
+        pr_number=42,
+        report_md="",
+        merged=merged,
+        outcome=outcome,
+        execute=True,
+        identity=BOT,
+        github=github,
+        verdict="BLOCK",
+        publish_policy=REQUEST_CHANGES,
+        policy_source="repository",
+    )
+    assert calls == ["POST review"] and result.event == "REQUEST_CHANGES"
+    assert result.facts is not None
+    assert result.facts.resolved_thread_ids == [] and result.facts.superseded_thread_ids == []
+    assert result.facts.threads_skipped_write_failed == ["T-fixed", "T-old"]
+    assert result.facts.threads_skipped_reason == "write_failed"
+    summary = ExecutionSummary.model_validate_json((run.dir / "summary.json").read_text())
+    assert summary.publish.threads_skipped_write_failed == ["T-fixed", "T-old"]
+    # a transport failure while dismissing is recorded too, and the facts still land
+    run2, merged2, outcome2 = prepared_run(tmp_path / "dismiss", empty=True)
+    reviews: dict[str, object] = {REVIEWS_PATH: [own_review(11, head=H1, event="REQUEST_CHANGES")]}
+    github = github_with([empty_threads()], rest=reviews)
+    github.rest_map[f"{PR_PATH}/reviews/11/dismissals"] = OSError("connection reset")
+    github.rest_map[f"{PR_PATH}/reviews/11"] = OSError("connection reset")
+    result = publish_review(
+        run=run2,
+        repo="owner/repo",
+        pr_number=42,
+        report_md="",
+        merged=merged2,
+        outcome=outcome2,
+        execute=True,
+        identity=BOT,
+        github=github,
+        verdict="PASS",
+        publish_policy=DISMISS,
+        policy_source="repository",
+    )
+    assert result.facts is not None and result.facts.dismiss_failed_review_ids == [11]
+    assert ExecutionSummary.model_validate_json(
+        (run2.dir / "summary.json").read_text()
+    ).publish.dismiss_failed_review_ids == [11]
+
+
+def test_unverified_snapshot_disables_resolution_and_supersession(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_publish_threads import fixture_threads, threads_page
+
+    run, merged, outcome = prepared_run(tmp_path)
+    post_recorder(monkeypatch, [])
+    github = github_with([threads_page(fixture_threads())])
+    result = publish_review(
+        run=run,
+        repo="owner/repo",
+        pr_number=42,
+        report_md="",
+        merged=merged,
+        outcome=outcome,
+        execute=True,
+        identity=BOT,
+        github=github,
+        verdict="BLOCK",
+        publish_policy=REQUEST_CHANGES,
+        policy_source="repository",
+        policy_verified=False,
+    )
+    assert writes(github) == ["threads"]
+    assert result.facts is not None
+    assert (
+        result.facts.event == "COMMENT"
+        and result.facts.event_clamped_reason == "snapshot_unverified"
+    )
+    assert result.facts.resolved_thread_ids == [] and result.facts.superseded_thread_ids == []
+    assert sorted(result.facts.reused_thread_ids) == ["T-old", "T-same"]
+    assert result.facts.threads_skipped_reason == "degraded"
+
+
+def test_missing_adjudication_never_approves_or_requests_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, merged, _outcome = prepared_run(tmp_path)
+    (run.dir / "outcome.json").unlink()
+    payloads = post_recorder(monkeypatch, [])
+    result = publish_review(
+        run=run,
+        repo="owner/repo",
+        pr_number=42,
+        report_md="",
+        merged=merged,
+        outcome=None,
+        execute=True,
+        identity=BOT,
+        github=github_with([empty_threads()]),
+        verdict="PASS",
+        publish_policy=APPROVE,
+        policy_source="repository",
+    )
+    assert payloads[0]["event"] == "COMMENT"
+    assert result.facts is not None and result.facts.event_clamped_reason == "no_adjudication"
+
+
+def test_clamp_reason_is_recorded_even_when_the_policy_event_is_comment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, merged, outcome = prepared_run(tmp_path, empty=True, degraded=True)
+    post_recorder(monkeypatch, [])
+    github = github_with(
+        [empty_threads()], rest={REVIEWS_PATH: [own_review(11, head=H1, event="REQUEST_CHANGES")]}
+    )
+    result = publish_review(
+        run=run,
+        repo="owner/repo",
+        pr_number=42,
+        report_md="",
+        merged=merged,
+        outcome=outcome,
+        execute=True,
+        identity=BOT,
+        github=github,
+        verdict="PASS",
+        publish_policy=DISMISS,
+        policy_source="repository",
+    )
+    assert result.facts is not None and result.facts.event_clamped_reason == "degraded"
+    assert result.facts.dismissed_review_ids == [] and not any(
+        "/dismissals" in call[0] for call in github.calls
+    )

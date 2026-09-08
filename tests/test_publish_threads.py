@@ -429,10 +429,12 @@ def test_degraded_run_reuses_but_never_resolves(
         github=github,
     )
     assert writes(github) == ["threads"]
+    # the outdated matched thread is reused rather than superseded, so nothing is re-posted
     posted = {(c["path"], c["line"]) for c in comments_of(payloads[0])}
-    assert posted == {("src/a.py", 20), ("src/b.py", 4)}
+    assert posted == {("src/a.py", 20)}
     assert result.facts is not None
     assert result.facts.resolved_thread_ids == [] and result.facts.superseded_thread_ids == []
+    assert sorted(result.facts.reused_thread_ids) == ["T-old", "T-same"]
     assert result.facts.threads_skipped_reason == "degraded"
 
 
