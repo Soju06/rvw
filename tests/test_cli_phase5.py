@@ -250,7 +250,7 @@ def test_allow_approve_is_placeholder_and_payload_remains_comment(
         ],
     )
     assert result.exit_code == 0, result.stdout
-    assert "approve publishing is not implemented" in result.stderr
+    assert "--allow-approve has no effect" in result.stderr
     assert payloads and {payload["event"] for payload in payloads} == {"COMMENT"}
 
 

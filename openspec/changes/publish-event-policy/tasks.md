@@ -12,9 +12,9 @@
 
 ## 3. Select the review event from policy, once per head, and dismiss on pass
 
-- [ ] 3.1 Add failing tests: BLOCK + `request_changes` posts REQUEST_CHANGES; PASS + opted-in `approve` posts APPROVE with body only when there is prose; PASS + `none` without prose posts nothing; degraded and language-fallback runs never escalate; `--event comment` downgrades and `--event request_changes` over a `comment` policy is rejected; a second REQUEST_CHANGES on the same head is skipped as `duplicate_review_same_head`; dismissal touches exactly rvw's own REQUEST_CHANGES and treats 422 as done; summary and payload carry the recorded fields.
-- [ ] 3.2 Implement event selection, `commit_id` pinning, the GitHub client seam (REST and GraphQL through `gh api`), own-login resolution (`RVW_GITHUB_LOGIN`, then `gh api user`), same-head idempotency, dismissal, `PublishFacts` on `ExecutionSummary` with the regenerated schema resource, the `policy.json` snapshot, `rvw publish --event`, and the `run`/`auto`/`review`/`gate` call sites.
-- [ ] 3.3 Amend the reporting, pr-gate, and operation-modes main specs and contexts, README, and container docs, then commit feat(reporting): select the review event from policy, idempotent per head, dismiss on pass.
+- [x] 3.1 Add failing tests: BLOCK + `request_changes` posts REQUEST_CHANGES; PASS + opted-in `approve` posts APPROVE with body only when there is prose; PASS + `none` without prose posts nothing; degraded and language-fallback runs never escalate; `--event comment` downgrades and `--event request_changes` over a `comment` policy is rejected; a second REQUEST_CHANGES on the same head is skipped as `duplicate_review_same_head`; dismissal touches exactly rvw's own REQUEST_CHANGES and treats 422 as done; summary and payload carry the recorded fields.
+- [x] 3.2 Implement event selection, `commit_id` pinning, the GitHub client seam (REST and GraphQL through `gh api`), own-login resolution (`RVW_GITHUB_LOGIN`, then `gh api user`), same-head idempotency, dismissal, `PublishFacts` on `ExecutionSummary` with the regenerated schema resource, the `policy.json` snapshot, `rvw publish --event`, and the `run`/`auto`/`review`/`gate` call sites.
+- [x] 3.3 Amend the reporting, pr-gate, and operation-modes main specs and contexts, README, and container docs, then commit feat(reporting): select the review event from policy, idempotent per head, dismiss on pass.
 
 ## 4. Rename the App publish mode and surface publish and thread facts
 

@@ -184,6 +184,24 @@ def validate_policy(raw: object) -> AutoPolicy:
         raise
 
 
+def repository_policy_from_contents(raw: object) -> AutoPolicy | None:
+    """Validate a repository ``auto.yaml`` fetched through the GitHub contents API.
+
+    ``raw`` is the decoded response; ``None`` means the file is absent. Malformed content
+    raises like any other selected source.
+    """
+
+    import base64
+
+    if not isinstance(raw, Mapping):
+        return None
+    content = raw.get("content")
+    if raw.get("type") != "file" or not isinstance(content, str):
+        return None
+    text = base64.b64decode("".join(content.split())).decode("utf-8")
+    return validate_policy(yaml.safe_load(text))
+
+
 def publish_policy_source(source: str) -> PublishPolicySource:
     """Collapse effective-policy provenance to the recorded ``publish.policy_source``."""
 
@@ -209,11 +227,14 @@ def resolve_auto_policy(
     cwd: Path,
     policy: str | Path = "auto",
     external_path: Path | None = None,
+    allow_external: bool = True,
 ) -> EffectivePolicy:
     """Select explicit, immutable repository, legacy external, then packaged policy.
 
     Only a missing source permits fallback. Invalid YAML or a schema violation
     in the selected source must reach the caller as an invalid configuration.
+    ``allow_external=False`` skips the deprecated external file, which publication-time
+    resolution never trusts.
     """
 
     if str(policy) != "auto":
@@ -241,7 +262,7 @@ def resolve_auto_policy(
     external = (external_path or Path("~/.hermes/review/policies/auto.yaml")).expanduser()
     if not external.is_absolute():
         external = cwd / external
-    if external.is_file():
+    if allow_external and external.is_file():
         warnings.warn(
             f"external auto policy is deprecated: {external}; "
             "move it to .rvw/policies/auto.yaml or pass --policy explicitly",
@@ -336,6 +357,7 @@ __all__ = [
     "evaluate",
     "load_policy",
     "publish_policy_source",
+    "repository_policy_from_contents",
     "resolve_auto_policy",
     "validate_policy",
 ]

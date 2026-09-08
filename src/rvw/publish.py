@@ -1,4 +1,4 @@
-"""Publish file-first reports as GitHub reviews whose inline threads live across heads.
+"""Publish file-first reports as GitHub reviews whose event and threads follow policy.
 
 Inline-anchor fallback is deliberately bulk and bounded: publication first attempts
 one review containing every inline anchor. If GitHub rejects that review with HTTP
@@ -7,10 +7,16 @@ the whole review is retried once. GitHub rejects the complete review when any on
 anchor is invalid, while per-comment probing would cost N API calls; this strategy
 is deterministic and capped at two calls.
 
-Thread reconciliation reads rvw's own earlier threads before the review is posted and
-touches them only after the review write succeeded: a finding that persists keeps its
-thread and is not posted inline again; a finding that is gone has its thread resolved when
-every fail-safe rule in :mod:`rvw.threads` holds; anything uncertain stays open.
+The review event (COMMENT, REQUEST_CHANGES, APPROVE) comes from the repository's
+``publish`` policy and the run's PASS/BLOCK verdict; anything uncertain (no verdict, a
+degraded run, language fallback, unknown identity, failed reads, an unverified policy
+snapshot) clamps to COMMENT and disables dismissal and thread resolution.
+
+Thread reconciliation reads rvw's own earlier threads and reviews before the review is
+posted and touches them only after the review write succeeded: a finding that persists
+keeps its thread and is not posted inline again; a finding that is gone has its thread
+resolved when every fail-safe rule in :mod:`rvw.threads` holds; anything uncertain stays
+open.
 """
 
 from __future__ import annotations
@@ -31,13 +37,23 @@ from rvw.hunks import parse_hunks
 from rvw.i18n import Locale, t
 from rvw.langgate import Rewriter, RuntimeRewriter, enforce_language_sync
 from rvw.merge import CollapseGroup, MergeResult
-from rvw.policy import ThreadPolicy
+from rvw.policy import PublishPolicy, PublishPolicySource, ThreadPolicy
 from rvw.presentation import PresentationConfig
-from rvw.publication import failed_lane_ids, render_publication, render_publication_item
+from rvw.publication import (
+    failed_lane_ids,
+    render_publication,
+    render_publication_item,
+    uncovered_regions,
+)
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.schema import Verdict
 from rvw.store import RunHandle, StageMissing
-from rvw.summary import PublishFacts, ThreadsSkippedReason
+from rvw.summary import (
+    EventClampReason,
+    PublicationSkipped,
+    PublishFacts,
+    ThreadsSkippedReason,
+)
 from rvw.threads import (
     Candidate,
     GitHubClient,
@@ -48,9 +64,11 @@ from rvw.threads import (
     ReviewEvent,
     ReviewThread,
     build_marker,
+    build_review_marker,
     diff_provider,
     fingerprint,
     graphql_error_types,
+    parse_review_marker,
     read_review_threads,
     reconcile_threads,
     reply_to_thread,
@@ -64,6 +82,25 @@ if TYPE_CHECKING:
 _HTTP_STATUS = re.compile(r"(?:HTTP\s+|status(?: code)?[=: ]+)(?P<status>[1-5][0-9]{2})", re.I)
 _COMMIT_ID = re.compile(r"^[0-9a-f]{40}$")
 OWN_LOGIN_VARIABLE = "RVW_GITHUB_LOGIN"
+MAX_REVIEW_PAGES = 20
+
+PolicyVerdict = Literal["PASS", "BLOCK"]
+EventOverride = Literal["comment", "request_changes", "approve"]
+_OVERRIDE_EVENT: dict[str, ReviewEvent] = {
+    "comment": "COMMENT",
+    "request_changes": "REQUEST_CHANGES",
+    "approve": "APPROVE",
+}
+_EVENT_STATE: dict[ReviewEvent, Literal["commented", "changes_requested", "approved"]] = {
+    "COMMENT": "commented",
+    "REQUEST_CHANGES": "changes_requested",
+    "APPROVE": "approved",
+}
+_REST_STATE: dict[str, ReviewEvent] = {
+    "COMMENTED": "COMMENT",
+    "CHANGES_REQUESTED": "REQUEST_CHANGES",
+    "APPROVED": "APPROVE",
+}
 
 
 class PublishResult(BaseModel):
@@ -77,7 +114,7 @@ class PublishResult(BaseModel):
     state: Literal["commented", "changes_requested", "approved", "skipped"]
     language_fallback_used: bool = False
     event: ReviewEvent | None = "COMMENT"
-    skipped: str | None = None
+    skipped: PublicationSkipped | None = None
     facts: PublishFacts | None = None
 
 
@@ -102,6 +139,43 @@ class PublicationLanguageMismatch(PublishError):
 
     def __init__(self, locale: Locale) -> None:
         super().__init__(t("publish.language_mismatch", locale))
+
+
+class EventOverrideRejected(ValueError):
+    """``--event`` asked for more than the policy selected; only downgrades are allowed."""
+
+    reason = "event_override_exceeds_policy"
+
+    def __init__(self, requested: str, selected: ReviewEvent | None) -> None:
+        self.requested = requested
+        self.selected = selected
+        super().__init__(
+            f"{self.reason}: --event {requested} exceeds the policy-selected event "
+            f"{selected or 'none'}; only a downgrade to comment is permitted"
+        )
+
+
+def select_event(
+    policy: PublishPolicy,
+    verdict: PolicyVerdict | None,
+    *,
+    clamp: bool,
+    has_prose: bool,
+) -> ReviewEvent | None:
+    """Map the policy verdict to a review event; ``None`` means publish no review.
+
+    No verdict (interactive review) or any clamp yields COMMENT, today's behaviour.
+    """
+
+    if verdict is None or clamp:
+        return "COMMENT"
+    if verdict == "BLOCK":
+        return "REQUEST_CHANGES" if policy.on_block == "request_changes" else "COMMENT"
+    if policy.on_pass == "approve":
+        return "APPROVE"
+    if policy.on_pass == "none":
+        return "COMMENT" if has_prose else None
+    return "COMMENT"
 
 
 def _check_publication(
@@ -154,7 +228,7 @@ def _load_execution_summary(run_dir: Path, locale: Locale):
 
 
 def record_publish_facts(
-    run_dir: Path, facts: PublishFacts, *, publication_skipped: str | None = None
+    run_dir: Path, facts: PublishFacts, *, publication_skipped: PublicationSkipped | None = None
 ) -> None:
     """Persist what publication did into ``summary.json`` beside the language facts."""
 
@@ -162,7 +236,7 @@ def record_publish_facts(
 
     summary = _load_execution_summary(run_dir, "en")
     summary.publish = facts
-    summary.publication_skipped = publication_skipped  # type: ignore[assignment]
+    summary.publication_skipped = publication_skipped
     _write_json(run_dir / "summary.json", summary.model_dump(mode="json"))
 
 
@@ -263,6 +337,69 @@ def resolve_own_identity(
     return OwnIdentity.from_user(user) if isinstance(user, Mapping) else None
 
 
+@dataclass(frozen=True)
+class OwnReview:
+    """One review rvw posted earlier, recognised by author identity and review marker."""
+
+    id: int
+    state: str
+    head_sha: str
+    event: ReviewEvent
+
+
+def read_own_reviews(
+    client: GitHubClient, repo: str, pr_number: int, identity: OwnIdentity
+) -> list[OwnReview]:
+    """rvw's own marked reviews on the pull request, every page."""
+
+    reviews: list[OwnReview] = []
+    for page in range(1, MAX_REVIEW_PAGES + 1):
+        try:
+            data = client.rest(
+                "GET", f"repos/{repo}/pulls/{pr_number}/reviews?per_page=100&page={page}"
+            )
+        except Exception as exc:
+            raise GitHubReadError(f"reviews read failed: {exc}") from exc
+        if not isinstance(data, list):
+            raise GitHubReadError("reviews response is not a list")
+        for item in data:
+            if not isinstance(item, Mapping):
+                continue
+            marker = parse_review_marker(
+                item.get("body") if isinstance(item.get("body"), str) else None
+            )
+            review_id = item.get("id")
+            if (
+                marker is None
+                or not isinstance(review_id, int)
+                or not identity.matches_user(item.get("user"))
+            ):
+                continue
+            reviews.append(
+                OwnReview(
+                    id=review_id,
+                    state=str(item.get("state", "")),
+                    head_sha=marker.head_sha,
+                    event=marker.event,
+                )
+            )
+        if len(data) < 100:
+            return reviews
+    raise GitHubReadError("reviews pagination did not terminate")
+
+
+def read_pull_request_head(client: GitHubClient, repo: str, pr_number: int) -> str:
+    try:
+        data = client.rest("GET", f"repos/{repo}/pulls/{pr_number}")
+    except Exception as exc:
+        raise GitHubReadError(f"pull request read failed: {exc}") from exc
+    head = data.get("head") if isinstance(data, Mapping) else None
+    sha = head.get("sha") if isinstance(head, Mapping) else None
+    if not isinstance(sha, str) or _COMMIT_ID.fullmatch(sha) is None:
+        raise GitHubReadError("pull request head is missing")
+    return sha
+
+
 def _confirmed_inline_groups(
     merged: MergeResult, outcome: AdjudicationOutcome | None
 ) -> list[CollapseGroup]:
@@ -313,10 +450,20 @@ def _marker_for(candidate: Candidate) -> str | None:
         return None
 
 
-def _payload(*, body: str, comments: list[dict[str, object]] | None = None) -> dict[str, object]:
-    payload: dict[str, object] = {"event": "COMMENT", "body": body}
+def _payload(
+    *,
+    event: ReviewEvent,
+    body: str | None,
+    comments: list[dict[str, object]] | None = None,
+    commit_id: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {"event": event}
+    if body is not None:
+        payload["body"] = body
     if comments:
         payload["comments"] = comments
+    if commit_id is not None:
+        payload["commit_id"] = commit_id
     return payload
 
 
@@ -336,7 +483,8 @@ def _review_url(raw: str, *, locale: Locale = "en") -> str:
 
 def _fallback_body(body: str, comments: list[dict[str, object]], locale: Locale) -> str:
     items = [
-        f"#### `{comment['path']}:{comment['line']}`\n\n{strip_markers(str(comment['body'])).rstrip()}"
+        f"#### `{comment['path']}:{comment['line']}`\n\n"
+        f"{strip_markers(str(comment['body'])).rstrip()}"
         for comment in comments
     ]
     return (
@@ -350,20 +498,22 @@ def _fallback_body(body: str, comments: list[dict[str, object]], locale: Locale)
 
 
 @dataclass
-class _Reconciliation:
-    """Thread state gathered for one publication."""
+class _Gathered:
+    """GitHub state gathered for one publication, or the reason it was not."""
 
     plan: ReconciliationPlan | None = None
     threads: list[ReviewThread] = field(default_factory=list)
+    own_reviews: list[OwnReview] = field(default_factory=list)
+    pr_head: str | None = None
     reason: ThreadsSkippedReason | None = None
-    degraded: bool = False
+    read_failed: bool = False
 
     @property
     def suppressed(self) -> frozenset[str]:
         return frozenset(self.plan.suppressed_inline) if self.plan is not None else frozenset()
 
 
-def _reconcile(
+def _gather(
     *,
     run: RunHandle,
     repo: str,
@@ -376,16 +526,13 @@ def _reconcile(
     degraded: bool,
     attempt: bool,
     cwd: Path | None,
-) -> _Reconciliation:
-    result = _Reconciliation(degraded=degraded)
+) -> _Gathered:
+    result = _Gathered()
     if not attempt:
         result.reason = "not_planned"
         return result
     if identity is None or github is None:
         result.reason = "login_unknown"
-        return result
-    if not (thread_policy.resolve_on_fix or thread_policy.reuse_open_thread):
-        result.reason = "disabled_by_policy"
         return result
     try:
         target = run.load_target()
@@ -393,10 +540,20 @@ def _reconcile(
         result.reason = "not_planned"
         return result
     try:
-        threads = read_review_threads(github, repo, pr_number, identity)
+        result.pr_head = read_pull_request_head(github, repo, pr_number)
+        result.own_reviews = read_own_reviews(github, repo, pr_number, identity)
+        if thread_policy.resolve_on_fix or thread_policy.reuse_open_thread:
+            threads = read_review_threads(github, repo, pr_number, identity)
+        else:
+            threads = []
+            result.reason = "disabled_by_policy"
     except GitHubReadError:
         result.reason = "read_failed"
-        result.degraded = True
+        result.read_failed = True
+        result.own_reviews = []
+        result.pr_head = None
+        return result
+    if result.reason == "disabled_by_policy":
         return result
     try:
         budget = run.load_discover().budget
@@ -420,28 +577,44 @@ def _reconcile(
     return result
 
 
-def _plan_payload(plan: ReconciliationPlan) -> dict[str, object]:
-    return {
-        "resolve": list(plan.resolve),
-        "supersede": [item.model_dump(mode="json") for item in plan.supersede],
-        "reuse": dict(plan.reused),
-        "suppressed_inline": list(plan.suppressed_inline),
-        "ambiguous": list(plan.ambiguous),
-        "skipped": {
-            name: getattr(plan, name)
-            for name in (
-                "skipped_resolved",
-                "skipped_lane_invalid",
-                "skipped_same_head",
-                "skipped_human_reply",
-                "skipped_unverified",
-                "skipped_uncovered",
-                "skipped_degraded",
-                "skipped_policy",
-            )
-            if getattr(plan, name)
-        },
+def _plan_payload(
+    plan: ReconciliationPlan | None,
+    *,
+    event: ReviewEvent | None,
+    skipped: PublicationSkipped | None,
+    dismiss: Sequence[int],
+) -> dict[str, object]:
+    planned: dict[str, object] = {
+        "event": event,
+        "publication_skipped": skipped,
+        "dismiss": list(dismiss),
     }
+    if plan is None:
+        return planned
+    planned.update(
+        {
+            "resolve": list(plan.resolve),
+            "supersede": [item.model_dump(mode="json") for item in plan.supersede],
+            "reuse": dict(plan.reused),
+            "suppressed_inline": list(plan.suppressed_inline),
+            "ambiguous": list(plan.ambiguous),
+            "skipped": {
+                name: getattr(plan, name)
+                for name in (
+                    "skipped_resolved",
+                    "skipped_lane_invalid",
+                    "skipped_same_head",
+                    "skipped_human_reply",
+                    "skipped_unverified",
+                    "skipped_uncovered",
+                    "skipped_degraded",
+                    "skipped_policy",
+                )
+                if getattr(plan, name)
+            },
+        }
+    )
+    return planned
 
 
 def _facts_from_plan(
@@ -508,6 +681,59 @@ def _apply_thread_writes(
             facts.superseded_thread_ids.append(supersession.thread_id)
 
 
+def _dismissable(reviews: Sequence[OwnReview], head_sha: str) -> list[OwnReview]:
+    """rvw's own REQUEST_CHANGES reviews on earlier heads; never one on the current head."""
+
+    return [
+        review
+        for review in reviews
+        if review.state == "CHANGES_REQUESTED" and review.head_sha != head_sha
+    ]
+
+
+def _dismiss_reviews(
+    *,
+    github: GitHubClient,
+    repo: str,
+    pr_number: int,
+    reviews: Sequence[OwnReview],
+    message: str,
+    facts: PublishFacts,
+) -> None:
+    for review in reviews:
+        path = f"repos/{repo}/pulls/{pr_number}/reviews/{review.id}"
+        try:
+            github.rest("PUT", f"{path}/dismissals", {"message": message, "event": "DISMISS"})
+        except PublishError:
+            # 422 covers "already dismissed" but also every other validation failure; only
+            # GitHub's own state says whether the block is really lifted.
+            try:
+                current = github.rest("GET", path)
+            except PublishError:
+                current = None
+            state = current.get("state") if isinstance(current, Mapping) else None
+            if state == "DISMISSED":
+                facts.dismissed_review_ids.append(review.id)
+            else:
+                facts.dismiss_failed_review_ids.append(review.id)
+            continue
+        facts.dismissed_review_ids.append(review.id)
+
+
+def _duplicate_on_head(
+    reviews: Sequence[OwnReview], head_sha: str, event: ReviewEvent | None, new_inline: bool
+) -> bool:
+    on_head = [review for review in reviews if review.head_sha == head_sha]
+    if event == "REQUEST_CHANGES":
+        return any(
+            review.event == "REQUEST_CHANGES" or review.state == "CHANGES_REQUESTED"
+            for review in on_head
+        )
+    if event is None:
+        return False
+    return not new_inline and any(review.event == event for review in on_head)
+
+
 def publish_review(
     *,
     run: RunHandle,
@@ -524,14 +750,20 @@ def publish_review(
     allow_language_fallback: bool = False,
     identity: OwnIdentity | None = None,
     github: GitHubClient | None = None,
+    verdict: PolicyVerdict | None = None,
+    publish_policy: PublishPolicy | None = None,
+    policy_source: PublishPolicySource | None = None,
+    policy_verified: bool = True,
     thread_policy: ThreadPolicy | None = None,
+    event_override: EventOverride | None = None,
     plan_threads: bool = False,
     cwd: Path | None = None,
 ) -> PublishResult:
     """Build or execute one GitHub review from persisted run artifacts.
 
-    Without ``identity`` and ``github`` no existing thread is read or touched. With them,
-    reconciliation runs when executing or when ``plan_threads`` asks a dry run to plan.
+    Without ``identity`` and ``github`` no existing thread or review is read or touched
+    and the event clamps to COMMENT. With them, reconciliation and the same-head and
+    dismissal reads run when executing or when ``plan_threads`` asks a dry run to plan.
     """
 
     del report_md
@@ -539,6 +771,7 @@ def publish_review(
     if locale is not None:
         presentation = presentation.model_copy(update={"locale": locale})
     locale = presentation.locale
+    publish_policy = publish_policy or PublishPolicy()
     thread_policy = thread_policy or ThreadPolicy()
     inline_groups = _confirmed_inline_groups(merged, outcome)
     try:
@@ -549,9 +782,13 @@ def publish_review(
         summary = run.load_summary()
     except StageMissing:
         summary = None
+    try:
+        head_sha: str | None = run.load_target().head_sha
+    except (StageMissing, ValueError, OSError):
+        head_sha = None
     degraded = summary is None or summary.status.value in {"failed", "degraded"}
     candidates = _candidates(merged, outcome, frozenset(group.key for group in inline_groups))
-    reconciliation = _reconcile(
+    gathered = _gather(
         run=run,
         repo=repo,
         pr_number=pr_number,
@@ -564,7 +801,7 @@ def publish_review(
         attempt=execute or plan_threads,
         cwd=cwd,
     )
-    posted_groups = [group for group in inline_groups if group.key not in reconciliation.suppressed]
+    posted_groups = [group for group in inline_groups if group.key not in gathered.suppressed]
     posted_keys = frozenset(group.key for group in posted_groups)
     body = render_publication(
         merged=merged,
@@ -587,17 +824,19 @@ def publish_review(
             text = f"{text}\n\n{marker}"
         comments.append({"path": group.file, "line": group.line, "side": "RIGHT", "body": text})
     fallback_body = _fallback_body(body, comments, locale)
-    plan = reconciliation.plan
+    plan = gathered.plan
     replies = {
         item.thread_id: t("publish.superseded", locale, path=item.path, line=item.line)
         for item in (plan.supersede if plan is not None else [])
     }
     reply_ids = list(replies)
+    dismiss_message = t("publish.dismissed", locale)
     documents, fallback_used = _check_publication(
         [
             body,
             *(str(comment["body"]) for comment in comments),
             fallback_body,
+            dismiss_message,
             *(replies[thread_id] for thread_id in reply_ids),
         ],
         run_dir=run.dir,
@@ -609,68 +848,175 @@ def publish_review(
     )
     body = documents[0]
     fallback_body = documents[1 + len(comments)]
+    dismiss_message = documents[2 + len(comments)]
     for comment, rewritten in zip(comments, documents[1 : 1 + len(comments)], strict=True):
         comment["body"] = rewritten
-    for thread_id, rewritten in zip(reply_ids, documents[2 + len(comments) :], strict=True):
+    for thread_id, rewritten in zip(reply_ids, documents[3 + len(comments) :], strict=True):
         replies[thread_id] = rewritten
-    payload = _payload(body=body, comments=comments)
-    payload_text = _json_text(payload)
-    facts = _facts_from_plan(plan, identity=identity, reason=reconciliation.reason)
-    facts.event = "COMMENT"
-    if fallback_used and reconciliation.plan is not None:
-        # Mismatched prose is a degraded outcome: never resolve on its strength.
-        reconciliation.degraded = True
+
+    # Event selection: every uncertainty clamps to COMMENT and disables merge-ward writes.
+    clamp_reason: EventClampReason | None = None
+    if verdict is None:
+        clamp_reason = "no_verdict"
+    elif degraded or fallback_used:
+        clamp_reason = "degraded"
+    elif identity is None and (execute or plan_threads):
+        clamp_reason = "login_unknown"
+    elif gathered.read_failed:
+        clamp_reason = "read_failed"
+    elif not policy_verified:
+        clamp_reason = "snapshot_unverified"
+    clamp = clamp_reason is not None
+    has_prose = (
+        bool(candidates)
+        or uncovered_regions(coverage) > 0
+        or bool(failed_lane_ids(coverage))
+        or degraded
+    )
+    event = select_event(publish_policy, verdict, clamp=clamp, has_prose=has_prose)
+    if clamp_reason is not None and (
+        verdict is None
+        or select_event(publish_policy, verdict, clamp=False, has_prose=has_prose) == event
+    ):
+        # Nothing was actually clamped: the policy would have chosen the same event.
+        clamp_reason = None if verdict is not None else clamp_reason
+    if event_override is not None:
+        wanted = _OVERRIDE_EVENT[event_override]
+        if wanted != event:
+            if wanted != "COMMENT" or event not in ("REQUEST_CHANGES", "APPROVE"):
+                raise EventOverrideRejected(event_override, event)
+            event = "COMMENT"
+            clamp_reason = "event_override"
+    if fallback_used and plan is not None:
+        gathered.read_failed = gathered.read_failed  # keep flag; degraded below drops writes
+    reconciliation_degraded = degraded or fallback_used or gathered.read_failed
+
+    facts = _facts_from_plan(plan, identity=identity, reason=gathered.reason)
+    facts.event = event
+    facts.policy_source = policy_source
+    facts.event_clamped_reason = clamp_reason
+    if plan is not None and reconciliation_degraded and facts.threads_skipped_reason is None:
         facts.threads_skipped_reason = "degraded"
+
+    skipped: PublicationSkipped | None = None
+    if gathered.pr_head is not None and head_sha is not None and gathered.pr_head != head_sha:
+        skipped = "head_moved"
+    elif event is None:
+        skipped = "on_pass_none"
+    elif head_sha is not None and _duplicate_on_head(
+        gathered.own_reviews, head_sha, event, bool(posted_groups)
+    ):
+        skipped = "duplicate_review_same_head"
+
+    dismiss_allowed = (
+        verdict == "PASS"
+        and publish_policy.dismiss_on_pass
+        and not clamp
+        and skipped != "head_moved"
+        and head_sha is not None
+    )
+    to_dismiss = _dismissable(gathered.own_reviews, head_sha or "") if dismiss_allowed else []
+
+    review_marker = (
+        build_review_marker(head_sha=head_sha, event=event)
+        if head_sha is not None and event is not None
+        else None
+    )
+    marked_body = body if review_marker is None else f"{body.rstrip()}\n\n{review_marker}\n"
+    marked_fallback = (
+        fallback_body if review_marker is None else f"{fallback_body.rstrip()}\n\n{review_marker}\n"
+    )
+    payload_event: ReviewEvent = event or "COMMENT"
+    if event == "APPROVE" and not has_prose:
+        payload = _payload(event="APPROVE", body=review_marker, commit_id=head_sha)
+        comments = []
+    else:
+        payload = _payload(
+            event=payload_event, body=marked_body, comments=comments, commit_id=head_sha
+        )
+    payload_text = _json_text(payload)
 
     if not execute:
         planned = dict(payload)
-        if plan is not None:
-            planned["plan"] = _plan_payload(plan)
+        if gathered.reason != "not_planned":
+            planned["plan"] = _plan_payload(
+                plan, event=event, skipped=skipped, dismiss=[review.id for review in to_dismiss]
+            )
         (run.dir / "publish-payload.json").write_text(f"{_json_text(planned)}\n", encoding="utf-8")
         return PublishResult(
             review_url=None,
-            inline_count=len(posted_groups),
+            inline_count=len(comments),
             body_fallback_count=0,
-            state="commented",
+            state="skipped" if skipped is not None else _EVENT_STATE[payload_event],
             language_fallback_used=fallback_used,
+            event=None if skipped is not None else event,
+            skipped=skipped,
             facts=facts,
         )
 
-    command = [
-        "gh",
-        "api",
-        "--method",
-        "POST",
-        f"repos/{repo}/pulls/{pr_number}/reviews",
-        "--input",
-        "-",
-    ]
+    if skipped == "head_moved":
+        facts.event = None
+        record_publish_facts(run.dir, facts, publication_skipped=skipped)
+        return PublishResult(
+            review_url=None,
+            inline_count=0,
+            body_fallback_count=0,
+            state="skipped",
+            language_fallback_used=fallback_used,
+            event=None,
+            skipped=skipped,
+            facts=facts,
+        )
+
+    review_url: str | None = None
     inline_posted = bool(comments)
     body_fallback_count = 0
-    try:
-        raw = _run(command, payload_text)
-    except PublishError as exc:
-        if exc.status_code != 422 or not comments or outcome is None:
-            raise
-        fallback = _payload(body=fallback_body)
-        raw = _run(command, _json_text(fallback))
+    if skipped is None:
+        command = [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repo}/pulls/{pr_number}/reviews",
+            "--input",
+            "-",
+        ]
+        try:
+            raw = _run(command, payload_text)
+        except PublishError as exc:
+            if exc.status_code != 422 or not comments or outcome is None:
+                raise
+            fallback = _payload(event=payload_event, body=marked_fallback, commit_id=head_sha)
+            raw = _run(command, _json_text(fallback))
+            inline_posted = False
+            body_fallback_count = len(posted_groups)
+        review_url = _review_url(raw, locale=locale)
+    else:
+        facts.event = None
         inline_posted = False
-        body_fallback_count = len(posted_groups)
-    review_url = _review_url(raw, locale=locale)
 
-    if plan is not None and github is not None and not reconciliation.degraded:
+    if plan is not None and github is not None and not reconciliation_degraded:
         _apply_thread_writes(
             github=github, plan=plan, facts=facts, replies=replies, inline_posted=inline_posted
         )
-    elif plan is not None and reconciliation.degraded and facts.threads_skipped_reason is None:
-        facts.threads_skipped_reason = "degraded"
-    record_publish_facts(run.dir, facts)
+    if to_dismiss and github is not None:
+        _dismiss_reviews(
+            github=github,
+            repo=repo,
+            pr_number=pr_number,
+            reviews=to_dismiss,
+            message=dismiss_message,
+            facts=facts,
+        )
+    record_publish_facts(run.dir, facts, publication_skipped=skipped)
     return PublishResult(
         review_url=review_url,
-        inline_count=0 if body_fallback_count else len(posted_groups),
+        inline_count=0 if body_fallback_count or skipped else len(comments),
         body_fallback_count=body_fallback_count,
-        state="commented",
+        state="skipped" if skipped is not None else _EVENT_STATE[payload_event],
         language_fallback_used=fallback_used,
+        event=None if skipped is not None else event,
+        skipped=skipped,
         facts=facts,
     )
 
@@ -698,8 +1044,7 @@ def publish_body_review(
         rewriter=rewriter,
         allow_language_fallback=allow_language_fallback,
     )
-    payload = _payload(body=documents[0])
-    payload["commit_id"] = commit_id
+    payload = _payload(event="COMMENT", body=documents[0], commit_id=commit_id)
     payload_text = _json_text(payload)
     (run_dir / "publish-payload.json").write_text(
         f"{payload_text}\n",
@@ -735,12 +1080,19 @@ def publish_body_review(
 
 __all__ = [
     "OWN_LOGIN_VARIABLE",
+    "EventOverride",
+    "EventOverrideRejected",
     "GhCliClient",
     "GitHubGraphQLError",
+    "OwnReview",
+    "PolicyVerdict",
     "PublishError",
     "PublishResult",
     "publish_body_review",
     "publish_review",
+    "read_own_reviews",
+    "read_pull_request_head",
     "record_publish_facts",
     "resolve_own_identity",
+    "select_event",
 ]

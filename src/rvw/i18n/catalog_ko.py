@@ -46,6 +46,7 @@ CATALOG: dict[str, str] = {
     "publish.fallback_heading": "\n\n### 앵커 실패 항목\n\n",
     "publish.invalid_commit": "스택 게시의 commit_id는 40자리 소문자 SHA여야 합니다",
     "publish.superseded": "같은 발견이 새 위치에서 계속됩니다: {path}:{line}",
+    "publish.dismissed": "새 커밋에서 통과하여 이전 변경 요청을 해제합니다.",
     "stack.header": "# {display_name} stacked PR 리뷰",
     "stack.run": "스택 실행 ID: `{p0}`",
     "stack.repository": "저장소: `{p0}`",

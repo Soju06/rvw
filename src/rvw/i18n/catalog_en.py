@@ -46,6 +46,7 @@ CATALOG: dict[str, str] = {
     "publish.fallback_heading": "\n\n### Findings with unavailable inline anchors\n\n",
     "publish.invalid_commit": "stack publication commit_id must be a 40-character lowercase SHA",
     "publish.superseded": "Same finding continues at {path}:{line}",
+    "publish.dismissed": "Dismissed: a newer commit passed review.",
     "stack.header": "# {display_name} stacked PR review",
     "stack.run": "Stack run ID: `{p0}`",
     "stack.repository": "Repository: `{p0}`",

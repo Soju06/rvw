@@ -63,8 +63,9 @@ rvw auto --target 1119 --repo-dir /path/to/checkout
 # Anchored PR gate: disposable checkout, exact coverage, keyed dispositions
 rvw gate --target 1119
 
-# Publish the report as a GitHub review (dry-run by default)
+# Publish the report as a GitHub review (dry-run plans threads; --execute writes)
 rvw publish --run <run-id> --execute
+rvw publish --run <run-id> --event comment   # downgrade only; never escalates
 
 # Explicit stacked PR chain: plan → review → inspect tip COMMENT payload
 rvw stack plan --prs 1119,1120,1121
@@ -127,9 +128,22 @@ This README remains the public overview and is not the behavioral source of trut
   checkout; REJECTED requires a verbatim disproving source quote, otherwise
   it is coerced to UNCERTAIN. Unresolved candidates are reported as
   unverified, never silently dropped.
-- **Approve is not expressible** — the publish layer hardcodes COMMENT.
-  `rvw auto` decides PASS/BLOCK from a YAML threshold policy; nothing in the
-  pipeline can emit an approving review.
+- **The review event is repository policy** — `.rvw/policies/auto.yaml` at the
+  base ref chooses `publish.on_block` (`comment` | `request_changes`) and
+  `publish.on_pass` (`comment` | `approve` | `none`); the default is COMMENT for
+  both, exactly as before. APPROVE needs a second key,
+  `approve_requires_explicit_opt_in: false`, because a bot approval never
+  satisfies code-owner review, may count toward the required approving-review
+  count, and may satisfy "require approval of the most recent push"; the
+  consuming repository owns that risk. Degraded runs, unknown identity, or a
+  policy that could only be read from the run's own snapshot clamp to COMMENT.
+- **Living review threads** — every inline comment carries an invisible
+  finding marker. On the next head, findings that persist keep their thread
+  (no duplicate), findings that moved are re-anchored, and threads whose
+  finding is gone are resolved only when the lane was valid, the region
+  changed and was covered, nobody else replied, and the review write succeeded.
+  `publish.dismiss_on_pass: true` dismisses rvw's own earlier REQUEST_CHANGES
+  after a clean head.
 
 ## Lane health
 

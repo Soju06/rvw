@@ -1456,6 +1456,8 @@ def test_gate_completed_dry_run_can_be_republished_with_execute(
     assert publish_status["republish"] is True
     assert publish_status["inline_count"] == 2
     assert publish_status["body_fallback_count"] == 1
+    assert publish_status["event"] == "COMMENT"
+    assert publish_status["skipped"] is None
 
 
 def test_gate_completed_republish_skips_gate_revalidation_and_preserves_evidence(

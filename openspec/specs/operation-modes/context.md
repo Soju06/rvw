@@ -26,7 +26,7 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 - Contention uses nonblocking randomized scans separated by cancellable, jittered async sleeps capped at 0.25 seconds. This avoids stranded executor threads at the accepted cost of no kernel FIFO fairness. Each spawned runtime wrapper leads a dedicated process group; cancellation or other exceptional unwind signals the whole group, escalates to `SIGKILL` after five seconds when needed, records that escalation in the run log, and reaps the wrapper before releasing the host slot.
 - ADR-009 keeps one stage implementation while providing `review` and `auto` command surfaces. Policy handles reproducible inclusion/severity decisions after model-based factual adjudication.
 - The implemented pause point is after MERGE. This supersedes ADR-009 D2's original wording that pause occurred after ADJUDICATE.
-- Approval is not expressible. Policy allows only `comment` or `none`; `--allow-approve` prints a placeholder warning and does not change publication event type.
+- Approval is expressible only through the repository `publish` policy with its explicit opt-in (2026-09-08); `publish_state` still allows only `comment` or `none` for whether to publish at all, and `--allow-approve` prints that it has no effect and never changes the event.
 - ADR-013 chose a standalone Python CLI. The current package floor is Python 3.12+ (not the ADR's original 3.11+), built with uv, Typer, and Pydantic v2 and published under `rvw`.
 - The lane sampling gate follows the measured enum/free parity experiment and the 2026-07-28 19-lane batch. Eight site-based REVIEW results contained zero novel free rule IDs; they were replica site variance, so PASS now means no free rule ID falls outside the actual closed enum.
 - Doctor exposes the feedback loop implied by ADR-004/005: invalid counts, `/other` rates, adjudication rejection rate, unresolved residue, and evidence coercions.
@@ -65,7 +65,7 @@ This capability defines how operators and CI enter the common pipeline, how YAML
 
 - A permissive drop/promote/block policy can produce an unintended PASS.
 - Missing explicitly selected policies and malformed selected policies fail before the pipeline runs; absent repository/external policies select the package default.
-- `--allow-approve` can mislead callers if they ignore the warning; it has no enabling effect.
+- `--allow-approve` can mislead callers if they ignore the warning; it has no enabling effect, and approval requires two keys in the base-ref policy.
 - Sampling is model-driven and can vary between runs despite equal replica counts.
 - Sampling uses the production diff planner and scales as two variants x replicas x chunks, while comparison still unions valid findings by variant.
 - Existing consumers still see only `PASS` or `REVIEW`; they must inspect `site_variance` when they need replica-distribution detail.
@@ -90,7 +90,7 @@ block_when:
 publish_state: comment
 ```
 
-A one-replica suggestion is dropped. A two-replica confirmed warning is promoted to blocker and makes `rvw auto` exit 1. A REJECTED blocker is excluded, and an unresolved blocker does not block while `confirmed_only` is true. Publication, if enabled, remains a COMMENT review.
+A one-replica suggestion is dropped. A two-replica confirmed warning is promoted to blocker and makes `rvw auto` exit 1. A REJECTED blocker is excluded, and an unresolved blocker does not block while `confirmed_only` is true. Publication, if enabled, is a COMMENT review under this policy; adding `publish: {on_block: request_changes, dismiss_on_pass: true}` makes BLOCK request changes and a later clean head dismiss that request.
 
 ## Historical deltas
 
@@ -115,3 +115,7 @@ The --allow-language-fallback option is available on publication-capable command
 ## No-output timeout (2026-09-08)
 
 `review`, `run`, `auto`, `gate`, and `stack review` expose `--no-output-timeout` with the same 1 to 1800 CLI bounds as `--deadline`; `sample` and `adjudicate` keep the runtime default and read neither the option nor the environment variable. Precedence is the explicit option, then `RVW_NO_OUTPUT_SECONDS`, then 660 seconds, resolved once at command start and passed to every discovery, adjudication, expanded, and stack-presence runtime the command constructs. The publication language rewriter keeps the runtime default: its rewrite deadline is capped at 60 seconds, so the 660-second watchdog is inert there by construction. A present but malformed environment value fails closed before any runtime work: `run` and `auto` resolve it inside the `configuration` stage so the failure is recorded as `invalid_configuration` with exit 2 and the process contract intact, mirroring `RVW_HOST_CONCURRENCY`, while `review`, `gate`, and `stack review` print the error and exit 2 before their pipelines start. `run` and `auto` also append the effective value to the canonical command so `process.json` records the watchdog that actually governed the run even when it came from the environment or the default.
+
+## Publish event override and mode rename (2026-09-08)
+
+`rvw publish --run` re-evaluates the policy verdict from the persisted merge and outcome and accepts `--event` only as a downgrade to COMMENT; nothing on the command line escalates past the repository policy, so an operator with a stale checkout cannot approve or request changes by hand through rvw. The App publish mode is renamed `github-review` because the Python side now chooses the event; `github-comment` stays accepted for one release with a deprecation warning and is normalised before the process contract records it.

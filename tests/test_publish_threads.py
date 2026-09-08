@@ -65,16 +65,20 @@ def finding(rule: str, path: str, line: int, *, lane: str = "correctness") -> En
 
 
 def prepared_run(
-    tmp_path: Path, *, degraded: bool = False
+    tmp_path: Path, *, degraded: bool = False, empty: bool = False
 ) -> tuple[RunHandle, MergeResult, AdjudicationOutcome]:
     resolved = target()
     run = RunStore(tmp_path).create(resolved)
     run.save_target(resolved)
-    findings = [
-        finding("r/same", "src/a.py", 10),
-        finding("r/new", "src/a.py", 20),
-        finding("r/moved", "src/b.py", 4),
-    ]
+    findings = (
+        []
+        if empty
+        else [
+            finding("r/same", "src/a.py", 10),
+            finding("r/new", "src/a.py", 20),
+            finding("r/moved", "src/b.py", 4),
+        ]
+    )
     merged = merge(findings, lane_tiers={"correctness": Tier.BASE})
     verdicts = {group.key: Verdict.CONFIRMED for group in merged.groups}
     outcome = AdjudicationOutcome(
@@ -90,13 +94,13 @@ def prepared_run(
             lane_id="correctness",
             dispatched=1,
             valid=0 if degraded else 1,
-            findings=0 if degraded else 3,
+            findings=0 if degraded else len(findings),
             runs=[
                 RunCoverage(
                     replica=1,
                     chunk=1,
                     valid=not degraded,
-                    findings=0 if degraded else 3,
+                    findings=0 if degraded else len(findings),
                     invalid_reason="exit_nonzero:124" if degraded else None,
                 )
             ],
@@ -226,8 +230,20 @@ COMPARE_RESPONSE = {
 }
 
 
+PR_PATH = "repos/owner/repo/pulls/42"
+REVIEWS_PATH = f"{PR_PATH}/reviews?per_page=100&page=1"
+
+
 def github_with(graphql: list[object], rest: dict[str, object] | None = None) -> FakeGitHub:
-    return FakeGitHub(graphql, rest={COMPARE: COMPARE_RESPONSE, **(rest or {})})
+    return FakeGitHub(
+        graphql,
+        rest={
+            COMPARE: COMPARE_RESPONSE,
+            PR_PATH: {"head": {"sha": H2}},
+            REVIEWS_PATH: [],
+            **(rest or {}),
+        },
+    )
 
 
 def writes(github: FakeGitHub) -> list[str]:
@@ -315,7 +331,10 @@ def test_without_identity_nothing_is_read_and_every_inline_body_ends_with_a_mark
         body = str(comment["body"])
         assert body.rstrip().endswith("-->") and "<!-- rvw:v1 fp=" in body
         assert strip_markers(body) != body
-    assert "rvw:v1" not in str(payloads[0]["body"])
+    body = str(payloads[0]["body"])
+    assert "<!-- rvw:v1 fp=" not in body
+    assert body.rstrip().endswith(f"<!-- rvw:v1 review head={H2} event=COMMENT -->")
+    assert payloads[0]["commit_id"] == H2
     summary = ExecutionSummary.model_validate_json((run.dir / "summary.json").read_text())
     assert summary.publish.threads_skipped_reason == "login_unknown"
     assert summary.publish.actor is None and summary.publish.event == "COMMENT"
@@ -382,7 +401,8 @@ def test_422_fallback_keeps_outdated_threads_open_and_strips_markers_from_the_bo
         github=github,
     )
     assert len(payloads) == 2 and "comments" not in payloads[1]
-    assert "rvw:v1" not in str(payloads[1]["body"])
+    assert "<!-- rvw:v1 fp=" not in str(payloads[1]["body"])
+    assert str(payloads[1]["body"]).rstrip().endswith("event=COMMENT -->")
     assert writes(github) == ["threads", "resolve"]  # fixed thread resolved; no reply, no supersede
     assert result.facts is not None
     assert result.facts.resolved_thread_ids == ["T-fixed"]
@@ -554,12 +574,12 @@ def test_reuse_disabled_posts_everything_and_touches_no_matched_thread(
     assert result.facts.reused_thread_ids == [] and result.facts.superseded_thread_ids == []
 
 
-def test_disabled_thread_policy_reads_nothing(
+def test_disabled_thread_policy_reads_no_threads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run, merged, outcome = prepared_run(tmp_path)
     post_recorder(monkeypatch, [])
-    github = FakeGitHub([])
+    github = github_with([])
     result = publish_review(
         run=run,
         repo="owner/repo",
@@ -572,8 +592,9 @@ def test_disabled_thread_policy_reads_nothing(
         github=github,
         thread_policy=ThreadPolicy(resolve_on_fix=False, reuse_open_thread=False),
     )
-    assert github.calls == []
-    assert result.facts is not None and result.facts.threads_skipped_reason == "disabled_by_policy"
+    assert writes(github) == []  # the head and own-review reads still happen; no thread read
+    assert result.facts is not None
+    assert result.facts.threads_skipped_reason == "disabled_by_policy"
 
 
 def test_resolve_own_identity_prefers_the_environment_then_the_token_user() -> None:

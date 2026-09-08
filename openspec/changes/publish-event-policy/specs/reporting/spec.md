@@ -1,3 +1,11 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: Publication is COMMENT-only`
+- TO: `### Requirement: Publication event follows repository policy`
+
+- FROM: `### Requirement: Gate publication preserves COMMENT safety`
+- TO: `### Requirement: Gate publication follows the same policy`
+
 ## ADDED Requirements
 
 ### Requirement: Findings carry a line-independent identity marker
@@ -81,6 +89,40 @@ Outcomes MUST be: `reused` for a matched open thread, whose finding MUST NOT be 
 
 ## MODIFIED Requirements
 
+### Requirement: Publication event follows repository policy
+
+Every GitHub review payload MUST carry the event selected from the repository `publish` policy and the run's PASS/BLOCK verdict: BLOCK maps `on_block` (`comment` → COMMENT, `request_changes` → REQUEST_CHANGES), PASS maps `on_pass` (`comment` → COMMENT, `approve` → APPROVE, `none` → no review when there is nothing to show and COMMENT otherwise). "Something to show" MUST mean at least one non-rejected finding, an unreviewed change region, or an unfinished rule set. The event MUST clamp to COMMENT, with the reason recorded, whenever there is no policy verdict (interactive review), the run summary is `degraded` or `failed` or missing, language fallback was used, rvw's own identity is unknown, a reconciliation read failed, or the policy came from an unverified run snapshot; a clamp MUST also disable dismissal and thread resolution. Every payload MUST pin `commit_id` to the reviewed head and every body MUST end with the review marker; an APPROVE with nothing to show MUST send the marker as its only body and no inline comments. When the live pull-request head differs from the reviewed head, publication MUST perform no write and record `publication_skipped: head_moved`. Publication MUST never post a second REQUEST_CHANGES for a head on which rvw already has one, and MUST NOT post a same-event review for a head on which rvw already has one when no new inline comment would be posted; both cases MUST record `publication_skipped: duplicate_review_same_head` while thread reconciliation and dismissal still run. On PASS with `dismiss_on_pass: true` and no clamp, publication MUST dismiss rvw's own marked reviews in state `CHANGES_REQUESTED` whose marker names an earlier head with the catalog message (ko `새 커밋에서 통과하여 이전 변경 요청을 해제합니다.`, en `Dismissed: a newer commit passed review.`) through `PUT /repos/{owner}/{repo}/pulls/{number}/reviews/{id}/dismissals`, MUST re-read a review after a rejected dismissal and count it dismissed only when its state is `DISMISSED` (otherwise `dismiss_failed_review_ids`), and MUST never dismiss a review by another identity, an unmarked review, or a review on the current head. The recorded facts MUST include `publish.event`, `publish.policy_source` (`default`, `repository`, or `explicit`), `publish.event_clamped_reason`, `dismissed_review_ids`, and `publication_skipped`.
+
+#### Scenario: Publish payload is built
+
+- **WHEN** the report contains blocker findings and the effective policy has no `publish` block
+- **THEN** the GitHub review event remains COMMENT
+
+#### Scenario: Default policy
+
+- **WHEN** a run under a policy without a `publish` block publishes on BLOCK or PASS
+- **THEN** the event is COMMENT, as before
+
+#### Scenario: Repository requests changes on BLOCK
+
+- **WHEN** the base policy sets `on_block: request_changes` and a complete run is BLOCK
+- **THEN** the review event is REQUEST_CHANGES pinned to the reviewed head, and a rerun on the same head posts no second REQUEST_CHANGES
+
+#### Scenario: Degraded BLOCK
+
+- **WHEN** the same policy applies but the run summary is `degraded`
+- **THEN** the event is COMMENT and `event_clamped_reason` is `degraded`
+
+#### Scenario: Nothing to show under on_pass none
+
+- **WHEN** the base policy sets `on_pass: none` and a complete PASS has no finding, uncovered region, or unfinished rule set
+- **THEN** no review is posted, `publication_skipped` is `on_pass_none`, and the check run still completes
+
+#### Scenario: Later PASS dismisses an earlier block
+
+- **WHEN** `dismiss_on_pass: true`, the run passes on a newer head, and rvw's own REQUEST_CHANGES exists on an earlier head beside a REQUEST_CHANGES by a human
+- **THEN** exactly rvw's review is dismissed with the catalog message and the human's review is untouched
+
 ### Requirement: Publication is dry-run by default
 
 The `rvw publish` command MUST write `publish-payload.json` without performing any GitHub write (review creation, thread reply or resolution, review dismissal) unless `--execute` is supplied. A dry run of `rvw publish --run` MAY read the pull request's review threads, reviews, and compare diffs to plan thread reconciliation; those reads are tolerated failures and never abort the dry run. Dry runs of `review` and `gate` MUST perform no GitHub call.
@@ -94,6 +136,20 @@ The `rvw publish` command MUST write `publish-payload.json` without performing a
 
 - **WHEN** the dry run cannot read the pull request's threads
 - **THEN** the payload is still written with every finding and the plan records `read_failed`
+
+### Requirement: Gate publication follows the same policy
+
+Gate publication MUST be dry-run by default, MUST use the same policy-selected event construction as ordinary publication with the gate verdict as the policy verdict, and MUST retry at most once without inline comments after an HTTP 422 response without changing the event.
+
+#### Scenario: Gate publication is inspected
+
+- **WHEN** an operator runs gate without `--execute`
+- **THEN** rvw writes the payload with the policy-selected event and makes no GitHub write
+
+#### Scenario: Gate inline comment is rejected
+
+- **WHEN** GitHub returns HTTP 422 for the first gate payload containing inline comments
+- **THEN** rvw performs one final body-only attempt with the same event and no third request
 
 ### Requirement: GitHub publication has a separate human view
 

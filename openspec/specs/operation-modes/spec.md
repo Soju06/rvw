@@ -284,14 +284,19 @@ The `run` and `auto` commands MUST reserve exit 0 for policy PASS, 1 for policy 
 - **WHEN** either stage raises an infrastructure exception
 - **THEN** the command preserves available artifacts, persists `infra_failed`, and exits 3
 
-### Requirement: Approval cannot be emitted
+### Requirement: Approval is expressible only through the repository policy
 
-Neither review nor auto mode SHALL emit an approving review, and `--allow-approve` MUST remain a non-enabling placeholder while publication stays COMMENT-only.
+Neither `review` nor `run`/`auto` SHALL emit an approving review unless the effective repository policy sets `publish.on_pass: approve` together with `approve_requires_explicit_opt_in: false` and the run's verdict is PASS without any clamp. `--allow-approve` MUST remain non-enabling, MUST print that the publish policy selects approval, and MUST NOT change the event. Documentation MUST state that a bot APPROVE never satisfies code-owner review, may count toward `required_approving_review_count`, and may satisfy `require_last_push_approval`, and that the consuming repository owns that risk.
 
 #### Scenario: Caller passes allow-approve
 
-- **WHEN** `rvw auto --allow-approve` is invoked
-- **THEN** the CLI warns that approval is not implemented and continues without enabling an APPROVE payload
+- **WHEN** `rvw auto --allow-approve` is invoked under the default policy
+- **THEN** the CLI prints that the flag has no effect and the published review remains a COMMENT
+
+#### Scenario: Repository opts in twice
+
+- **WHEN** the base policy sets `on_pass: approve` and `approve_requires_explicit_opt_in: false` and the run passes cleanly
+- **THEN** the review event is APPROVE
 
 ### Requirement: Sampling compares enum and free variants
 
@@ -360,12 +365,17 @@ argument-preserving container entry point.
 
 ### Requirement: CI composition preserves auto and publication semantics
 
-Automated invocations of the container image and the App MUST call `rvw run` and consume its canonical process and summary artifacts. They MUST preserve the reserved exit categories and COMMENT-only publication behavior, MUST NOT convert BLOCK or failed execution to success, and MUST NOT use stdout prose to determine the result.
+Automated invocations of the container image and the App MUST call `rvw run` and consume its canonical process and summary artifacts. They MUST preserve the reserved exit categories, MUST leave the review event to the Python side and the repository `publish` policy, MUST NOT convert BLOCK or failed execution to success, and MUST NOT use stdout prose to determine the result.
 
 #### Scenario: CI auto finds policy blockers
 
-- **WHEN** containerized evaluation returns BLOCK and publishes finding narratives
-- **THEN** the invoking automation reports failure from exit 1 and the published review remains a COMMENT
+- **WHEN** containerized evaluation returns BLOCK and publishes finding narratives under the default policy
+- **THEN** the invoking automation reports failure from exit 1 and the published review is a COMMENT
+
+#### Scenario: Consuming repository escalates
+
+- **WHEN** the repository policy sets `publish.on_block: request_changes` and the App review returns BLOCK
+- **THEN** the review is REQUEST_CHANGES while the check run conclusion stays `failure`
 
 ### Requirement: Review mechanics stay inside rvw
 
@@ -445,3 +455,17 @@ Publication-capable CLI commands MUST accept `--allow-language-fallback`; strict
 
 - **WHEN** resolved auto policy enables allow_language_fallback
 - **THEN** auto passes the opt-in to publication and records use only when mismatch is bypassed
+
+### Requirement: Publish event override is downgrade-only
+
+`rvw publish --run <id>` MUST accept `--event comment|request_changes|approve`. The command MUST re-evaluate the auto policy verdict from the persisted merge and outcome, select the event from the repository `publish` policy, and accept the override only when it names the selected event or downgrades REQUEST_CHANGES or APPROVE to COMMENT, recording `event_clamped_reason: event_override`. Any override above the selected event MUST exit 2 with machine-readable reason `event_override_exceeds_policy` before any GitHub write. Dry runs MUST print the selected event, its policy source, and the planned thread and dismissal actions.
+
+#### Scenario: Operator downgrades
+
+- **WHEN** the policy selects REQUEST_CHANGES and the operator passes `--event comment`
+- **THEN** the review is published as COMMENT and the recorded clamp reason is `event_override`
+
+#### Scenario: Operator tries to escalate
+
+- **WHEN** the policy selects COMMENT and the operator passes `--event request_changes`
+- **THEN** the command exits 2 with `event_override_exceeds_policy` and nothing is written
