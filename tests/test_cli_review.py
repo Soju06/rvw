@@ -20,6 +20,7 @@ from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import MergeResult
 from rvw.presentation import PresentationConfig
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY, CodexRuntimePolicy
 from rvw.runtimes import RunResult, RunStatus, Runtime
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Verdict
@@ -1131,3 +1132,115 @@ def test_publish_defaults_to_dry_run_and_non_pr_execute_is_user_error(
     assert json.loads(payload_path.read_text())["event"] == "COMMENT"
     assert non_pr.exit_code == 2
     assert "PR" in non_pr.stderr
+
+
+@pytest.mark.parametrize(
+    "extra,environment,expected",
+    [
+        ([], {}, DEFAULT_CODEX_RUNTIME_POLICY),
+        (
+            [],
+            {"RVW_CODEX_REASONING_EFFORT": "medium"},
+            CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="medium"),
+        ),
+        (
+            ["--model", "gpt-6-astra", "--reasoning-effort", "high"],
+            {"RVW_CODEX_MODEL": "env-model", "RVW_CODEX_REASONING_EFFORT": "low"},
+            CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="high"),
+        ),
+    ],
+)
+def test_review_threads_codex_policy_to_every_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    registry_root: Path,
+    extra: list[str],
+    environment: dict[str, str],
+    expected: CodexRuntimePolicy,
+) -> None:
+    calls: list[dict[str, object]] = []
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+
+    async def fake_execute_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _spec: pr_target())
+    monkeypatch.setattr(cli_module, "execute_pipeline", fake_execute_pipeline)
+    monkeypatch.delenv("RVW_CODEX_MODEL", raising=False)
+    monkeypatch.delenv("RVW_CODEX_REASONING_EFFORT", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "review",
+            "--target",
+            "HEAD",
+            "--registry",
+            str(registry_root),
+            "--repo-dir",
+            str(checkout),
+            *extra,
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    for key in ("runtime", "adjudication_runtime", "expanded_adjudication_runtime"):
+        runtime = cast(CodexRuntime, calls[0][key])
+        assert runtime.policy == expected, key
+        assert runtime.policy.reasoning_summary == "detailed", key
+
+
+def test_review_rejects_malformed_reasoning_effort_environment_before_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_review_pipeline", fake_review_pipeline)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["review", "--target", "HEAD"],
+        env={"RVW_CODEX_REASONING_EFFORT": "turbo"},
+    )
+
+    assert result.exit_code == cli_module.EXIT_USER_ERROR
+    assert "RVW_CODEX_REASONING_EFFORT" in result.stderr
+    assert calls == []
+
+
+def test_review_rejects_malformed_explicit_reasoning_effort_before_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_review_pipeline", fake_review_pipeline)
+
+    result = runner.invoke(
+        cli_module.app, ["review", "--target", "HEAD", "--reasoning-effort", "turbo"]
+    )
+
+    assert result.exit_code == cli_module.EXIT_USER_ERROR
+    assert "--reasoning-effort" in result.stderr
+    # The rejection lists the accepted efforts so a typo is correctable from the message.
+    for effort in (
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+        "persistent",
+    ):
+        assert effort in result.stderr
+    assert calls == []

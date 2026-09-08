@@ -13,6 +13,8 @@ from rvw.discover import DiscoverResult, EnrichedFinding
 from rvw.merge import merge
 from rvw.pipeline import PipelineArtifacts
 from rvw.publish import PublishResult
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY, CodexRuntimePolicy
+from rvw.runtimes.codex import CodexRuntime
 from rvw.schema import Severity, Tier, Verdict
 from rvw.stack import (
     FindingLineage,
@@ -596,3 +598,140 @@ def test_stack_publish_execute_revalidates_before_single_comment(
 
     assert result.exit_code == 0, result.stdout
     assert events == ["resolve", "verify", "publish"]
+
+
+@pytest.mark.parametrize(
+    "extra,environment,expected",
+    [
+        ([], {}, DEFAULT_CODEX_RUNTIME_POLICY),
+        (
+            [],
+            {"RVW_CODEX_REASONING_EFFORT": "medium"},
+            CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="medium"),
+        ),
+        (
+            ["--model", "gpt-6-astra", "--reasoning-effort", "high"],
+            {"RVW_CODEX_MODEL": "env-model", "RVW_CODEX_REASONING_EFFORT": "low"},
+            CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="high"),
+        ),
+    ],
+)
+def test_stack_review_forwards_codex_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    extra: list[str],
+    environment: dict[str, str],
+    expected: CodexRuntimePolicy,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_stack_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_stack_review_pipeline", fake_stack_review_pipeline)
+    monkeypatch.delenv("RVW_CODEX_MODEL", raising=False)
+    monkeypatch.delenv("RVW_CODEX_REASONING_EFFORT", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    result = runner.invoke(cli_module.app, ["stack", "review", "--prs", "1,2", *extra])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls[0]["runtime_policy"] == expected
+
+
+def test_stack_review_rejects_malformed_reasoning_effort_environment_before_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_stack_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_stack_review_pipeline", fake_stack_review_pipeline)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["stack", "review", "--prs", "1,2"],
+        env={"RVW_CODEX_REASONING_EFFORT": "turbo"},
+    )
+
+    assert result.exit_code == cli_module.EXIT_USER_ERROR
+    assert "RVW_CODEX_REASONING_EFFORT" in result.stderr
+    assert calls == []
+
+
+def test_stack_review_presence_runtime_receives_the_resolved_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="medium")
+    pipeline_policies: list[object] = []
+    presence_runtimes: list[object] = []
+
+    def fake_checkout(**kwargs: object) -> Path:
+        destination = kwargs["destination"]
+        assert isinstance(destination, Path)
+        destination.mkdir(parents=True)
+        return destination
+
+    async def fake_pipeline(**kwargs: object) -> PipelineArtifacts:
+        target = kwargs["resolved_target"]
+        assert isinstance(target, ResolvedTarget)
+        assert target.pr_number is not None
+        pipeline_policies.append(kwargs.get("runtime_policy"))
+        return pipeline_artifacts(tmp_path, target.pr_number)
+
+    async def fake_presence(
+        lineages: list[FindingLineage], *, pr_number: int, **kwargs: object
+    ) -> PresenceOutcome:
+        presence_runtimes.append(kwargs["runtime"])
+        return PresenceOutcome(
+            observations={
+                lineage.lineage_id: PresenceObservation(
+                    pr_number=pr_number,
+                    presence=Presence.PRESENT,
+                    reason="checked",
+                    evidence="current source",
+                    replica_votes=[Presence.PRESENT],
+                )
+                for lineage in lineages
+            },
+            unresolved=[],
+            coerced_evidence=0,
+        )
+
+    monkeypatch.setattr(cli_module, "resolve_stack", lambda numbers, **kwargs: valid_members())
+    monkeypatch.setattr(cli_module, "provision_checkout", fake_checkout)
+    monkeypatch.setattr(
+        cli_module,
+        "resolved_target_for_member",
+        lambda member, **kwargs: target_for(member.number),
+    )
+    monkeypatch.setattr(cli_module, "_execute_pipeline", fake_pipeline)
+    monkeypatch.setattr(cli_module, "adjudicate_presence", fake_presence)
+    monkeypatch.delenv("RVW_CODEX_MODEL", raising=False)
+    monkeypatch.setenv("RVW_CODEX_REASONING_EFFORT", "medium")
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "stack",
+            "review",
+            "--prs",
+            "1,2,3",
+            "--registry",
+            str(tmp_path / "registry"),
+            "--out",
+            str(tmp_path / "stack-runs"),
+            "--model",
+            "gpt-6-astra",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert pipeline_policies == [expected] * 3
+    # The PR 1 lineage is rechecked at PR 2 and PR 3 by a presence runtime built in the CLI.
+    assert len(presence_runtimes) == 2
+    for runtime in presence_runtimes:
+        assert isinstance(runtime, CodexRuntime)
+        assert runtime.policy == expected

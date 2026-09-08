@@ -14,6 +14,7 @@ from rvw.merge import MergeResult
 from rvw.pipeline import PipelineArtifacts
 from rvw.policy import PolicyNotFound
 from rvw.presentation import PresentationConfig
+from rvw.runtime_policy import CodexRuntimePolicy
 from rvw.store import RunStore
 from rvw.summary import CoverageTotals, ReviewStatus, RunSummary
 from rvw.target import ResolvedTarget
@@ -676,3 +677,163 @@ def test_missing_gh_is_infrastructure_failure(
         json.loads((out / "process.json").read_text())["failure"]["code"]
         == "target_resolution_failed"
     )
+
+
+@pytest.mark.parametrize("command", ["run", "auto"])
+def test_explicit_codex_policy_beats_environment_and_reaches_the_process_contract(
+    monkeypatch: pytest.MonkeyPatch, artifacts: PipelineArtifacts, tmp_path: Path, command: str
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def execute(**kwargs: object) -> PipelineArtifacts:
+        observed.update(kwargs)
+        raise RuntimeError("fixture runtime unavailable")
+
+    monkeypatch.setattr(cli, "_execute_pipeline", execute)
+    monkeypatch.setattr(cli, "_resolve_cli_target", lambda _: artifacts.target)
+    monkeypatch.setenv("RVW_CODEX_MODEL", "env-model")
+    monkeypatch.setenv("RVW_CODEX_REASONING_EFFORT", "low")
+    out = tmp_path / "result"
+    result = runner.invoke(
+        cli.app,
+        [
+            command,
+            "--target",
+            "42",
+            "--out",
+            str(out),
+            "--model",
+            "gpt-6-astra",
+            "--reasoning-effort",
+            "high",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 3, result.output
+    assert observed["runtime_policy"] == CodexRuntimePolicy(
+        model="gpt-6-astra", reasoning_effort="high"
+    )
+    process = json.loads((out / "process.json").read_text())
+    assert process["runtime"]["model"] == "gpt-6-astra"
+    assert process["runtime"]["reasoning_effort"] == "high"
+    assert process["runtime"]["reasoning_summary"] == "detailed"
+    command = process["command"]
+    timeout_index = command.index("--no-output-timeout")
+    assert command[timeout_index + 2 : timeout_index + 6] == [
+        "--model",
+        "gpt-6-astra",
+        "--reasoning-effort",
+        "high",
+    ]
+    environment = (out / "environment.txt").read_text().splitlines()
+    assert "model=gpt-6-astra" in environment
+    assert "reasoning_effort=high" in environment
+    assert json.loads(result.stdout) == process
+
+
+@pytest.mark.parametrize(
+    "environment,expected_model,expected_effort",
+    [
+        ({}, "gpt-5.6-sol", "max"),
+        ({"RVW_CODEX_MODEL": "env-model", "RVW_CODEX_REASONING_EFFORT": "low"}, "env-model", "low"),
+        ({"RVW_CODEX_REASONING_EFFORT": "medium"}, "gpt-5.6-sol", "medium"),
+        ({"RVW_CODEX_MODEL": "env-model"}, "env-model", "max"),
+    ],
+)
+def test_codex_policy_falls_back_to_environment_then_default(
+    monkeypatch: pytest.MonkeyPatch,
+    artifacts: PipelineArtifacts,
+    tmp_path: Path,
+    environment: dict[str, str],
+    expected_model: str,
+    expected_effort: str,
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def execute(**kwargs: object) -> PipelineArtifacts:
+        observed.update(kwargs)
+        raise RuntimeError("fixture runtime unavailable")
+
+    monkeypatch.setattr(cli, "_execute_pipeline", execute)
+    monkeypatch.setattr(cli, "_resolve_cli_target", lambda _: artifacts.target)
+    monkeypatch.delenv("RVW_CODEX_MODEL", raising=False)
+    monkeypatch.delenv("RVW_CODEX_REASONING_EFFORT", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    out = tmp_path / "result"
+    result = runner.invoke(cli.app, ["run", "--target", "42", "--out", str(out), "--json"])
+
+    assert result.exit_code == 3, result.output
+    assert observed["runtime_policy"] == CodexRuntimePolicy(
+        model=expected_model, reasoning_effort=expected_effort
+    )
+    process = json.loads((out / "process.json").read_text())
+    assert process["runtime"]["model"] == expected_model
+    assert process["runtime"]["reasoning_effort"] == expected_effort
+    command = process["command"]
+    assert command[command.index("--model") + 1] == expected_model
+    assert command[command.index("--reasoning-effort") + 1] == expected_effort
+    environment_lines = (out / "environment.txt").read_text().splitlines()
+    assert f"model={expected_model}" in environment_lines
+    assert f"reasoning_effort={expected_effort}" in environment_lines
+
+
+@pytest.mark.parametrize("command", ["run", "auto"])
+@pytest.mark.parametrize(
+    "variable,value",
+    [("RVW_CODEX_REASONING_EFFORT", "turbo"), ("RVW_CODEX_MODEL", "   ")],
+)
+def test_malformed_codex_policy_environment_is_invalid_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, command: str, variable: str, value: str
+) -> None:
+    async def forbidden(**kwargs: object) -> None:
+        pytest.fail(f"malformed {variable} reached the pipeline")
+
+    def forbidden_target(_: str) -> None:
+        pytest.fail("target resolution ran before configuration validation")
+
+    monkeypatch.setattr(cli, "_execute_pipeline", forbidden)
+    monkeypatch.setattr(cli, "_resolve_cli_target", forbidden_target)
+    monkeypatch.delenv("RVW_CODEX_MODEL", raising=False)
+    monkeypatch.delenv("RVW_CODEX_REASONING_EFFORT", raising=False)
+    monkeypatch.setenv(variable, value)
+    out = tmp_path / "result"
+    result = runner.invoke(cli.app, [command, "--target", "42", "--out", str(out), "--json"])
+
+    assert result.exit_code == 2, result.output
+    process = json.loads((out / "process.json").read_text())
+    assert process["status"] == "invalid"
+    assert process["failure"]["code"] == "invalid_configuration"
+    assert variable in process["failure"]["detail"]
+    assert json.loads(result.stdout) == process
+    assert_manifest(out, process)
+
+
+@pytest.mark.parametrize(
+    "option,value",
+    [("--reasoning-effort", "turbo"), ("--model", "   ")],
+)
+def test_malformed_explicit_codex_policy_is_invalid_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, option: str, value: str
+) -> None:
+    async def forbidden(**kwargs: object) -> None:
+        pytest.fail(f"malformed {option} reached the pipeline")
+
+    def forbidden_target(_: str) -> None:
+        pytest.fail("target resolution ran before configuration validation")
+
+    monkeypatch.setattr(cli, "_execute_pipeline", forbidden)
+    monkeypatch.setattr(cli, "_resolve_cli_target", forbidden_target)
+    out = tmp_path / "result"
+    result = runner.invoke(
+        cli.app, ["run", "--target", "42", "--out", str(out), option, value, "--json"]
+    )
+
+    assert result.exit_code == 2, result.output
+    process = json.loads((out / "process.json").read_text())
+    assert process["status"] == "invalid"
+    assert process["failure"]["code"] == "invalid_configuration"
+    assert option in process["failure"]["detail"]
+    assert json.loads(result.stdout) == process
+    assert_manifest(out, process)
