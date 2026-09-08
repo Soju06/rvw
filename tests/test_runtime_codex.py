@@ -20,9 +20,39 @@ import rvw.runtimes.codex as codex_module
 from rvw.lane import Lane, load_lane
 from rvw.runtime_policy import CodexRuntimePolicy
 from rvw.runtimes import RunStatus, RunUsage, RunUsageStatus
-from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode, resolve_no_output_seconds
+from rvw.runtimes.codex import (
+    CodexRuntime,
+    CodexRuntimeMode,
+    RuntimeLogCounts,
+    count_runtime_log_turns,
+    resolve_no_output_seconds,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "lanes" / "slop-hygiene.md"
+AGENTIC_THREE_EXECS_LOG = (
+    Path(__file__).parent / "fixtures" / "runtime-logs" / "agentic-three-execs.log"
+)
+_TOOL_LESS_LOG = (
+    "OpenAI Codex v0.152.0 (research preview)\n"
+    "--------\n"
+    "workdir: /work/checkout\n"
+    "model: gpt-5.6-sol\n"
+    "provider: openai\n"
+    "approval: never\n"
+    "sandbox: read-only\n"
+    "reasoning effort: max\n"
+    "reasoning summaries: detailed\n"
+    "session id: 0199a6f2-3c1e-7d4b-9b0e-6f1c2a8d5e74\n"
+    "--------\n"
+    "user\n"
+    "Review only the supplied evidence.\n"
+    "\n"
+    "codex\n"
+    "The supplied diff is clean.\n"
+    "\n"
+    "tokens used\n"
+    "1,204\n"
+)
 
 _SLEEP_CHILD_SCRIPT = """
 import os
@@ -289,6 +319,8 @@ async def test_cancelled_runtime_persists_usage_before_propagating_cancellation(
     usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
     assert usage.status is RunUsageStatus.CANCELED
     assert usage.cli_tokens_used is None
+    assert usage.tool_calls is None
+    assert usage.assistant_messages is None
 
 
 async def test_runtime_policy_overrides_model_and_reasoning_effort(
@@ -1248,6 +1280,8 @@ def test_legacy_usage_without_reasoning_summary_loads() -> None:
 
     assert usage.reasoning_summary is None
     assert usage.no_output_seconds is None
+    assert usage.tool_calls is None
+    assert usage.assistant_messages is None
 
 
 def test_resolve_no_output_seconds_prefers_explicit_then_environment_then_default() -> None:
@@ -1290,6 +1324,127 @@ def test_runtime_rejects_non_positive_no_output_seconds(value: int) -> None:
 def test_runtime_defaults_no_output_seconds_to_the_measured_ceiling() -> None:
     assert CodexRuntime().no_output_seconds == 660
     assert CodexRuntime(no_output_seconds=120).no_output_seconds == 120
+
+
+def test_count_runtime_log_turns_counts_exec_and_codex_headers_in_the_fixture() -> None:
+    text = AGENTIC_THREE_EXECS_LOG.read_text(encoding="utf-8")
+
+    assert "\n  exec\n" in text, "the fixture must carry an indented exec line that must not count"
+    assert count_runtime_log_turns(text) == RuntimeLogCounts(tool_calls=3, assistant_messages=3)
+
+
+def test_count_runtime_log_turns_on_a_tool_less_log() -> None:
+    assert count_runtime_log_turns(_TOOL_LESS_LOG) == RuntimeLogCounts(
+        tool_calls=0, assistant_messages=1
+    )
+
+
+def test_count_runtime_log_turns_on_empty_text() -> None:
+    assert count_runtime_log_turns("") == RuntimeLogCounts(tool_calls=0, assistant_messages=0)
+
+
+def test_count_runtime_log_turns_strips_a_trailing_carriage_return() -> None:
+    text = "exec\r\n/bin/bash -lc 'git status' in /work/checkout\r\ncodex\r\nDone.\r\n"
+
+    assert count_runtime_log_turns(text) == RuntimeLogCounts(tool_calls=1, assistant_messages=1)
+
+
+def test_count_runtime_log_turns_ignores_prefixed_or_suffixed_headers() -> None:
+    text = " exec\nexec \nexec:\ncodex said\n\tcodex\nexecute\n"
+
+    assert count_runtime_log_turns(text) == RuntimeLogCounts(tool_calls=0, assistant_messages=0)
+
+
+async def test_agentic_usage_records_tool_calls_and_assistant_messages_from_the_log(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "agentic" / "r1"
+    install_spawn(
+        monkeypatch,
+        run_dir=run_dir,
+        payload=valid_payload(),
+        log_text=AGENTIC_THREE_EXECS_LOG.read_text(encoding="utf-8"),
+    )
+
+    result = await execute_fixture(lane, run_dir)
+
+    assert result.status is RunStatus.VALID
+    usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
+    assert usage.runtime_mode == "agentic"
+    assert usage.status is RunUsageStatus.COMPLETED
+    assert usage.tool_calls == 3
+    assert usage.assistant_messages == 3
+    assert usage.cli_tokens_used == 14203
+    assert result.usage == usage
+
+
+async def test_tool_less_usage_records_zero_tool_calls_and_counted_messages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "tool-less" / "r1"
+    install_spawn(monkeypatch, run_dir=run_dir, payload=valid_payload(), log_text=_TOOL_LESS_LOG)
+
+    result = await CodexRuntime(mode=CodexRuntimeMode.TOOL_LESS).execute(
+        lane=lane,
+        prompt="Review only the supplied evidence.",
+        run_dir=run_dir,
+        deadline_seconds=60,
+    )
+
+    assert result.status is RunStatus.VALID
+    usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
+    assert usage.runtime_mode == "tool-less"
+    assert usage.tool_calls == 0
+    assert usage.assistant_messages == 1
+    assert usage.cli_tokens_used == 1204
+
+
+async def test_tool_less_usage_never_counts_tool_calls_from_the_log(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "tool-less-execs" / "r1"
+    install_spawn(
+        monkeypatch,
+        run_dir=run_dir,
+        payload=valid_payload(),
+        log_text=AGENTIC_THREE_EXECS_LOG.read_text(encoding="utf-8"),
+    )
+
+    result = await CodexRuntime(mode=CodexRuntimeMode.TOOL_LESS).execute(
+        lane=lane,
+        prompt="Review only the supplied evidence.",
+        run_dir=run_dir,
+        deadline_seconds=60,
+    )
+
+    assert result.usage is not None
+    assert result.usage.tool_calls == 0
+    assert result.usage.assistant_messages == 3
+
+
+async def test_invalid_run_still_records_tool_call_telemetry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "killed" / "r1"
+    install_spawn(
+        monkeypatch,
+        run_dir=run_dir,
+        exit_code=124,
+        log_text=AGENTIC_THREE_EXECS_LOG.read_text(encoding="utf-8"),
+    )
+
+    result = await execute_fixture(lane, run_dir)
+
+    assert result.status is RunStatus.INVALID
+    assert result.invalid_reason == "exit_nonzero:124"
+    usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
+    assert usage.status is RunUsageStatus.INVALID
+    assert usage.tool_calls == 3
+    assert usage.assistant_messages == 3
 
 
 @pytest.mark.live

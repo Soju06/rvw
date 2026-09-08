@@ -6,9 +6,9 @@
 
 ## 2. State the budget in lane prompts and record tool-call counts
 
-- [ ] 2.1 Add failing tests: the agentic and inline prompts contain the budget sentence with the actual deadline, the agentic prompt carries the tool-call budget and the remote-access guard, a fixture `run.log` yields the expected `tool_calls` and `assistant_messages`, and persisted attempts carry both counts.
-- [ ] 2.2 Implement the budget section, the log counters, `RunUsage.assistant_messages`, and the `RunAttempt` fields; pass the dispatch deadline into prompt construction.
-- [ ] 2.3 Add the discovery delta and update the discovery main spec and context, then commit feat(discovery): state the time and tool budget in lane prompts and record tool-call counts.
+- [x] 2.1 Add failing tests: the agentic and inline prompts contain the budget sentence with the actual deadline, the agentic prompt carries the tool-call budget and the remote-access guard, a fixture `run.log` yields the expected `tool_calls` and `assistant_messages`, and persisted attempts carry both counts.
+- [x] 2.2 Implement the budget section, the log counters, `RunUsage.assistant_messages`, and the `RunAttempt` fields; pass the dispatch deadline into prompt construction.
+- [x] 2.3 Add the discovery delta and update the discovery main spec and context, then commit feat(discovery): state the time and tool budget in lane prompts and record tool-call counts.
 
 ## 3. Block remote git and non-proxy egress from review tool commands
 

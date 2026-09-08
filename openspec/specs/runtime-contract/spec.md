@@ -93,9 +93,16 @@ and `usage.json` beneath an `r<replica>` artifact directory before or during
 execution and MUST derive the replica number from that directory name.
 `usage.json` MUST record model, reasoning effort, the reasoning summary
 setting, the no-output watchdog setting, wall time, and final
-completed/invalid/canceled state; token, turn, and tool-call fields MAY be
+completed/invalid/canceled state. It MUST also record `tool_calls`, counted as
+the lines of `run.log` that are exactly the `exec` item header Codex prints
+before each tool command, and `assistant_messages`, counted as the lines that
+are exactly the `codex` item header printed before each assistant message; a
+tool-less run MUST record zero `tool_calls`, and both counts are optional
+telemetry that MUST be absent when the log cannot be read (except the tool-less
+zero) and MUST never affect validity. Token, turn, and tool-call fields MAY be
 absent when telemetry is unavailable, and usage artifacts persisted before the
-summary and watchdog fields existed MUST load with those fields absent. Discovery and sampling MUST preserve the
+summary, watchdog, and telemetry fields existed MUST load with those fields
+absent. Discovery and sampling MUST preserve the
 existing lane-or-variant `r<replica>` path for a one-chunk plan and MUST insert
 a `c<chunk>` directory immediately before `r<replica>` for a multi-chunk plan.
 
@@ -122,9 +129,22 @@ a `c<chunk>` directory immediately before `r<replica>` for a multi-chunk plan.
 
 #### Scenario: Legacy usage artifact loads
 
-- **WHEN** a `usage.json` persisted before the reasoning summary and watchdog
-  fields is loaded
-- **THEN** loading succeeds with both fields absent
+- **WHEN** a `usage.json` persisted before the reasoning summary, watchdog,
+  and telemetry fields is loaded
+- **THEN** loading succeeds with those fields absent
+
+#### Scenario: Agentic run with three tool commands
+
+- **WHEN** an agentic run's `run.log` holds three `exec` headers and three
+  `codex` headers
+- **THEN** its `usage.json` records `tool_calls: 3` and
+  `assistant_messages: 3`, and validity is decided only by the existing signals
+
+#### Scenario: Tool-less run records no tool commands
+
+- **WHEN** a tool-less run completes
+- **THEN** its `usage.json` records `tool_calls: 0` and counts its
+  `assistant_messages` from the `codex` headers
 
 ### Requirement: Raw execution supports stage-specific schemas and workdirs
 

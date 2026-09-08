@@ -143,6 +143,7 @@ async def sample_lane(
             brief=None,
             brief_source=None,
             covered_rules={},
+            deadline_seconds=deadline_seconds,
             chunk_context=build_chunk_context(
                 chunk=chunk.index,
                 chunk_count=len(chunks),

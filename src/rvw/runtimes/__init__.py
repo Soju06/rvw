@@ -57,6 +57,7 @@ class RunUsage(BaseModel):
     cli_tokens_used: int | None = Field(default=None, ge=0)
     turns: int | None = Field(default=None, ge=0)
     tool_calls: int | None = Field(default=None, ge=0)
+    assistant_messages: int | None = Field(default=None, ge=0)
 
 
 @dataclass(frozen=True, slots=True)

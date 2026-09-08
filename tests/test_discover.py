@@ -22,9 +22,12 @@ from rvw.hostslots import HostSlotGate
 from rvw.lane import Lane
 from rvw.merge import merge
 from rvw.registry import Registry
-from rvw.runtimes import RunDiagnostic, RunResult, RunStatus, Runtime
+from rvw.runtimes import RunDiagnostic, RunResult, RunStatus, Runtime, RunUsage, RunUsageStatus
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Tier
 from rvw.target import ResolvedTarget
+
+# The runtime watchdog's reason is transient: it never marks a lane dead by timeout.
+WATCHDOG_REASON = "no_output_after:660s"
 
 
 def write_lane(root: Path, lane_id: str, tier: Tier, *, cost: str = "normal") -> Path:
@@ -85,6 +88,7 @@ class FakeRuntime(Runtime):
         invalid_reasons: dict[str, Sequence[str]] | None = None,
         covered: dict[str, Sequence[list[str]]] | None = None,
         walls: dict[str, Sequence[float]] | None = None,
+        usage: dict[str, RunUsage] | None = None,
     ) -> None:
         self.findings = findings or {}
         self.invalid_lanes = invalid_lanes or set()
@@ -92,6 +96,7 @@ class FakeRuntime(Runtime):
         self.invalid_reasons = invalid_reasons or {}
         self.covered = covered or {}
         self.walls = walls or {}
+        self.usage = usage or {}
         self.prompts: list[tuple[str, str]] = []
         self.calls: list[tuple[str, int]] = []
         self.run_dirs: list[Path] = []
@@ -134,6 +139,7 @@ class FakeRuntime(Runtime):
                 invalid_reason=invalid_reason,
                 wall_seconds=wall_seconds,
                 artifact_dir=run_dir,
+                usage=self.usage.get(lane.id),
             )
         return RunResult(
             lane_id=lane.id,
@@ -151,6 +157,7 @@ class FakeRuntime(Runtime):
             invalid_reason=None,
             wall_seconds=wall_seconds,
             artifact_dir=run_dir,
+            usage=self.usage.get(lane.id),
         )
 
 
@@ -382,6 +389,9 @@ def _final_result(lane_id: str, replica: int, reason: str | None) -> RunResult:
         ([DEAD_BY_TIMEOUT_REASON, DEAD_BY_TIMEOUT_REASON], True),
         ([DEAD_BY_TIMEOUT_REASON, "exit_nonzero:1"], False),
         (["exit_nonzero:1"], False),
+        ([WATCHDOG_REASON], False),
+        ([WATCHDOG_REASON, WATCHDOG_REASON], False),
+        ([DEAD_BY_TIMEOUT_REASON, WATCHDOG_REASON], False),
         ([DEAD_BY_TIMEOUT_REASON, None], False),
         ([], False),
     ],
@@ -653,6 +663,8 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
                         "valid": True,
                         "invalid_reason": None,
                         "wall_seconds": 0.0,
+                        "tool_calls": None,
+                        "assistant_messages": None,
                     }
                 ],
                 "diagnostic": None,
@@ -683,6 +695,8 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
                         "valid": False,
                         "invalid_reason": "scripted invalid",
                         "wall_seconds": 0.0,
+                        "tool_calls": None,
+                        "assistant_messages": None,
                     }
                     for attempt, wave in ((1, "initial"), (2, "retry"))
                 ],
@@ -727,8 +741,18 @@ async def test_retried_coverage_preserves_ordered_attempt_status_and_reason(
             "valid": False,
             "invalid_reason": "exit_nonzero:124",
             "wall_seconds": 0.0,
+            "tool_calls": None,
+            "assistant_messages": None,
         },
-        {"attempt": 2, "wave": "retry", "valid": True, "invalid_reason": None, "wall_seconds": 0.0},
+        {
+            "attempt": 2,
+            "wave": "retry",
+            "valid": True,
+            "invalid_reason": None,
+            "wall_seconds": 0.0,
+            "tool_calls": None,
+            "assistant_messages": None,
+        },
     ]
 
 
@@ -753,6 +777,8 @@ async def test_non_retried_coverage_has_one_attempt_mirroring_row(tmp_path: Path
             "valid": run.valid,
             "invalid_reason": run.invalid_reason,
             "wall_seconds": 0.0,
+            "tool_calls": None,
+            "assistant_messages": None,
         }
     ]
 
@@ -784,6 +810,8 @@ async def test_attempts_and_redispatch_carry_wave_and_runtime_wall(tmp_path: Pat
             "valid": False,
             "invalid_reason": DEAD_BY_TIMEOUT_REASON,
             "wall_seconds": 600.06,
+            "tool_calls": None,
+            "assistant_messages": None,
         },
         {
             "attempt": 2,
@@ -791,6 +819,8 @@ async def test_attempts_and_redispatch_carry_wave_and_runtime_wall(tmp_path: Pat
             "valid": True,
             "invalid_reason": None,
             "wall_seconds": 571.2,
+            "tool_calls": None,
+            "assistant_messages": None,
         },
     ]
     assert lane.coverage_redispatched is True
@@ -801,6 +831,8 @@ async def test_attempts_and_redispatch_carry_wave_and_runtime_wall(tmp_path: Pat
             "valid": True,
             "invalid_reason": None,
             "wall_seconds": 42.5,
+            "tool_calls": None,
+            "assistant_messages": None,
         }
     ]
     reloaded = discover_module.LaneCoverage.model_validate_json(lane.model_dump_json())
@@ -836,6 +868,8 @@ async def test_invalid_redispatch_result_is_recorded_not_hidden(tmp_path: Path) 
         "valid": False,
         "invalid_reason": "exit_nonzero:1",
         "wall_seconds": 101.5,
+        "tool_calls": None,
+        "assistant_messages": None,
     }
     assert lane.uncovered == expected
 
@@ -1017,6 +1051,14 @@ def test_run_coverage_rejects_valid_run_with_diagnostic() -> None:
             "valid": True,
             "invalid_reason": None,
             "wall_seconds": -1,
+        },
+        {"attempt": 1, "wave": "initial", "valid": True, "invalid_reason": None, "tool_calls": -1},
+        {
+            "attempt": 1,
+            "wave": "initial",
+            "valid": True,
+            "invalid_reason": None,
+            "assistant_messages": -1,
         },
     ],
 )
@@ -1207,3 +1249,222 @@ async def test_stable_finding_id_does_not_depend_on_chunk_plan(tmp_path: Path) -
     one_group = merge(one.findings, lane_tiers={"base-review": Tier.BASE}).groups[0]
     many_group = merge(many.findings, lane_tiers={"base-review": Tier.BASE}).groups[0]
     assert one_group.key == many_group.key
+
+
+async def test_agentic_prompts_state_the_dispatch_deadline_as_the_wall_budget(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "base-review", Tier.BASE)
+    runtime = FakeRuntime()
+
+    await discover(
+        registry=registry(("base-review", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+        deadline_seconds=900,
+    )
+
+    assert runtime.prompts
+    for _, prompt in runtime.prompts:
+        assert "wall-clock budget of 900 seconds" in prompt
+        assert "Cover every changed region first." in prompt
+        assert "Plan for at most 40 tool calls" in prompt
+        assert "Do not fetch, clone, or query remote repositories or APIs" in prompt
+
+
+async def test_default_deadline_is_stated_in_initial_retry_and_coverage_prompts(
+    tmp_path: Path,
+) -> None:
+    lane_id = "base-review"
+    write_lane(tmp_path / "lanes", lane_id, Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={lane_id: [RunStatus.INVALID, RunStatus.VALID, RunStatus.VALID]},
+        covered={lane_id: [[], [], ["src/a.py"]]},
+    )
+
+    await discover(
+        registry=registry((lane_id, Tier.BASE)),
+        lanes_root=tmp_path / "lanes",
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    assert DEFAULT_DEADLINE_SECONDS == 600
+    assert len(runtime.prompts) == 3
+    for _, prompt in runtime.prompts:
+        assert "wall-clock budget of 600 seconds" in prompt
+
+
+async def test_inline_prompts_state_the_wall_budget_without_tool_sentences(
+    tmp_path: Path,
+) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "base-review", Tier.BASE)
+    runtime = FakeRuntime()
+
+    await discover(
+        registry=registry(("base-review", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        mode=DiscoveryMode.INLINE,
+        deadline_seconds=600,
+    )
+
+    assert len(runtime.prompts) == 1
+    prompt = runtime.prompts[0][1]
+    assert "wall-clock budget of 600 seconds" in prompt
+    assert "Cover every changed region first." in prompt
+    assert "emit the final structured output immediately" in prompt
+    assert "tool calls" not in prompt
+    assert "Do not fetch" not in prompt
+
+
+async def test_attempts_copy_tool_call_telemetry_from_runtime_usage(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "counted", Tier.BASE)
+    write_lane(lanes_root, "silent", Tier.BASE)
+    usage = RunUsage(
+        model="gpt-test",
+        reasoning_effort="max",
+        status=RunUsageStatus.COMPLETED,
+        wall_seconds=12.5,
+        tool_calls=7,
+        assistant_messages=2,
+    )
+    runtime = FakeRuntime(usage={"counted": usage}, walls={"counted": [12.5]})
+
+    result = await discover(
+        registry=registry(("counted", Tier.BASE), ("silent", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    coverage = {lane.lane_id: lane for lane in result.coverage}
+    assert coverage["counted"].runs[0].attempts[0].model_dump() == {
+        "attempt": 1,
+        "wave": "initial",
+        "valid": True,
+        "invalid_reason": None,
+        "wall_seconds": 12.5,
+        "tool_calls": 7,
+        "assistant_messages": 2,
+    }
+    silent = coverage["silent"].runs[0].attempts[0]
+    assert silent.tool_calls is None
+    assert silent.assistant_messages is None
+    reloaded = discover_module.LaneCoverage.model_validate_json(
+        coverage["counted"].model_dump_json()
+    )
+    assert reloaded == coverage["counted"]
+
+
+async def test_redispatch_attempts_carry_tool_call_telemetry(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "base-review", Tier.BASE)
+    usage = RunUsage(
+        model="gpt-test",
+        reasoning_effort="max",
+        status=RunUsageStatus.COMPLETED,
+        wall_seconds=42.5,
+        tool_calls=33,
+        assistant_messages=5,
+    )
+    runtime = FakeRuntime(
+        covered={"base-review": [["src/a.py"], ["src/b.py:10-11"]]},
+        usage={"base-review": usage},
+    )
+
+    result = await discover(
+        registry=registry(("base-review", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=two_file_target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    lane = result.coverage[0]
+    assert lane.coverage_redispatched is True
+    assert [(attempt.tool_calls, attempt.assistant_messages) for attempt in lane.redispatch] == [
+        (33, 5)
+    ]
+
+
+def test_legacy_attempt_records_without_telemetry_load_with_unknown_counts() -> None:
+    attempt = discover_module.RunAttempt.model_validate(
+        {
+            "attempt": 1,
+            "wave": "initial",
+            "valid": False,
+            "invalid_reason": "exit_nonzero:124",
+            "wall_seconds": 600.13,
+        }
+    )
+
+    assert attempt.tool_calls is None
+    assert attempt.assistant_messages is None
+    assert attempt.model_dump()["tool_calls"] is None
+
+
+async def test_watchdog_killed_lane_keeps_its_retry_and_coverage_wave(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "hygiene", Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={"hygiene": [RunStatus.INVALID, RunStatus.INVALID, RunStatus.VALID]},
+        invalid_reasons={"hygiene": [WATCHDOG_REASON, WATCHDOG_REASON]},
+        covered={"hygiene": [[], [], ["src/a.py", "src/b.py"]]},
+    )
+
+    result = await discover(
+        registry=registry(("hygiene", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=two_file_target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    assert runtime.calls == [("hygiene", 1), ("hygiene", 1), ("hygiene", 1)]
+    assert runtime.run_dirs[-1] == tmp_path / "out" / "coverage-redispatch" / "hygiene" / "r1"
+    lane = result.coverage[0]
+    assert lane.coverage_redispatched is True
+    assert lane.redispatch_skipped is None
+    assert [attempt.invalid_reason for attempt in lane.runs[0].attempts] == [
+        WATCHDOG_REASON,
+        WATCHDOG_REASON,
+    ]
+    assert lane.uncovered == []
+
+
+async def test_watchdog_kill_then_deadline_kill_is_dead_by_timeout(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "hygiene", Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={"hygiene": [RunStatus.INVALID, RunStatus.INVALID]},
+        invalid_reasons={"hygiene": [WATCHDOG_REASON, DEAD_BY_TIMEOUT_REASON]},
+    )
+
+    result = await discover(
+        registry=registry(("hygiene", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=two_file_target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    assert len(runtime.calls) == 2
+    lane = result.coverage[0]
+    assert lane.coverage_redispatched is False
+    assert lane.redispatch_skipped == "dead_by_timeout"

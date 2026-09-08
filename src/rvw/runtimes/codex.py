@@ -84,6 +84,35 @@ class CodexRuntimeMode(StrEnum):
     AGENTIC = "agentic"
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeLogCounts:
+    """Tool commands and assistant messages counted from a Codex ``run.log``."""
+
+    tool_calls: int
+    assistant_messages: int
+
+
+def count_runtime_log_turns(log_text: str) -> RuntimeLogCounts:
+    """Count the ``exec`` and ``codex`` item headers the Codex human output prints.
+
+    Codex prints a line that is exactly ``exec`` before each tool command and a line
+    that is exactly ``codex`` before each assistant message. Only whole lines match,
+    after stripping a trailing carriage return, so an indented or prefixed ``exec``
+    inside tool output does not count. The counts are telemetry: a tool whose output
+    contains such a bare line can over-count, which is why nothing is enforced on them.
+    """
+
+    tool_calls = 0
+    assistant_messages = 0
+    for raw_line in log_text.split("\n"):
+        line = raw_line.removesuffix("\r")
+        if line == "exec":
+            tool_calls += 1
+        elif line == "codex":
+            assistant_messages += 1
+    return RuntimeLogCounts(tool_calls=tool_calls, assistant_messages=assistant_messages)
+
+
 def _process_group_exists(pgid: int) -> bool:
     with suppress(ProcessLookupError):
         os.killpg(pgid, 0)
@@ -396,12 +425,22 @@ class CodexRuntime:
         started: float,
         log_path: Path,
     ) -> RunUsage:
+        log_text: str | None
         try:
             log_text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            log_text = ""
-        marker = _CLI_TOKENS_USED.search(log_text)
+            log_text = None
+        marker = _CLI_TOKENS_USED.search(log_text or "")
         cli_tokens_used = int(marker.group(1).replace(",", "")) if marker is not None else None
+        # Telemetry only: an unreadable log leaves the counts unknown, except that a
+        # tool-less run can never have issued a tool command.
+        counts = count_runtime_log_turns(log_text) if log_text is not None else None
+        tool_less = self.mode is CodexRuntimeMode.TOOL_LESS
+        if tool_less:
+            tool_calls: int | None = 0
+        else:
+            tool_calls = counts.tool_calls if counts is not None else None
+        assistant_messages = counts.assistant_messages if counts is not None else None
         return RunUsage(
             model=self.policy.model,
             reasoning_effort=self.policy.reasoning_effort,
@@ -411,8 +450,9 @@ class CodexRuntime:
             status=status,
             wall_seconds=time.perf_counter() - started,
             cli_tokens_used=cli_tokens_used,
-            turns=1 if self.mode is CodexRuntimeMode.TOOL_LESS else None,
-            tool_calls=0 if self.mode is CodexRuntimeMode.TOOL_LESS else None,
+            turns=1 if tool_less else None,
+            tool_calls=tool_calls,
+            assistant_messages=assistant_messages,
         )
 
     @staticmethod
@@ -701,6 +741,8 @@ __all__: list[str] = [
     "NO_OUTPUT_SECONDS_ENV",
     "CodexRuntime",
     "CodexRuntimeMode",
+    "RuntimeLogCounts",
+    "count_runtime_log_turns",
     "resolve_no_output_seconds",
     "validate_output",
 ]
