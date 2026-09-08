@@ -1,6 +1,7 @@
 import {describe, expect, it, vi} from "vitest";
 
 import {
+  botLoginForAppSlug,
   buildGitCloneUrl,
   buildReviewProcessEnv,
   buildRvwRunInvocation,
@@ -96,7 +97,16 @@ describe("review process environment", () => {
     });
     expect(processEnv).not.toHaveProperty("GH_TOKEN");
     expect(processEnv).not.toHaveProperty("GITHUB_TOKEN");
+    expect(processEnv).not.toHaveProperty("RVW_GITHUB_LOGIN");
     expect(JSON.stringify(processEnv)).not.toContain("ghs_");
+  });
+
+  it("passes the App's own bot login so Python can recognise its threads", () => {
+    expect(botLoginForAppSlug("review-app")).toBe("review-app[bot]");
+    expect(buildReviewProcessEnv("codex.example", botLoginForAppSlug("review-app"))).toMatchObject({
+      RVW_GITHUB_LOGIN: "review-app[bot]",
+    });
+    expect(buildReviewProcessEnv("codex.example", "")).not.toHaveProperty("RVW_GITHUB_LOGIN");
   });
 
   it("runs the canonical command with webhook anchors and the artifact root", () => {
@@ -106,7 +116,8 @@ describe("review process environment", () => {
     expect(command).toContain("python -m rvw.container_entrypoint run ");
     expect(command).toContain("--target 'https://github.com/acme/rockets/pull/42'");
     expect(command).toContain(`--base-ref '${options.baseSha}' --head-ref '${options.headSha}'`);
-    expect(command).toContain("--out '/workspace/result' --deadline 900 --policy auto --publish github-comment --json");
+    expect(command).toContain("--out '/workspace/result' --deadline 900 --policy auto --publish github-review --json");
+    expect(buildRvwRunInvocation({...options, publish: "github-comment"})).toContain("--publish github-comment --json");
     expect(command).not.toContain("GH_REPO");
     expect(command).not.toContain("--repo-dir");
     expect(() => buildRvwRunInvocation({...options, prNumber: 0})).toThrow(/positive integer/);

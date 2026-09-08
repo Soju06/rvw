@@ -251,6 +251,15 @@ export interface CreateCheckRunInput {
 export interface CreatedCheckRun {
   id: number;
   htmlUrl?: string;
+  /** The App's slug as GitHub reports it on the check run; its bot login is `<slug>[bot]`. */
+  appSlug?: string;
+}
+
+function appSlugOf(response: Record<string, unknown>): string | undefined {
+  const app = response.app;
+  if (typeof app !== "object" || app === null || Array.isArray(app)) return undefined;
+  const slug = (app as Record<string, unknown>).slug;
+  return typeof slug === "string" && /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(slug) ? slug : undefined;
 }
 
 export async function createCheckRun(
@@ -286,10 +295,28 @@ export async function createCheckRun(
   if (response.html_url !== undefined && typeof response.html_url !== "string") {
     throw new Error("GitHub Check Run response html_url must be a string");
   }
+  const appSlug = appSlugOf(response);
   return {
     id: response.id,
     ...(typeof response.html_url === "string" ? {htmlUrl: response.html_url} : {}),
+    ...(appSlug === undefined ? {} : {appSlug}),
   };
+}
+
+/** Read the App slug from an existing check run when a job re-enters without it. */
+export async function getCheckRunAppSlug(
+  token: string,
+  input: {owner: string; repo: string; checkRunId: number},
+  fetcher: GitHubFetch = fetch,
+): Promise<string | undefined> {
+  const value = await githubJson(
+    "Check Run read",
+    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/check-runs/${input.checkRunId}`,
+    token,
+    {method: "GET"},
+    fetcher,
+  );
+  return appSlugOf(objectValue(value, "Check Run read"));
 }
 
 export interface UpdateCheckRunInput {

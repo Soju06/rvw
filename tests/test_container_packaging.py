@@ -109,7 +109,7 @@ def test_entrypoint_forwards_the_app_deadline_verbatim(tmp_path: Path) -> None:
         "--policy",
         "auto",
         "--publish",
-        "github-comment",
+        "github-review",
         "--json",
     ]
     run_entrypoint(

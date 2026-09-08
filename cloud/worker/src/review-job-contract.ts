@@ -139,7 +139,7 @@ export function parseProcessResult(output: string): ProcessResult {
   if (["replicas", "adjudicate_replicas", "concurrency", "deadline"].some((key) => !integer(runtime[key], 1)) ||
       Number(runtime.deadline) > 1800 || !integer(runtime.host_concurrency) ||
       !["agentic", "inline"].includes(runtime.discovery_mode as string) ||
-      !["none", "github-comment"].includes(runtime.publish as string) ||
+      !["none", "github-review", "github-comment"].includes(runtime.publish as string) ||
       !["read-only", "danger-full-access"].includes(runtime.sandbox as string) ||
       ("no_output_seconds" in runtime && !integer(runtime.no_output_seconds, 1)) ||
       ("reasoning_summary" in runtime &&

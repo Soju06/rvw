@@ -1959,7 +1959,7 @@ def auto(
         policy_path,
         concurrency,
         deadline,
-        None if publish is None else ("github-comment" if publish else "none"),
+        None if publish is None else ("github-review" if publish else "none"),
         json_output,
         replicas,
         adjudicate_replicas,
@@ -1977,7 +1977,9 @@ def run_command(
     target: Annotated[str, Option("--target")],
     repo_dir: Annotated[Path | None, Option("--repo-dir")] = None,
     policy_path: Annotated[str, Option("--policy")] = "auto",
-    publish: Annotated[Literal["none", "github-comment"], Option("--publish")] = "none",
+    publish: Annotated[
+        Literal["none", "github-review", "github-comment"], Option("--publish")
+    ] = "none",
     base_ref: Annotated[str | None, Option("--base-ref")] = None,
     head_ref: Annotated[str | None, Option("--head-ref")] = None,
     out: Annotated[Path | None, Option("--out")] = None,
@@ -2022,7 +2024,7 @@ def _run_command(
     policy_path: str,
     concurrency: int,
     deadline: int,
-    publish: Literal["none", "github-comment"] | None,
+    publish: Literal["none", "github-review", "github-comment"] | None,
     json_output: bool,
     replicas: int,
     adjudicate_replicas: int,
@@ -2034,6 +2036,13 @@ def _run_command(
     no_output_timeout: int | None = None,
 ) -> None:
     started = time.monotonic()
+    if publish == "github-comment":
+        _error_console.print(
+            "--publish github-comment is deprecated; use --publish github-review "
+            "(the alias is accepted for one release)",
+            markup=False,
+        )
+        publish = "github-review"
     runtime = RuntimeSettings(
         replicas=replicas,
         adjudicate_replicas=adjudicate_replicas,
@@ -2121,9 +2130,9 @@ def _run_command(
             else:
                 if selected_policy != "auto" and not Path(selected_policy).is_file():
                     raise PolicyNotFound(Path(selected_policy))
-                if runtime.publish == "github-comment" and resolved.kind != "pr":
+                if runtime.publish == "github-review" and resolved.kind != "pr":
                     stage = "configuration"
-                    raise ValueError("github-comment publication requires a PR target")
+                    raise ValueError("github-review publication requires a PR target")
                 if repo_dir is None and discovery_mode is DiscoveryMode.AGENTIC:
                     stage = "checkout"
                     temporary = stack.enter_context(tempfile.TemporaryDirectory(prefix="rvw-run-"))
@@ -2167,7 +2176,7 @@ def _run_command(
                 run.save_policy(effective)
                 if publish is None:
                     runtime.publish = (
-                        "github-comment" if effective.policy.publish_state == "comment" else "none"
+                        "github-review" if effective.policy.publish_state == "comment" else "none"
                     )
                 process.command.extend(["--publish", runtime.publish])
                 stage = "review"
@@ -2223,10 +2232,10 @@ def _run_command(
                     ).model_dump(mode="json"),
                 )
                 stage = "publication"
-                if runtime.publish == "github-comment":
+                if runtime.publish == "github-review":
                     if resolved.kind != "pr" or resolved.pr_number is None:
                         stage = "configuration"
-                        raise ValueError("github-comment publication requires a PR target")
+                        raise ValueError("github-review publication requires a PR target")
                     github = GhCliClient()
                     publication = publish_review(
                         allow_language_fallback=(

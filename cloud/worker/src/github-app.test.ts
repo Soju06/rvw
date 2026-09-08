@@ -5,6 +5,7 @@ import {describe, expect, it, vi} from "vitest";
 import {
   createAppJwt,
   createCheckRun,
+  getCheckRunAppSlug,
   getInstallationToken,
   updateCheckRun,
   type TokenStorage,
@@ -231,4 +232,28 @@ it("updates a check name and diagnostic text", async () => {
     return Response.json({id: 42});
   });
   await updateCheckRun("token", {owner: "a", repo: "b", checkRunId: 42, conclusion: "success", title: "Done", summary: "Complete", name: "New review", text: "diagnostics"}, fetcher);
+});
+
+describe("check-run App slug", () => {
+  const input = {owner: "acme", repo: "rockets", headSha: "a".repeat(40), jobId: "job-1"};
+  it("returns the App slug from the creation response when GitHub reports one", async () => {
+    const fetcher = vi.fn(async () => Response.json({id: 7, html_url: "https://example.test/c/7",
+      app: {id: 1, slug: "review-app"}}, {status: 201}));
+    await expect(createCheckRun("token", input, fetcher)).resolves.toEqual({id: 7, htmlUrl: "https://example.test/c/7", appSlug: "review-app"});
+  });
+  it("omits the slug when the response has none or it is not a safe identifier", async () => {
+    const none = vi.fn(async () => Response.json({id: 7}, {status: 201}));
+    await expect(createCheckRun("token", input, none)).resolves.toEqual({id: 7});
+    const unsafe = vi.fn(async () => Response.json({id: 7, app: {slug: "bad slug[bot]"}}, {status: 201}));
+    await expect(createCheckRun("token", input, unsafe)).resolves.toEqual({id: 7});
+  });
+  it("reads the slug back from an existing check run", async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      expect(String(url)).toBe("https://api.github.com/repos/acme/rockets/check-runs/42");
+      return Response.json({id: 42, app: {slug: "review-app"}});
+    });
+    await expect(getCheckRunAppSlug("token", {owner: "acme", repo: "rockets", checkRunId: 42}, fetcher)).resolves.toBe("review-app");
+    const failing = vi.fn(async () => new Response("", {status: 500}));
+    await expect(getCheckRunAppSlug("token", {owner: "acme", repo: "rockets", checkRunId: 42}, failing)).rejects.toThrow(/HTTP 500/);
+  });
 });

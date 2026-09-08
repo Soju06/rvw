@@ -192,6 +192,16 @@ describe("Python artifact summary", () => {
 });
 
 
+it.each(["none", "github-review", "github-comment"])("accepts runtime.publish %s", (publish) => {
+  const process = processFixture();
+  (process.runtime as Record<string, unknown>).publish = publish;
+  expect(checkConclusionForResult(0, JSON.stringify(process)).conclusion).toBe("success");
+});
+it("rejects an unknown runtime.publish value", () => {
+  const process = processFixture();
+  (process.runtime as Record<string, unknown>).publish = "github-approve";
+  expect(checkConclusionForResult(0, JSON.stringify(process)).conclusion).toBe("neutral");
+});
 it.each(["target", "runtime", "artifacts", "effective_policy", "failure"])(
   "rejects process contracts missing %s", (field) => {
     const process: Record<string, unknown> = processFixture();

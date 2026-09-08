@@ -407,7 +407,7 @@ anchor checks, lineage rechecks, and stack-level artifacts.
 
 ### Requirement: Run is the shared policy-gated execution entry
 
-`rvw run` MUST accept `--target <pr-url|pr-number|sha>`, optional `--base-ref` and `--head-ref`, optional `--repo-dir`, `--out`, `--policy auto|PATH`, `--publish none|github-comment`, and `--json`. It MUST expose positive discovery and adjudication replica controls with defaults 1 and 3, positive concurrency default 8, per-execution deadline default 600 seconds restricted to 1 through 1800, and discovery mode `agentic|inline` defaulting to `agentic`. It MUST execute the existing shared pipeline once, evaluate policy only after checking execution status, and record effective settings. `--out DIR` MUST name the artifact directory itself, with no appended run ID; without it the ordinary `/tmp/rvw/<run-id>` root MUST remain available. The run ID MUST remain recorded independently of the output path.
+`rvw run` MUST accept `--target <pr-url|pr-number|sha>`, optional `--base-ref` and `--head-ref`, optional `--repo-dir`, `--out`, `--policy auto|PATH`, `--publish none|github-review`, and `--json`. It MUST accept `--publish github-comment` as a deprecated alias of `github-review` for one release, MUST print a deprecation warning, and MUST record the canonical value in the process contract and command. It MUST expose positive discovery and adjudication replica controls with defaults 1 and 3, positive concurrency default 8, per-execution deadline default 600 seconds restricted to 1 through 1800, and discovery mode `agentic|inline` defaulting to `agentic`. It MUST execute the existing shared pipeline once, evaluate policy only after checking execution status, and record effective settings. `--out DIR` MUST name the artifact directory itself, with no appended run ID; without it the ordinary `/tmp/rvw/<run-id>` root MUST remain available. The run ID MUST remain recorded independently of the output path.
 
 #### Scenario: Caller chooses an artifact directory
 
@@ -418,6 +418,11 @@ anchor checks, lineage rechecks, and stack-level artifacts.
 
 - **WHEN** an agentic `run` invocation omits `--repo-dir`
 - **THEN** existing provisioning supplies a verified checkout for shared discovery and adjudication
+
+#### Scenario: Caller uses the deprecated publish mode
+
+- **WHEN** `rvw run --publish github-comment` is invoked
+- **THEN** the command warns that the alias is deprecated and records `runtime.publish: github-review`
 
 ### Requirement: Run verifies supplied target anchors
 

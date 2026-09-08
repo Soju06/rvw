@@ -18,6 +18,6 @@
 
 ## 4. Rename the App publish mode and surface publish and thread facts
 
-- [ ] 4.1 Add failing Vitest coverage: the argv uses `--publish github-review`; the contract parser accepts `github-comment` as an alias and the new summary fields; check facts carry `publish` and `publication_skipped`; the process env carries `RVW_GITHUB_LOGIN` when the check-run response names the App slug. Add Python tests for the CLI alias warning and normalization.
-- [ ] 4.2 Implement the Worker rename, alias, facts, slug capture, and env passing; the Python `--publish` alias with deprecation warning; regenerated `process.schema.json`; cloud and container docs.
-- [ ] 4.3 Amend the operation-modes main spec and context, then commit feat(cloud): rename the publish mode to github-review and surface publish and thread facts.
+- [x] 4.1 Add failing Vitest coverage: the argv uses `--publish github-review`; the contract parser accepts `github-comment` as an alias and the new summary fields; check facts carry `publish` and `publication_skipped`; the process env carries `RVW_GITHUB_LOGIN` when the check-run response names the App slug. Add Python tests for the CLI alias warning and normalization.
+- [x] 4.2 Implement the Worker rename, alias, facts, slug capture, and env passing; the Python `--publish` alias with deprecation warning; regenerated `process.schema.json`; cloud and container docs.
+- [x] 4.3 Amend the operation-modes main spec and context, then commit feat(cloud): rename the publish mode to github-review and surface publish and thread facts.

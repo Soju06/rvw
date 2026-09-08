@@ -176,7 +176,8 @@ class RuntimeSettings(ContractModel):
     concurrency: int = Field(default=8, ge=1)
     deadline: int = Field(default=600, ge=1, le=1800)
     discovery_mode: Literal["agentic", "inline"] = "agentic"
-    publish: Literal["none", "github-comment"] = "none"
+    # ``github-comment`` is the deprecated alias of ``github-review``; the CLI normalises it.
+    publish: Literal["none", "github-review", "github-comment"] = "none"
     host_concurrency: int = Field(default=12, ge=0)
     sandbox: Literal["read-only", "danger-full-access"] = "read-only"
     no_output_seconds: int = Field(default=660, ge=1)

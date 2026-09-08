@@ -66,7 +66,7 @@ def test_run_passes_the_verdict_and_policy_so_block_posts_request_changes(
             "--out",
             str(out),
             "--publish",
-            "github-comment",
+            "github-review",
             "--json",
         ],
     )
@@ -206,3 +206,62 @@ def test_publish_and_review_reject_an_invalid_repository_publish_block(
         "publish_policy_invalid: publish_policy_invalid: approve_not_opted_in"
         in result.stderr.replace("\n", "")
     )
+
+
+def test_publish_mode_alias_is_accepted_with_a_deprecation_warning_and_normalised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = fixture_artifacts(tmp_path, adjudicated=False)
+    patch_pipeline(monkeypatch, artifacts)
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _: artifacts.target)
+    calls: list[dict[str, object]] = []
+
+    def fake_publish(**kwargs: object) -> PublishResult:
+        calls.append(kwargs)
+        return PublishResult(
+            review_url="https://example.test/r/1",
+            inline_count=0,
+            body_fallback_count=0,
+            state="commented",
+        )
+
+    monkeypatch.setattr(cli_module, "publish_review", fake_publish)
+    out = tmp_path / "result"
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "run",
+            "--target",
+            "42",
+            "--policy",
+            str(policy_file(tmp_path, "comment")),
+            "--out",
+            str(out),
+            "--publish",
+            "github-comment",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "github-comment is deprecated" in result.stderr
+    process = json.loads((out / "process.json").read_text())
+    assert process["runtime"]["publish"] == "github-review"
+    assert process["command"][process["command"].index("--publish") + 1] == "github-review"
+    assert len(calls) == 1
+    canonical = runner.invoke(
+        cli_module.app,
+        [
+            "run",
+            "--target",
+            "42",
+            "--policy",
+            str(policy_file(tmp_path, "comment")),
+            "--out",
+            str(tmp_path / "canonical"),
+            "--publish",
+            "github-review",
+            "--json",
+        ],
+    )
+    assert canonical.exit_code == 0, canonical.output
+    assert "deprecated" not in canonical.stderr
