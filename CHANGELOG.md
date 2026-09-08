@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0](https://github.com/Soju06/rvw/compare/v0.15.0...v0.16.0) (2026-09-08)
+
+
+### Features
+
+* cancel silent runtimes, state the lane budget, and block remote egress from review tool commands ([#84](https://github.com/Soju06/rvw/issues/84)) ([00002e9](https://github.com/Soju06/rvw/commit/00002e9fafd9db3c8f375dcb9c80ff2333a0b92b))
+* select the review event from repository policy and resolve rvw's own threads when findings are fixed ([#85](https://github.com/Soju06/rvw/issues/85)) ([b9bb56e](https://github.com/Soju06/rvw/commit/b9bb56e5af8d7523b974ccd84a5090442d36605d))
+
 ## [0.15.0](https://github.com/Soju06/rvw/compare/v0.14.0...v0.15.0) (2026-09-08)
 
 
