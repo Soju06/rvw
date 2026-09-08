@@ -25,6 +25,9 @@ from rvw.runtimes import RunStatus, Runtime
 FAILURE_REASON = "publication_language_mismatch"
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _INLINE = re.compile(r"(`+)([^\n]*?)\1")
+# rvw's own invisible markers (finding identity, review identity) are never prose; any
+# other HTML comment stays scored so injected text cannot hide behind one.
+_RVW_MARKER = re.compile(r"<!--\s*rvw:v1\s[^<>]*-->")
 _URL = re.compile(r"(?:[A-Za-z][A-Za-z0-9+.-]*://|mailto:|www\.)[^\s<>]+")
 _TOKEN = re.compile(r"/?[A-Za-z_][A-Za-z0-9_./-]*")
 _STRUCTURE = re.compile(r"[`*#~<>\[\]{}|\r\n]|\d+|^\s*(?:[-+]\s)")
@@ -79,7 +82,9 @@ class _Piece:
 
 def _literal_ranges(text: str, protected_literals: Sequence[str]) -> list[tuple[int, int]]:
     ranges = [
-        match.span() for regex in (_INLINE, _URL, _STRUCTURE) for match in regex.finditer(text)
+        match.span()
+        for regex in (_RVW_MARKER, _INLINE, _URL, _STRUCTURE)
+        for match in regex.finditer(text)
     ]
     for match in _TOKEN.finditer(text):
         token = match.group().rstrip(".")

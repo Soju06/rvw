@@ -91,10 +91,12 @@ from rvw.policy import PolicyNotFound, PublishPolicyInvalid, evaluate, resolve_a
 from rvw.presentation import WORKTREE_RULE_WARNING, PresentationConfig, PresentationConfigInvalid
 from rvw.provenance import current_build_provenance, version_label
 from rvw.publish import (
+    GhCliClient,
     PublicationLanguageMismatch,
     PublishError,
     publish_body_review,
     publish_review,
+    resolve_own_identity,
 )
 from rvw.registry import (
     EffectiveRegistry,
@@ -2092,6 +2094,7 @@ def _run_command(
                     if resolved.kind != "pr" or resolved.pr_number is None:
                         stage = "configuration"
                         raise ValueError("github-comment publication requires a PR target")
+                    github = GhCliClient()
                     publication = publish_review(
                         allow_language_fallback=(
                             allow_language_fallback or effective.policy.allow_language_fallback
@@ -2103,6 +2106,10 @@ def _run_command(
                         merged=artifacts.merged,
                         outcome=artifacts.outcome,
                         execute=True,
+                        identity=resolve_own_identity(client=github),
+                        github=github,
+                        thread_policy=effective.policy.threads,
+                        cwd=Path.cwd(),
                     )
                     process.language_fallback_used = publication.language_fallback_used
                 process.status = "block" if decision.verdict == "BLOCK" else "pass"
@@ -2447,6 +2454,7 @@ def publish_command(
     except StageMissing as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_NOT_FOUND) from exc
+    github = GhCliClient()
     try:
         result = publish_review(
             allow_language_fallback=allow_language_fallback,
@@ -2457,6 +2465,10 @@ def publish_command(
             merged=merged,
             outcome=outcome,
             execute=execute,
+            identity=resolve_own_identity(client=github),
+            github=github,
+            plan_threads=True,
+            cwd=Path.cwd(),
         )
     except PublicationLanguageMismatch as exc:
         _error_console.print(str(exc), markup=False)
@@ -2465,6 +2477,15 @@ def publish_command(
         _console.print(str(result.review_url), markup=False, soft_wrap=True)
     else:
         _console.print(str(run.dir / "publish-payload.json"), markup=False, soft_wrap=True)
+    facts = result.facts
+    if facts is not None:
+        _console.print(
+            "threads: "
+            f"reuse {len(facts.reused_thread_ids)}, resolve {len(facts.resolved_thread_ids)}, "
+            f"supersede {len(facts.superseded_thread_ids)}, ambiguous {len(facts.threads_ambiguous)}"
+            + (f" ({facts.threads_skipped_reason})" if facts.threads_skipped_reason else ""),
+            markup=False,
+        )
 
 
 @stack_app.command("plan")

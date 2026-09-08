@@ -236,6 +236,7 @@ def test_allow_approve_is_placeholder_and_payload_remains_comment(
         payloads.append(json.loads(input_json))
         return json.dumps({"html_url": "https://example.test/review/1"})
 
+    monkeypatch.setattr(cli_module, "resolve_own_identity", lambda *_, **__: None)
     monkeypatch.setattr(publish_module, "_run", fake_run)
     result = runner.invoke(
         cli_module.app,

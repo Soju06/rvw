@@ -6,9 +6,9 @@
 
 ## 2. Fingerprint findings and reconcile rvw's own review threads
 
-- [ ] 2.1 Add failing tests: fingerprint stable under line shifts and whitespace, changed by evidence; marker round-trip; the language gate ignores HTML comments; reconciliation fixture (fixed, persisting, moved, outdated-continuing, ambiguous, resolved-by-author, lane-invalid, login-unknown) yields exact resolved/reused/superseded/posted/ambiguous/skipped sets; catalog parity and the Hangul guard cover `threads.py`.
-- [ ] 2.2 Implement `src/rvw/threads.py` (normalize, fingerprint, marker build/parse, line mapping through diff hunks, `reconcile_threads`, GraphQL read/resolve/reply through the client seam), the marker on inline bodies, and the HTML-comment exclusion in `langgate`.
-- [ ] 2.3 Amend the reporting main spec and context, then commit feat(reporting): fingerprint findings and reuse or resolve rvw's own review threads across heads.
+- [x] 2.1 Add failing tests: fingerprint stable under line shifts and whitespace, changed by evidence; marker round-trip; the language gate ignores HTML comments; reconciliation fixture (fixed, persisting, moved, outdated-continuing, ambiguous, resolved-by-author, lane-invalid, login-unknown) yields exact resolved/reused/superseded/posted/ambiguous/skipped sets; catalog parity and the Hangul guard cover `threads.py`.
+- [x] 2.2 Implement `src/rvw/threads.py` (identity, normalize, fingerprint, markers, line mapping through diff hunks, compare-API provider, `reconcile_threads` with the fail-safe rules, GraphQL read/resolve/reply through the client seam), the markers on inline bodies, the rvw-marker exclusion in `langgate`, `PublishFacts` on the summary contract with the regenerated schema and Worker parser acceptance, and reconciliation inside `publish_review` after the review write.
+- [x] 2.3 Amend the reporting main spec and context, then commit feat(reporting): fingerprint findings and reuse or resolve rvw's own review threads across heads.
 
 ## 3. Select the review event from policy, once per head, and dismiss on pass
 

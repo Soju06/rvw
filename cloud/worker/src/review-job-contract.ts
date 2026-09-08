@@ -217,6 +217,25 @@ export interface SummaryLanes {
   uncovered_regions: number | null;
 }
 
+export const REVIEW_EVENTS = ["COMMENT", "REQUEST_CHANGES", "APPROVE"] as const;
+export type ReviewEvent = (typeof REVIEW_EVENTS)[number];
+export const PUBLISH_ID_LISTS = ["dismissed_review_ids", "dismiss_failed_review_ids"] as const;
+export const PUBLISH_THREAD_LISTS = [
+  "resolved_thread_ids", "reused_thread_ids", "superseded_thread_ids", "threads_ambiguous",
+  "threads_skipped_lane_invalid", "threads_skipped_resolved", "threads_skipped_same_head",
+  "threads_skipped_human_reply", "threads_skipped_unverified", "threads_skipped_uncovered",
+  "threads_skipped_missing",
+] as const;
+/** Python publication facts (summary.publish); carried verbatim into the check text. */
+export interface PublishFacts extends Record<(typeof PUBLISH_THREAD_LISTS)[number], string[]>,
+  Record<(typeof PUBLISH_ID_LISTS)[number], number[]> {
+  event: ReviewEvent | null;
+  policy_source: "default" | "repository" | "explicit" | null;
+  actor: string | null;
+  event_clamped_reason: string | null;
+  threads_skipped_reason: string | null;
+}
+
 export interface ArtifactSummary extends PublicationFacts {
   schema_version: 1;
   lanes: SummaryLanes;
@@ -227,6 +246,39 @@ export interface ArtifactSummary extends PublicationFacts {
   blockers: string[];
   markdown: string;
   presentation: PresentationConfig;
+  /** Why no review was posted although the run completed; null for legacy summaries. */
+  publication_skipped: string | null;
+  /** null for legacy summaries written before publication facts existed. */
+  publish: PublishFacts | null;
+}
+
+function publishFacts(value: unknown): PublishFacts | null {
+  if (value === undefined) return null;
+  const record = recordValue(value, "summary publish");
+  fields(record, ["event", "policy_source", "actor", "event_clamped_reason", "threads_skipped_reason",
+    ...PUBLISH_ID_LISTS, ...PUBLISH_THREAD_LISTS], "summary publish");
+  if (!(record.event === null || REVIEW_EVENTS.includes(record.event as ReviewEvent)) ||
+      !(record.policy_source === null || ["default", "repository", "explicit"].includes(record.policy_source as string)) ||
+      ![record.actor, record.event_clamped_reason, record.threads_skipped_reason].every(nullableString)) {
+    throw new Error("summary publish facts are invalid");
+  }
+  for (const key of PUBLISH_ID_LISTS) {
+    if (!Array.isArray(record[key]) || (record[key] as unknown[]).some((item) => !integer(item))) {
+      throw new Error(`summary publish ${key} must be a list of non-negative integers`);
+    }
+  }
+  for (const key of PUBLISH_THREAD_LISTS) {
+    if (!Array.isArray(record[key]) || (record[key] as unknown[]).some((item) => typeof item !== "string" || !item)) {
+      throw new Error(`summary publish ${key} must be a list of non-empty strings`);
+    }
+  }
+  return record as unknown as PublishFacts;
+}
+
+function publicationSkipped(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.length === 0) throw new Error("summary publication_skipped is invalid");
+  return value;
 }
 
 function failedLanes(value: unknown): SummaryFailedLane[] {
@@ -262,7 +314,8 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
   const value = recordValue(JSON.parse(output), "summary");
   fields(value, ["schema_version", "lanes", "findings", "verdicts", "blockers", "markdown",
     ...(value.presentation === undefined ? [] : ["presentation"]),
-    ...["publication_failure", "language_fallback_used", "failed_lanes", "wave_wall_seconds"].filter(key => key in value)], "summary");
+    ...["publication_failure", "language_fallback_used", "failed_lanes", "wave_wall_seconds",
+      "publication_skipped", "publish"].filter(key => key in value)], "summary");
   const publication = publicationFacts(value);
   const presentation = parsePresentation(value.presentation === undefined ? {} : value.presentation);
   for (const [key, names] of [["findings", ["blocker", "warning", "suggestion"]],
@@ -296,6 +349,7 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
   return {schema_version: 1, lanes: {dispatched, valid, uncovered, uncovered_regions: uncoveredRegions},
     markdown: value.markdown, presentation, ...publication,
     failed_lanes: failedLanes(value.failed_lanes), wave_wall_seconds: waveWallSeconds(value.wave_wall_seconds),
+    publication_skipped: publicationSkipped(value.publication_skipped), publish: publishFacts(value.publish),
     findings: value.findings as ArtifactSummary["findings"],
     verdicts: value.verdicts as ArtifactSummary["verdicts"], blockers: value.blockers as string[]};
 }

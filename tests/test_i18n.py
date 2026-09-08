@@ -41,5 +41,6 @@ def test_renderer_modules_have_no_hangul_literals() -> None:
         "stack_report.py",
         "publication.py",
         "special_publication.py",
+        "threads.py",
     ):
         assert not re.search("[\uac00-\ud7a3]", (root / filename).read_text()), filename
