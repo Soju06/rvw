@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -23,7 +24,7 @@ from rvw.i18n import Locale, t
 from rvw.langgate import Rewriter, RuntimeRewriter, enforce_language_sync
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.presentation import PresentationConfig
-from rvw.publication import render_publication, render_publication_item
+from rvw.publication import failed_lane_ids, render_publication, render_publication_item
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.schema import Verdict
 from rvw.store import RunHandle, StageMissing
@@ -69,6 +70,7 @@ def _check_publication(
     locale: Locale,
     rewriter: Rewriter | None,
     allow_language_fallback: bool,
+    protected_literals: Sequence[str] = (),
 ) -> tuple[tuple[str, ...], bool]:
     from rvw.store import _write_json
     from rvw.summary import ExecutionSummary
@@ -83,6 +85,7 @@ def _check_publication(
             run_dir,
         ),
         allow_language_fallback=allow_language_fallback,
+        protected_literals=protected_literals,
     )
     facts = {
         "publication_failure": checked.failure_reason,
@@ -234,6 +237,8 @@ def publish_review(
         locale=locale,
         rewriter=rewriter,
         allow_language_fallback=allow_language_fallback,
+        # Lane identifiers named by the failed-lanes sentence are data, not prose.
+        protected_literals=failed_lane_ids(coverage),
     )
     body, fallback_body = documents[0], documents[-1]
     for comment, rewritten in zip(comments, documents[1:-1], strict=True):

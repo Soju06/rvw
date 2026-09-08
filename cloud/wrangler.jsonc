@@ -7,7 +7,8 @@
   "vars": {
     "RVW_ENV": "dev",
     "RVW_VERSION": "0.0.0",
-    "RVW_JOB_DEADLINE_MINUTES": "90"
+    "RVW_JOB_DEADLINE_MINUTES": "120",
+    "RVW_REVIEW_DEADLINE_SECONDS": "900"
   },
   "containers": [
     {
@@ -53,7 +54,8 @@
       "vars": {
         "RVW_ENV": "spike",
         "RVW_VERSION": "0.0.0",
-        "RVW_JOB_DEADLINE_MINUTES": "90"
+        "RVW_JOB_DEADLINE_MINUTES": "120",
+        "RVW_REVIEW_DEADLINE_SECONDS": "900"
       },
       "containers": [
         {
@@ -96,7 +98,8 @@
       "vars": {
         "RVW_ENV": "prod",
         "RVW_VERSION": "0.0.0",
-        "RVW_JOB_DEADLINE_MINUTES": "90"
+        "RVW_JOB_DEADLINE_MINUTES": "120",
+        "RVW_REVIEW_DEADLINE_SECONDS": "900"
       },
       "containers": [
         {

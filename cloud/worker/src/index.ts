@@ -1,4 +1,4 @@
-import {ConfigMissingError, configErrorResponse, requiredConfig} from "./config";
+import {configErrorResponse, isConfigError, requiredConfig} from "./config";
 import {ContainerProxy} from "./sandbox";
 import {handleRoute} from "./routes";
 import {handleWebhook} from "./webhook";
@@ -19,7 +19,7 @@ export default {
       if (request.method === "GET" && url.pathname.startsWith("/jobs/")) return await handleJobStatus(request, env);
       return await handleRoute(request, env, config);
     } catch (error) {
-      if (error instanceof ConfigMissingError) return configErrorResponse(error);
+      if (isConfigError(error)) return configErrorResponse(error);
       throw error;
     }
   },

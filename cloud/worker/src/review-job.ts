@@ -17,7 +17,6 @@ import {
 import {
   canTransition,
   checkConclusionForResult,
-  deadlineMinutes,
   isDeadlineReached,
   isTerminalState,
   shouldRestartForRerequest,
@@ -95,7 +94,7 @@ function initializeInvocation(message: ReviewJobMessage): string {
     `--base-ref ${shellQuote(message.baseSha)} --head-ref ${shellQuote(message.headSha)}`;
 }
 
-export function reviewScript(message: ReviewJobMessage): string {
+export function reviewScript(message: ReviewJobMessage, deadlineSeconds: number): string {
   return String.raw`#!/usr/bin/env bash
 set -euo pipefail
 mkdir -p /workspace/result /root/.config/gh
@@ -108,7 +107,7 @@ github.com:
 RVW_GH_CONFIG
 chmod 0600 /root/.config/gh/hosts.yml
 unset GH_TOKEN GITHUB_TOKEN RVW_CODEX_DEFAULT_BASE_URL RVW_CODEX_SANDBOX
-exec ${buildRvwRunInvocation(message)}
+exec ${buildRvwRunInvocation({...message, deadlineSeconds})}
 `;
 }
 
@@ -155,7 +154,12 @@ function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSumm
     presentation_config_failure: record.presentationConfigFailure ?? null,
     publication_failure: summary?.publication_failure ?? mapping?.publication_failure ?? null,
     language_fallback_used: summary?.language_fallback_used ?? mapping?.language_fallback_used ?? false,
-    lanes: summary?.lanes ?? null, findings: summary?.findings ?? null,
+    // lane_hunk_receipts counts each (lane, hunk) pair; uncovered_regions is the distinct
+    // region count the human summary states (two dead lanes over 13 hunks: 26 receipts, 13 regions).
+    lanes: summary === null ? null : {dispatched: summary.lanes.dispatched, valid: summary.lanes.valid,
+      lane_hunk_receipts: summary.lanes.uncovered, uncovered_regions: summary.lanes.uncovered_regions},
+    failed_lanes: summary?.failed_lanes ?? null, wave_wall_seconds: summary?.wave_wall_seconds ?? null,
+    findings: summary?.findings ?? null,
     verdicts: summary?.verdicts ?? null, blockers: summary?.blockers ?? null,
     artifact_key: `jobs/${record.jobId}/`, artifacts: record.artifacts}, presentation);
 }
@@ -325,14 +329,13 @@ export class RvwReviewJob extends DurableObject<Env> {
     }
     await sandbox.exec(initializeInvocation(message));
     await configureOutbound(sandbox, config.codexProxyHost, token);
-    await sandbox.writeFile("/workspace/run-review.sh", reviewScript(message));
+    await sandbox.writeFile("/workspace/run-review.sh", reviewScript(message, config.reviewDeadlineSeconds));
     await sandbox.exec("chmod 0755 /workspace/run-review.sh");
     const process = await sandbox.startProcess("/workspace/run-review.sh", {
       autoCleanup: false,
       env: buildReviewProcessEnv(config.codexProxyHost),
     });
-    const deadlineAtMs =
-      Date.now() + deadlineMinutes(this.env.RVW_JOB_DEADLINE_MINUTES) * 60 * 1_000;
+    const deadlineAtMs = Date.now() + config.jobDeadlineMinutes * 60 * 1_000;
     record = {
       ...record,
       sandboxId,
@@ -783,8 +786,7 @@ export class RvwReviewJob extends DurableObject<Env> {
   }
 
   private async timeOut(record: JobRecord, config: RequiredConfig): Promise<void> {
-    const minutes = deadlineMinutes(this.env.RVW_JOB_DEADLINE_MINUTES);
-    const reason = t("deadline", "en", {display_name: "rvw", minutes});
+    const reason = t("deadline", "en", {display_name: "rvw", minutes: config.jobDeadlineMinutes});
     record = {
       ...record,
       conclusion: "neutral",

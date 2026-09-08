@@ -83,8 +83,14 @@ def item(
 class FakeRuntime:
     name = "fake"
 
-    def __init__(self, waves: Sequence[Sequence[RuntimeAdjudication | None]]) -> None:
+    def __init__(
+        self,
+        waves: Sequence[Sequence[RuntimeAdjudication | None]],
+        *,
+        walls: Sequence[float] = (),
+    ) -> None:
         self._responses = [response for wave in waves for response in wave]
+        self._walls = list(walls)
         self.calls: list[dict[str, object]] = []
 
     async def execute_raw(
@@ -108,6 +114,8 @@ class FakeRuntime:
             }
         )
         replica = int(run_dir.name.removeprefix("r"))
+        call_index = len(self.calls) - 1
+        wall_seconds = self._walls[call_index] if call_index < len(self._walls) else 0
         if response is None:
             return RunResult(
                 lane_id="adjudicate",
@@ -115,7 +123,7 @@ class FakeRuntime:
                 status=RunStatus.INVALID,
                 output=None,
                 invalid_reason="scripted-invalid",
-                wall_seconds=0,
+                wall_seconds=wall_seconds,
                 artifact_dir=run_dir,
             )
         return RunResult(
@@ -124,7 +132,7 @@ class FakeRuntime:
             status=RunStatus.VALID,
             output=response,
             invalid_reason=None,
-            wall_seconds=0,
+            wall_seconds=wall_seconds,
             artifact_dir=run_dir,
         )
 
@@ -372,6 +380,63 @@ async def test_all_invalid_retries_once_before_voting(tmp_path: Path) -> None:
     assert outcome.verdicts[group.key] is Verdict.CONFIRMED
     assert len(runtime.calls) == 6
     assert all("initial-retry" in cast(Path, call["run_dir"]).parts for call in runtime.calls[3:])
+
+
+async def test_outcome_records_longest_replica_wall_per_executed_wave(tmp_path: Path) -> None:
+    decided = make_group("decided", body="DECIDED BODY")
+    tied = make_group("tied", body="TIED BODY")
+    initial = [
+        RuntimeAdjudication(
+            items=[item(decided.key, Verdict.CONFIRMED), item(tied.key, Verdict.CONFIRMED)]
+        ),
+        RuntimeAdjudication(items=[item(decided.key, Verdict.CONFIRMED)]),
+        RuntimeAdjudication(items=[item(tied.key, Verdict.REJECTED, evidence="not broken")]),
+    ]
+    expanded = [
+        RuntimeAdjudication(items=[item(tied.key, Verdict.CONFIRMED, "expanded wins")]),
+        RuntimeAdjudication(items=[item(tied.key, Verdict.CONFIRMED)]),
+        RuntimeAdjudication(items=[item(tied.key, Verdict.REJECTED, evidence="counter")]),
+    ]
+    runtime = FakeRuntime([initial, expanded], walls=[600.144, 600.129, 426.6, 80.0, 95.5, 61.0])
+
+    outcome = await adjudicate(
+        make_merged(decided, tied),
+        target=make_target(),
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "out",
+        replicas=3,
+        deadline_seconds=30,
+        concurrency=2,
+    )
+
+    assert outcome.wave_wall_seconds == {"initial": 600.144, "expanded": 95.5}
+    assert AdjudicationOutcome.model_validate_json(outcome.model_dump_json()) == outcome
+
+
+async def test_retried_initial_wave_records_its_own_wall(tmp_path: Path) -> None:
+    group = make_group("retry")
+    retry = [
+        RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)]),
+        RuntimeAdjudication(items=[item(group.key, Verdict.CONFIRMED)]),
+        RuntimeAdjudication(items=[item(group.key, Verdict.REJECTED, evidence="safe")]),
+    ]
+    runtime = FakeRuntime(
+        [[None, None, None], retry], walls=[600.1, 600.2, 599.9, 40.0, 41.0, 39.0]
+    )
+
+    outcome = await adjudicate(
+        make_merged(group),
+        target=make_target(),
+        runtime=runtime,
+        repo_dir=tmp_path,
+        out_root=tmp_path / "out",
+        replicas=3,
+        deadline_seconds=30,
+        concurrency=2,
+    )
+
+    assert outcome.wave_wall_seconds == {"initial": 600.2, "initial-retry": 41.0}
 
 
 async def test_all_invalid_after_retry_is_infrastructure_failure(tmp_path: Path) -> None:

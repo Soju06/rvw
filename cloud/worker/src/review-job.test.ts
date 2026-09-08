@@ -1,4 +1,4 @@
-import {processFixture, summaryFixture} from "./review-contract-fixtures";
+import {processFixture, summaryFixture, waveWallFixture} from "./review-contract-fixtures";
 import type {PresentationConfig} from "./presentation";
 import type {UpdateCheckRunInput} from "./github-app";
 import type {Process} from "@cloudflare/sandbox";
@@ -24,7 +24,7 @@ vi.mock("./sandbox", () => ({
 }));
 vi.mock("./github-app", async (importOriginal) => ({...await importOriginal<typeof import("./github-app")>(), ...mocks}));
 
-import {RvwReviewJob} from "./review-job";
+import {RvwReviewJob, reviewScript} from "./review-job";
 import {idempotencyKey, type ReviewJobMessage} from "./webhook";
 
 const message: ReviewJobMessage = {
@@ -34,7 +34,7 @@ const message: ReviewJobMessage = {
   headSha: "a".repeat(40), baseSha: "b".repeat(40), event: "pull_request.opened",
   attempt: 1, deliveryId: "delivery-1", enqueuedAt: "2026-09-05T00:00:00.000Z",
 };
-function setup(state: string) {
+function setup(state: string, envOverrides: Record<string, string> = {}) {
   let record: Record<string, unknown> = {
     schemaVersion: 1, jobId: message.jobId, message, state,
     createdAt: message.enqueuedAt, updatedAt: message.enqueuedAt,
@@ -75,7 +75,8 @@ function setup(state: string) {
     return {key, size: value.length, etag: "etag", uploaded: new Date()};
   });
   const ctx = {storage} as unknown as DurableObjectState;
-  const env = {CODEX_PROXY_HOST: "proxy.example", GITHUB_APP_ID: "1", RVW_ARTIFACTS: {put}} as unknown as Env;
+  const env = {CODEX_PROXY_HOST: "proxy.example", GITHUB_APP_ID: "1", RVW_REVIEW_DEADLINE_SECONDS: "900",
+    RVW_JOB_DEADLINE_MINUTES: "120", RVW_ARTIFACTS: {put}, ...envOverrides} as unknown as Env;
   return {job: new RvwReviewJob(ctx, env), events, put, sandbox, storage, files, record: () => record};
 }
 beforeEach(() => { vi.clearAllMocks(); });
@@ -107,6 +108,35 @@ it("initializes diagnostics before an actual SDK start failure and finalizes thr
   )).toBe(true);
   expect(test.events.indexOf("put:process.json")).toBeLessThan(test.events.indexOf("destroy"));
   expect(test.sandbox.writeFile.mock.calls.every(([path]) => !path.endsWith("process.json"))).toBe(true);
+});
+
+it("writes the review script with the explicit configured deadline and a matching job cap", async () => {
+  const test = setup("provisioning");
+  delete test.record().processId;
+  await expect(test.job.start(message)).rejects.toThrow("process failed to start");
+  const script = test.sandbox.writeFile.mock.calls.find(([path]) => path === "/workspace/run-review.sh")?.[1];
+  expect(script).toContain("--deadline 900 --policy auto --publish github-comment --json");
+  expect(script).toBe(reviewScript(message, 900));
+  expect(reviewScript(message, 1200)).toContain("--deadline 1200 ");
+});
+
+it("fails closed before provisioning when the job cap cannot cover the review budget", async () => {
+  const test = setup("provisioning", {RVW_JOB_DEADLINE_MINUTES: "84"});
+  await expect(test.job.start(message)).rejects.toMatchObject({code: "config_incoherent",
+    reason: "job_deadline_below_review_budget", minimumJobDeadlineMinutes: 85});
+  expect(mocks.createCheckRun).not.toHaveBeenCalled();
+  expect(mocks.sandboxFor).not.toHaveBeenCalled();
+});
+
+it("uses the configured job cap for the deadline recorded at start", async () => {
+  const test = setup("provisioning");
+  test.sandbox.startProcess.mockImplementationOnce((async () => ({id: "process-2", command: "/workspace/run-review.sh",
+    startTime: new Date("2026-09-07T10:13:27.000Z")})) as never);
+  const before = Date.now();
+  await test.job.start(message);
+  const deadlineAt = Date.parse(test.record().deadlineAt as string);
+  expect(deadlineAt - before).toBeGreaterThanOrEqual(120 * 60_000 - 5_000);
+  expect(deadlineAt - before).toBeLessThanOrEqual(120 * 60_000 + 5_000);
 });
 
 it("continues all artifact attempts after an R2 failure", async () => {
@@ -152,6 +182,34 @@ it.each([
   }
   expect(test.sandbox.exec.mock.calls.some(([command]) => command.includes("--failure-code 'start_failed'"))).toBe(false);
   expect(test.record().conclusion).toBe(conclusion);
+});
+
+it("puts failed lanes, per-wave walls, receipts, and distinct regions into the check text", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "/workspace/run-review.sh", status: "completed",
+    startTime: new Date("2026-09-07T10:13:27Z"), exitCode: 0} as Process);
+  const previous = JSON.parse(test.files.get("/workspace/result/process.json")!);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({...previous, status: "pass", exit_code: 0, failure: null})));
+  // Shape of bori#1744 after the dead-lane skip: 6 lanes, 4 valid, 13 regions uncovered by 2 dead lanes.
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture({
+    presentation: {display_name: "rvw", short_name: "rvw", locale: "ko", footer: null},
+    lanes: {dispatched: 6, valid: 4, uncovered: 26, uncovered_regions: 13},
+    failed_lanes: [{lane_id: "correctness", reason: "exit_nonzero:124"}, {lane_id: "hygiene", reason: "exit_nonzero:124"}],
+    wave_wall_seconds: waveWallFixture({discovery_initial: 600.134, discovery_retry: 600.085, adjudication_initial: 600.144}),
+    markdown: "검토를 마쳤습니다. 수정이 필요한 문제 0건, 확인이 필요한 항목 0건. 검토되지 않은 변경 구간이 13곳 있습니다. 검토를 완료하지 못한 규칙 묶음 2개: correctness, hygiene.",
+  })));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const update = mocks.updateCheckRun.mock.calls[0][1];
+  expect(update.conclusion).toBe("success");
+  expect(update.summary).toContain("검토를 완료하지 못한 규칙 묶음 2개: correctness, hygiene.");
+  const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
+  expect(facts.lanes).toEqual({dispatched: 6, valid: 4, lane_hunk_receipts: 26, uncovered_regions: 13});
+  expect(facts.failed_lanes).toEqual([{lane_id: "correctness", reason: "exit_nonzero:124"}, {lane_id: "hygiene", reason: "exit_nonzero:124"}]);
+  expect(facts.wave_wall_seconds).toMatchObject({discovery_initial: 600.134, discovery_retry: 600.085,
+    discovery_redispatch: null, adjudication_initial: 600.144, adjudication_expanded: null});
+  expect(facts).not.toHaveProperty("uncovered");
 });
 
 it("persists diagnostics when a Sandbox process disappears", async () => {

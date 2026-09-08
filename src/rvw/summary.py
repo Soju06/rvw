@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rvw.adjudicate import AdjudicationAttempt, AdjudicationOutcome
-from rvw.discover import DiscoverResult
+from rvw.discover import DiscoverResult, LaneCoverage
 from rvw.merge import MergeResult
 from rvw.presentation import PresentationConfig
 from rvw.provenance import BuildProvenance, current_build_provenance
-from rvw.publication import publication_summary
+from rvw.publication import publication_summary, uncovered_regions
 from rvw.runtimes import RunDiagnostic
 
 
@@ -243,7 +244,29 @@ class ProcessResult(ContractModel):
 class SummaryLanes(ContractModel):
     dispatched: int = Field(default=0, ge=0)
     valid: int = Field(default=0, ge=0)
+    # Lane-hunk receipts: one per (lane, uncovered hunk); the check labels it lane_hunk_receipts.
     uncovered: int = Field(default=0, ge=0)
+    # Distinct changed regions no lane covered; the human summary counts these.
+    uncovered_regions: int = Field(default=0, ge=0)
+
+
+class SummaryFailedLane(ContractModel):
+    """One lane with a final INVALID planned execution and its normalized reason."""
+
+    lane_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class WaveWallSeconds(ContractModel):
+    """Longest runtime wall per executed pipeline wave; null when the wave did not run."""
+
+    discovery_initial: float | None = Field(default=None, ge=0)
+    discovery_retry: float | None = Field(default=None, ge=0)
+    discovery_redispatch: float | None = Field(default=None, ge=0)
+    adjudication_initial: float | None = Field(default=None, ge=0)
+    adjudication_initial_retry: float | None = Field(default=None, ge=0)
+    adjudication_expanded: float | None = Field(default=None, ge=0)
+    adjudication_expanded_retry: float | None = Field(default=None, ge=0)
 
 
 class FindingCounts(ContractModel):
@@ -264,10 +287,59 @@ class ExecutionSummary(ContractModel):
     presentation: PresentationConfig = Field(default_factory=PresentationConfig)
     schema_version: Literal[1] = 1
     lanes: SummaryLanes = Field(default_factory=SummaryLanes)
+    failed_lanes: list[SummaryFailedLane] = Field(default_factory=list)
+    wave_wall_seconds: WaveWallSeconds = Field(default_factory=WaveWallSeconds)
     findings: FindingCounts = Field(default_factory=FindingCounts)
     verdicts: VerdictCounts = Field(default_factory=VerdictCounts)
     blockers: list[str] = Field(default_factory=list)
     markdown: str = "Review has not completed."
+
+
+def summary_failed_lanes(coverage: Sequence[LaneCoverage]) -> list[SummaryFailedLane]:
+    """Name every lane with a final INVALID planned execution and its final reason.
+
+    Executions are read in persisted order; when one lane's failed executions end with
+    different normalized reasons the distinct reasons are joined with ``", "``.
+    """
+    failed: list[SummaryFailedLane] = []
+    for lane in coverage:
+        reasons: list[str] = []
+        for run in lane.runs:
+            if run.valid:
+                continue
+            reason = run.invalid_reason or "unknown"
+            if reason not in reasons:
+                reasons.append(reason)
+        if reasons:
+            failed.append(SummaryFailedLane(lane_id=lane.lane_id, reason=", ".join(reasons)))
+    return failed
+
+
+def _max_wall(values: Sequence[float | None]) -> float | None:
+    known = [value for value in values if value is not None]
+    return max(known) if known else None
+
+
+def wave_wall_seconds(
+    coverage: Sequence[LaneCoverage], outcome: AdjudicationOutcome | None
+) -> WaveWallSeconds:
+    """Reduce per-attempt discovery walls and adjudication wave walls to one record."""
+    planned = [attempt for lane in coverage for run in lane.runs for attempt in run.attempts]
+    redispatch = [attempt for lane in coverage for attempt in lane.redispatch]
+    adjudication = outcome.wave_wall_seconds if outcome is not None else {}
+    return WaveWallSeconds(
+        discovery_initial=_max_wall(
+            [attempt.wall_seconds for attempt in planned if attempt.wave == "initial"]
+        ),
+        discovery_retry=_max_wall(
+            [attempt.wall_seconds for attempt in planned if attempt.wave == "retry"]
+        ),
+        discovery_redispatch=_max_wall([attempt.wall_seconds for attempt in redispatch]),
+        adjudication_initial=adjudication.get("initial"),
+        adjudication_initial_retry=adjudication.get("initial-retry"),
+        adjudication_expanded=adjudication.get("expanded"),
+        adjudication_expanded_retry=adjudication.get("expanded-retry"),
+    )
 
 
 def execution_summary(
@@ -282,6 +354,7 @@ def execution_summary(
         dispatched=len(discovered.coverage),
         valid=sum(lane.valid > 0 for lane in discovered.coverage),
         uncovered=sum(len(lane.uncovered) for lane in discovered.coverage),
+        uncovered_regions=uncovered_regions(discovered.coverage),
     )
     counts = Counter(group.severity.value for group in merged.groups)
     findings = FindingCounts(**{key: counts[key] for key in ("blocker", "warning", "suggestion")})
@@ -292,6 +365,8 @@ def execution_summary(
     return ExecutionSummary(
         presentation=presentation or PresentationConfig(),
         lanes=lanes,
+        failed_lanes=summary_failed_lanes(discovered.coverage),
+        wave_wall_seconds=wave_wall_seconds(discovered.coverage, outcome),
         findings=findings,
         verdicts=verdicts,
         blockers=blockers,

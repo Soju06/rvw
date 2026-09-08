@@ -15,7 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "https://github.com/fixture/project/pull/42"
-TIMING_FIELDS = {"duration_ms", "wall_seconds"}
+TIMING_FIELDS = {"duration_ms", "wall_seconds", "wave_wall_seconds"}
 
 
 def _execute(arguments: list[str], *, cwd: Path, environ: dict[str, str]) -> str:
@@ -127,6 +127,7 @@ def _app_command(
         "repoDir": str(checkout),
         "out": str(out),
         "publish": "none",
+        "deadlineSeconds": 900,
     }
     return _execute(
         ["node", "--input-type=module", "-e", script, json.dumps(options)],
@@ -208,6 +209,8 @@ def test_direct_container_and_app_share_execution_artifacts(
         str(out),
         "--repo-dir",
         str(checkout),
+        "--deadline",
+        "900",
         "--policy",
         "auto",
         "--publish",
@@ -245,6 +248,8 @@ def test_direct_container_and_app_share_execution_artifacts(
         process, summary, artifacts = _snapshot(out)
         assert process["status"] == status
         assert process["exit_code"] == exit_code
+        # Every surface passes the explicit deadline; the App builds it from its config var.
+        assert process["runtime"]["deadline"] == 900
         assert process["target"] == {
             "repo": "fixture/project",
             "pr": 42,

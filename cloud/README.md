@@ -25,7 +25,8 @@ passes deployer values as CLI overrides.
 | --- | --- | --- |
 | Variable | `CODEX_PROXY_HOST` | Sole hostname where the Worker injects the Codex API credential; required, and empty/unset fails closed. |
 | Variable | `GITHUB_APP_ID` | Numeric GitHub App identifier; required, and empty/unset fails closed. |
-| Variable | `RVW_JOB_DEADLINE_MINUTES` | Hard review deadline in minutes; defaults to 90. |
+| Variable | `RVW_REVIEW_DEADLINE_SECONDS` | Explicit per-runtime `--deadline` passed to `rvw run` (1 to 1800); committed default 900 for every environment. Missing or out-of-range values fail closed with `config_missing` or `config_invalid`. |
+| Variable | `RVW_JOB_DEADLINE_MINUTES` | Hard job deadline in minutes; committed default 120 for every environment, 90 when the var is absent, and a malformed value fails closed with `config_invalid`. Must satisfy `minutes * 60 >= 5 * RVW_REVIEW_DEADLINE_SECONDS + 600` or every request fails closed with `config_incoherent` (`job_deadline_below_review_budget`). The reusable deploy workflow overlays this var from its `job_deadline_minutes` input (default 120, matching the committed value); raise it whenever you raise the review deadline. |
 | Secret | `CODEX_API_KEY` | Required upstream Codex credential, injected only at the configured proxy boundary. |
 | Secret | `GITHUB_APP_PRIVATE_KEY` | Required GitHub App private key used to mint installation tokens. |
 | Secret | `GITHUB_WEBHOOK_SECRET` | Required secret used to verify GitHub webhook signatures. |
@@ -175,12 +176,22 @@ consumers may manage Terraform themselves and set it false.
    Repeat with `--env prod` for production. Never place values in JSON, shell
    history, logs, `.dev.vars`, or committed files. `GITHUB_APP_PRIVATE_KEY`,
    `GITHUB_WEBHOOK_SECRET`, `CODEX_API_KEY`, and `RVW_ADMIN_TOKEN` are secret
-   bindings; `GITHUB_APP_ID`, `RVW_JOB_DEADLINE_MINUTES`, and
-   `CODEX_PROXY_HOST` are non-secret vars supplied by the deployer.
+   bindings; `GITHUB_APP_ID`, `RVW_JOB_DEADLINE_MINUTES`, `RVW_REVIEW_DEADLINE_SECONDS`,
+   and `CODEX_PROXY_HOST` are non-secret vars supplied by the deployer.
 
 ### Observe and operate jobs
 
-The hard job deadline is `RVW_JOB_DEADLINE_MINUTES` and defaults to 90. A healthy
+Each runtime execution inside the review receives the explicit `--deadline`
+`RVW_REVIEW_DEADLINE_SECONDS` (committed default 900). The hard job deadline is
+`RVW_JOB_DEADLINE_MINUTES` (committed default 120) and the Worker refuses to serve
+any request unless `RVW_JOB_DEADLINE_MINUTES * 60 >= 5 * RVW_REVIEW_DEADLINE_SECONDS + 600`:
+five runtime waves on the no-adjudication-retry path (discovery initial and retry,
+adjudication initial, and the doubled expanded pass) plus ten minutes of provisioning,
+clone, publish, and upload slack. With 900 seconds the minimum is 85 minutes; the code
+worst case of nine waves (135 minutes at 900 seconds) is deliberately not covered and
+ends as a neutral check. Deploys through the reusable workflow overlay
+`RVW_JOB_DEADLINE_MINUTES` from the `job_deadline_minutes` input, whose default of 120
+matches the committed value; raise both together with the review deadline. A healthy
 process is polled every 30 seconds and is never killed because an HTTP observer
 stopped waiting. Artifacts are stored under
 `jobs/<installation_id:repo_id:pr_number:head_sha>/` as `report.md`,

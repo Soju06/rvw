@@ -209,6 +209,32 @@ def test_usage_errors_persist_invalid_contract(
     assert_manifest(out, process)
 
 
+def test_explicit_deadline_reaches_the_process_contract(
+    monkeypatch: pytest.MonkeyPatch, artifacts: PipelineArtifacts, tmp_path: Path
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def execute(**kwargs: object) -> PipelineArtifacts:
+        observed.update(kwargs)
+        raise RuntimeError("fixture runtime unavailable")
+
+    monkeypatch.setattr(cli, "_execute_pipeline", execute)
+    monkeypatch.setattr(cli, "_resolve_cli_target", lambda _: artifacts.target)
+    out = tmp_path / "result"
+    result = runner.invoke(
+        cli.app,
+        ["run", "--target", "42", "--out", str(out), "--deadline", "900", "--json"],
+    )
+
+    assert result.exit_code == 3, result.output
+    assert observed["deadline_seconds"] == 900
+    process = json.loads((out / "process.json").read_text())
+    assert process["runtime"]["deadline"] == 900
+    command = process["command"]
+    assert command[command.index("--deadline") + 1] == "900"
+    assert "deadline=900" in (out / "environment.txt").read_text().splitlines()
+
+
 def test_failed_review_does_not_evaluate_policy(
     monkeypatch: pytest.MonkeyPatch, artifacts: PipelineArtifacts, policy: Path
 ) -> None:
@@ -520,7 +546,7 @@ def test_unexpected_adjudication_failure_summarizes_saved_discovery(
     )
     assert result.exit_code == 3
     summary = json.loads((out / "summary.json").read_text())
-    assert summary["lanes"] == {"dispatched": 1, "valid": 1, "uncovered": 0}
+    assert summary["lanes"] == {"dispatched": 1, "valid": 1, "uncovered": 0, "uncovered_regions": 0}
     assert json.loads((out / "run.json").read_text())["status"] == "failed"
     assert_manifest(out, json.loads((out / "process.json").read_text()))
 

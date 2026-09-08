@@ -69,6 +69,28 @@
       "title": "PresentationConfig",
       "type": "object"
     },
+    "SummaryFailedLane": {
+      "additionalProperties": false,
+      "description": "One lane with a final INVALID planned execution and its normalized reason.",
+      "properties": {
+        "lane_id": {
+          "minLength": 1,
+          "title": "Lane Id",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lane_id",
+        "reason"
+      ],
+      "title": "SummaryFailedLane",
+      "type": "object"
+    },
     "SummaryLanes": {
       "additionalProperties": false,
       "properties": {
@@ -88,6 +110,12 @@
           "default": 0,
           "minimum": 0,
           "title": "Uncovered",
+          "type": "integer"
+        },
+        "uncovered_regions": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Uncovered Regions",
           "type": "integer"
         }
       },
@@ -117,6 +145,105 @@
         }
       },
       "title": "VerdictCounts",
+      "type": "object"
+    },
+    "WaveWallSeconds": {
+      "additionalProperties": false,
+      "description": "Longest runtime wall per executed pipeline wave; null when the wave did not run.",
+      "properties": {
+        "discovery_initial": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Discovery Initial"
+        },
+        "discovery_retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Discovery Retry"
+        },
+        "discovery_redispatch": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Discovery Redispatch"
+        },
+        "adjudication_initial": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adjudication Initial"
+        },
+        "adjudication_initial_retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adjudication Initial Retry"
+        },
+        "adjudication_expanded": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adjudication Expanded"
+        },
+        "adjudication_expanded_retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adjudication Expanded Retry"
+        }
+      },
+      "title": "WaveWallSeconds",
       "type": "object"
     }
   },
@@ -151,6 +278,16 @@
     },
     "lanes": {
       "$ref": "#/$defs/SummaryLanes"
+    },
+    "failed_lanes": {
+      "items": {
+        "$ref": "#/$defs/SummaryFailedLane"
+      },
+      "title": "Failed Lanes",
+      "type": "array"
+    },
+    "wave_wall_seconds": {
+      "$ref": "#/$defs/WaveWallSeconds"
     },
     "findings": {
       "$ref": "#/$defs/FindingCounts"

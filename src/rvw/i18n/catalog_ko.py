@@ -92,6 +92,7 @@ CATALOG: dict[str, str] = {
     "pub.empty": "없습니다.",
     "pub.completed": "검토를 마쳤습니다. 수정이 필요한 문제 {b}건, 확인이 필요한 항목 {w}건.",
     "pub.partial": "검토되지 않은 변경 구간이 {n}곳 있습니다.",
+    "pub.failed_lanes": "검토를 완료하지 못한 규칙 묶음 {n}개: {lanes}.",
     "severity.blocker": "차단",
     "severity.warning": "경고",
     "severity.suggestion": "제안",

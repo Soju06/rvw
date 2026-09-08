@@ -1,3 +1,8 @@
+// This module stays import-free: the Python adapter-parity test loads it directly with Node.
+
+/** The CLI rejects `--deadline` above this ceiling (`MAX_DEADLINE_SECONDS` in dispatch.py). */
+export const MAX_REVIEW_DEADLINE_SECONDS = 1800;
+
 export type CredentialKind = "codex" | "github-api" | "github-clone";
 export type OutboundFetcher = (request: Request) => Promise<Response>;
 export type InjectionLogger = (entry: {event: string; hostname: string}) => void;
@@ -118,6 +123,8 @@ export interface ReviewInvocation {
   out?: string;
   repoDir?: string;
   publish?: "none" | "github-comment";
+  /** Explicit runtime deadline in seconds; the CLI default is never relied upon. */
+  deadlineSeconds: number;
 }
 
 export function buildRvwRunInvocation(options: ReviewInvocation): string {
@@ -131,12 +138,16 @@ export function buildRvwRunInvocation(options: ReviewInvocation): string {
   if (!/^[0-9a-f]{40}$/.test(baseSha) || !/^[0-9a-f]{40}$/.test(headSha)) {
     throw new Error("pull-request anchors must be full commit SHAs");
   }
+  const {deadlineSeconds} = options;
+  if (!Number.isSafeInteger(deadlineSeconds) || deadlineSeconds < 1 || deadlineSeconds > MAX_REVIEW_DEADLINE_SECONDS) {
+    throw new Error(`review deadline must be an integer between 1 and ${MAX_REVIEW_DEADLINE_SECONDS} seconds`);
+  }
   return (
     "env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint run " +
     `--target ${shellQuote(`https://github.com/${owner}/${repo}/pull/${prNumber}`)} ` +
     `--base-ref ${shellQuote(baseSha)} --head-ref ${shellQuote(headSha)} ` +
     `--out ${shellQuote(options.out ?? "/workspace/result")} ` +
     (options.repoDir === undefined ? "" : `--repo-dir ${shellQuote(options.repoDir)} `) +
-    `--policy auto --publish ${options.publish ?? "github-comment"} --json`
+    `--deadline ${deadlineSeconds} --policy auto --publish ${options.publish ?? "github-comment"} --json`
   );
 }

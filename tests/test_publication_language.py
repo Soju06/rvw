@@ -223,3 +223,82 @@ def test_matching_publication_never_invokes_rewriter(
     assert fake.calls == []
     assert not result.language_fallback_used
     assert (run.dir / "publish-payload.json").exists()
+
+
+def test_degraded_korean_review_publishes_without_rewrite_because_lane_ids_are_protected(
+    tmp_path: Path,
+) -> None:
+    """The failed-lanes sentence names Latin lane ids; publish_review must protect them itself."""
+    from rvw.discover import DiscoverResult, LaneCoverage, RunCoverage
+    from rvw.langgate import check_language
+
+    class NeverRewriter:
+        async def rewrite(self, segments: tuple[str, ...], *, locale: str) -> list[str]:
+            raise AssertionError(f"rewrite must not run for {locale}: {segments}")
+
+    run = RunStore(tmp_path).create(
+        ResolvedTarget(
+            kind="pr",
+            repo="owner/repo",
+            pr_number=1744,
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            changed_paths=["src/app.py"],
+            diff="",
+        )
+    )
+    run.save_presentation(PresentationConfig(locale="ko"))
+    dead_lanes = ["correctness", "hygiene", "contracts", "security-exposure", "ci-integrity"]
+    run.save_discover(
+        DiscoverResult(
+            lane_results={},
+            findings=[],
+            coverage=[
+                LaneCoverage(
+                    lane_id=lane_id,
+                    dispatched=1,
+                    valid=0,
+                    findings=0,
+                    runs=[
+                        RunCoverage(
+                            replica=1,
+                            chunk=1,
+                            valid=False,
+                            findings=0,
+                            invalid_reason="exit_nonzero:124",
+                        )
+                    ],
+                    redispatch_skipped="dead_by_timeout",
+                    uncovered=["src/app.py@@-0,0+1,2@@"],
+                )
+                for lane_id in dead_lanes
+            ],
+        )
+    )
+    merged = merge([], lane_tiers={})
+    run.save_merge(merged)
+    run.save_report("DIAGNOSTIC REPORT MUST STAY UNCHANGED")
+
+    result = publish_review(
+        run=run,
+        repo="owner/repo",
+        pr_number=1744,
+        report_md="",
+        merged=merged,
+        outcome=None,
+        execute=False,
+        rewriter=NeverRewriter(),
+    )
+
+    assert result.language_fallback_used is False
+    body = json.loads((run.dir / "publish-payload.json").read_text(encoding="utf-8"))["body"]
+    assert f"검토를 완료하지 못한 규칙 묶음 5개: {', '.join(dead_lanes)}." in body
+    # Protection is load-bearing: unprotected, five Latin ids fail the Korean threshold.
+    assert not check_language(body, "ko")
+    assert check_language(body, "ko", protected_literals=dead_lanes)
+    facts = json.loads((run.dir / "publication.json").read_text(encoding="utf-8"))
+    assert facts == {
+        "publication_failure": None,
+        "language_fallback_used": False,
+        "rewrite_attempted": False,
+    }

@@ -4,10 +4,11 @@ import pytest
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import EnrichedFinding, LaneCoverage, RunCoverage
+from rvw.i18n import t
 from rvw.langgate import check_language
 from rvw.merge import merge
 from rvw.presentation import PresentationConfig
-from rvw.publication import render_publication
+from rvw.publication import failed_lane_ids, publication_summary, render_publication
 from rvw.schema import Severity, Tier, Verdict
 
 
@@ -121,6 +122,89 @@ def test_publication_mixed_fixture_keeps_human_evidence_only(locale):
             ]
         )
         assert "Changed regions not reviewed: 1." in result
+
+
+def degraded_coverage() -> list[LaneCoverage]:
+    def dead(lane_id: str, first_reason: str) -> LaneCoverage:
+        return LaneCoverage(
+            lane_id=lane_id,
+            dispatched=1,
+            valid=0,
+            findings=0,
+            runs=[
+                RunCoverage(
+                    replica=1,
+                    chunk=1,
+                    valid=False,
+                    findings=0,
+                    invalid_reason="exit_nonzero:124",
+                    attempts=[
+                        {
+                            "attempt": 1,
+                            "wave": "initial",
+                            "valid": False,
+                            "invalid_reason": first_reason,
+                            "wall_seconds": 600.1,
+                        },
+                        {
+                            "attempt": 2,
+                            "wave": "retry",
+                            "valid": False,
+                            "invalid_reason": "exit_nonzero:124",
+                            "wall_seconds": 600.1,
+                        },
+                    ],
+                )
+            ],
+            redispatch_skipped="dead_by_timeout",
+            uncovered=["src/app.py@@-0,0+1,2@@"],
+        )
+
+    healthy = LaneCoverage(
+        lane_id="contracts",
+        dispatched=1,
+        valid=1,
+        findings=0,
+        runs=[RunCoverage(replica=1, chunk=1, valid=True, findings=0, invalid_reason=None)],
+    )
+    return [dead("correctness", "exit_nonzero:124"), dead("hygiene", "exit_nonzero:1"), healthy]
+
+
+@pytest.mark.parametrize(
+    ("locale", "expected"),
+    [
+        (
+            "ko",
+            "검토되지 않은 변경 구간이 1곳 있습니다. 검토를 완료하지 못한 규칙 묶음 2개: correctness, hygiene.",
+        ),
+        (
+            "en",
+            "Changed regions not reviewed: 1. Rule sets that did not finish: 2 (correctness, hygiene).",
+        ),
+    ],
+)
+def test_publication_summary_names_unfinished_rule_sets_verbatim(locale, expected):
+    merged = merge([], lane_tiers={})
+    presentation = PresentationConfig(locale=locale)
+    summary = publication_summary(merged, None, degraded_coverage(), presentation)
+    assert summary.endswith(expected)
+    assert failed_lane_ids(degraded_coverage()) == ["correctness", "hygiene"]
+
+    body = render_publication(
+        merged=merged, outcome=None, coverage=degraded_coverage(), presentation=presentation
+    )
+    assert expected in body
+    # The Latin lane identifiers are data; protected, the Korean body still passes the gate.
+    assert check_language(body, locale, protected_literals=["correctness", "hygiene"])
+
+
+def test_publication_summary_omits_the_sentence_when_every_lane_finished():
+    merged = merge([], lane_tiers={})
+    coverage = [degraded_coverage()[2]]
+    for locale in ("ko", "en"):
+        summary = publication_summary(merged, None, coverage, PresentationConfig(locale=locale))
+        assert "correctness" not in summary
+        assert summary == t("pub.completed", locale, b=0, w=0)
 
 
 def test_publication_omits_empty_uncertainty_and_escapes_plain_footer():

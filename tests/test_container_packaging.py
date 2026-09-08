@@ -87,6 +87,39 @@ def test_entrypoint_preserves_rvw_arguments(tmp_path: Path) -> None:
     assert observed == [("rvw", ["rvw", "run", "--target", "deadbeef", "--repo-dir", "/workspace"])]
 
 
+def test_entrypoint_forwards_the_app_deadline_verbatim(tmp_path: Path) -> None:
+    from rvw.container_entrypoint import run_entrypoint
+
+    observed: list[list[str]] = []
+    argv = [
+        "run",
+        "--target",
+        "https://github.com/acme/rockets/pull/42",
+        "--base-ref",
+        "b" * 40,
+        "--head-ref",
+        "a" * 40,
+        "--out",
+        "/workspace/result",
+        "--deadline",
+        "900",
+        "--policy",
+        "auto",
+        "--publish",
+        "github-comment",
+        "--json",
+    ]
+    run_entrypoint(
+        argv,
+        template_path=_template(),
+        environ={"HOME": str(tmp_path)},
+        execvp=lambda _executable, forwarded: observed.append(list(forwarded)),
+    )
+
+    assert observed == [["rvw", *argv]]
+    assert observed[0][observed[0].index("--deadline") + 1] == "900"
+
+
 def test_dockerfile_pins_complete_multistage_runtime() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 

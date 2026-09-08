@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,6 +30,11 @@ from rvw.target import ResolvedTarget
 
 _COVERED_RANGE = re.compile(r"^(?P<file>.+):(?P<start>[1-9][0-9]*)(?:-(?P<end>[1-9][0-9]*))?$")
 
+# The runtime classifies its own deadline kill as this normalized reason.
+DEAD_BY_TIMEOUT_REASON = "exit_nonzero:124"
+RedispatchSkip = Literal["dead_by_timeout"]
+AttemptWave = Literal["initial", "retry", "coverage_redispatch"]
+
 
 class DiscoveryMode(StrEnum):
     AGENTIC = "agentic"
@@ -46,13 +51,24 @@ class EnrichedFinding(Finding):
 
 
 class RunAttempt(BaseModel):
-    """Validity of one execution attempt for a planned run."""
+    """Validity, wave, and wall time of one execution attempt for a planned run."""
 
     model_config = ConfigDict(extra="forbid")
 
     attempt: int = Field(ge=1)
+    wave: AttemptWave
     valid: bool
     invalid_reason: str | None
+    wall_seconds: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_legacy_wave(cls, data: Any) -> Any:
+        # Attempt records persisted before ``wave`` existed were built from the
+        # initial dispatch followed by at most one retry, so the number is the wave.
+        if isinstance(data, dict) and "wave" not in data and isinstance(data.get("attempt"), int):
+            return {**data, "wave": "initial" if data["attempt"] == 1 else "retry"}
+        return data
 
     @model_validator(mode="after")
     def _validity_must_match_reason(self) -> RunAttempt:
@@ -90,6 +106,11 @@ class RunCoverage(BaseModel):
             attempt_numbers = [attempt.attempt for attempt in self.attempts]
             if attempt_numbers != list(range(1, len(self.attempts) + 1)):
                 raise ValueError("coverage run attempts must be numbered 1..N in order")
+            waves = [attempt.wave for attempt in self.attempts]
+            if waves != ["initial", *(["retry"] * (len(waves) - 1))]:
+                raise ValueError(
+                    "planned run attempts must be one initial wave followed only by retries"
+                )
             final_attempt = self.attempts[-1]
             if (
                 final_attempt.valid != self.valid
@@ -110,6 +131,8 @@ class LaneCoverage(BaseModel):
     findings: int = Field(ge=0)
     runs: list[RunCoverage]
     coverage_redispatched: bool = False
+    redispatch_skipped: RedispatchSkip | None = None
+    redispatch: list[RunAttempt] = Field(default_factory=list)
     uncovered: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -117,6 +140,17 @@ class LaneCoverage(BaseModel):
         identities = [(run.replica, run.chunk) for run in self.runs]
         if len(identities) != len(set(identities)):
             raise ValueError("coverage run identities must be unique")
+        if self.redispatch_skipped is not None and self.coverage_redispatched:
+            raise ValueError("a lane cannot be both coverage-redispatched and skipped")
+        if self.redispatch:
+            if not self.coverage_redispatched:
+                raise ValueError("redispatch attempts require coverage_redispatched")
+            if [attempt.attempt for attempt in self.redispatch] != list(
+                range(1, len(self.redispatch) + 1)
+            ):
+                raise ValueError("redispatch attempts must be numbered 1..N in order")
+            if any(attempt.wave != "coverage_redispatch" for attempt in self.redispatch):
+                raise ValueError("redispatch attempts must belong to the coverage_redispatch wave")
         if self.dispatched != len(self.runs):
             raise ValueError("dispatched must equal the number of coverage runs")
         if self.valid != sum(run.valid for run in self.runs):
@@ -176,6 +210,21 @@ def _uncovered_for_lane(hunks: Sequence[Hunk], results: Sequence[RunResult]) -> 
     return [hunk.hunk_id for hunk in hunks if hunk.hunk_id not in covered]
 
 
+def dead_by_timeout(results: Sequence[RunResult]) -> bool:
+    """True when every final planned execution of a lane died at the runtime deadline.
+
+    ``results`` are the final results after the ordinary invalid-result retry, so an
+    execution whose earlier attempt failed for another reason still counts as dead
+    when its final attempt was the deadline kill. A lane with zero planned results
+    is not dead; it simply has nothing to redispatch.
+    """
+
+    return bool(results) and all(
+        result.status is RunStatus.INVALID and result.invalid_reason == DEAD_BY_TIMEOUT_REASON
+        for result in results
+    )
+
+
 def resolve_lane_path(lanes_root: Path, lane_id: str, tier: Tier) -> Path:
     """Resolve a lane ID beneath the directory owned by its registry layer tier."""
 
@@ -220,19 +269,31 @@ def _effective_brief(
     return None, None
 
 
+def _run_attempt(attempt: int, wave: AttemptWave, result: RunResult) -> RunAttempt:
+    return RunAttempt(
+        attempt=attempt,
+        wave=wave,
+        valid=result.status is RunStatus.VALID,
+        invalid_reason=result.invalid_reason,
+        wall_seconds=result.wall_seconds,
+    )
+
+
 def _coverage_attempts(
     result: RunResult,
     initial_by_key: Mapping[tuple[str, int, int], RunResult],
 ) -> list[RunAttempt]:
     initial = initial_by_key.get((result.lane_id, result.replica, result.chunk))
-    attempt_results = [result] if initial is None else [initial, result]
+    if initial is None:
+        return [_run_attempt(1, "initial", result)]
+    return [_run_attempt(1, "initial", initial), _run_attempt(2, "retry", result)]
+
+
+def _redispatch_attempts(results: Sequence[RunResult]) -> list[RunAttempt]:
+    ordered = sorted(results, key=lambda result: (result.chunk, result.replica))
     return [
-        RunAttempt(
-            attempt=attempt,
-            valid=attempt_result.status is RunStatus.VALID,
-            invalid_reason=attempt_result.invalid_reason,
-        )
-        for attempt, attempt_result in enumerate(attempt_results, start=1)
+        _run_attempt(attempt, "coverage_redispatch", result)
+        for attempt, result in enumerate(ordered, start=1)
     ]
 
 
@@ -335,15 +396,22 @@ async def discover(
     hunks = parse_hunks(target.diff)
     coverage_results: list[RunResult] = []
     redispatched_lanes: set[str] = set()
+    redispatch_skipped: dict[str, RedispatchSkip] = {}
     if mode is DiscoveryMode.AGENTIC:
         for lane in lanes:
-            lane_initial = [result for result in raw_results if result.lane_id == lane.id]
-            if _uncovered_for_lane(hunks, lane_initial):
-                redispatch_runs = [
-                    run for run in planned_runs if run.lane.id == lane.id and run.replica == 1
-                ]
-                if redispatch_runs:
-                    redispatched_lanes.add(lane.id)
+            lane_final = [result for result in raw_results if result.lane_id == lane.id]
+            if not _uncovered_for_lane(hunks, lane_final):
+                continue
+            if dead_by_timeout(lane_final):
+                # Re-running the same prompt under the same deadline is deterministic
+                # waste (a guaranteed third full-deadline barrier); record, do not dispatch.
+                redispatch_skipped[lane.id] = "dead_by_timeout"
+                continue
+            redispatch_runs = [
+                run for run in planned_runs if run.lane.id == lane.id and run.replica == 1
+            ]
+            if redispatch_runs:
+                redispatched_lanes.add(lane.id)
         redispatch_plan = [
             run for run in planned_runs if run.lane.id in redispatched_lanes and run.replica == 1
         ]
@@ -419,6 +487,10 @@ async def discover(
                 + coverage_finding_counts.get(lane.id, 0),
                 runs=runs,
                 coverage_redispatched=lane.id in redispatched_lanes,
+                redispatch_skipped=redispatch_skipped.get(lane.id),
+                redispatch=_redispatch_attempts(
+                    [result for result in coverage_results if result.lane_id == lane.id]
+                ),
                 uncovered=(
                     _uncovered_for_lane(hunks, lane_results[lane.id])
                     if mode is DiscoveryMode.AGENTIC
@@ -436,13 +508,17 @@ async def discover(
 
 
 __all__: list[str] = [
+    "DEAD_BY_TIMEOUT_REASON",
+    "AttemptWave",
     "DiscoverResult",
     "DiscoveryMode",
     "EnrichedFinding",
     "LaneCoverage",
+    "RedispatchSkip",
     "RunAttempt",
     "RunCoverage",
     "covered_hunk_ids",
+    "dead_by_timeout",
     "discover",
     "resolve_lane_path",
 ]
