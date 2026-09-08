@@ -14,7 +14,7 @@ ARG GH_VERSION="v2.100.0"
 ARG GH_SHA256="e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be"
 ARG MIN_GH_VERSION="2.18.0"
 LABEL org.opencontainers.image.title="rvw-cloud" org.opencontainers.image.version="${RVW_IMAGE_VERSION}"
-ENV HOME=/root PYTHONUNBUFFERED=1 RVW_CODEX_DEFAULT_BASE_URL="${CODEX_BASE_URL}" RVW_CODEX_SANDBOX=danger-full-access PATH="/opt/rvw-venv/bin:${PATH}"
+ENV HOME=/root PYTHONUNBUFFERED=1 RVW_CODEX_DEFAULT_BASE_URL="${CODEX_BASE_URL}" RVW_CODEX_SANDBOX=danger-full-access PATH="/opt/rvw-shims:/opt/rvw-venv/bin:${PATH}"
 RUN apt-get update && apt-get install --yes --no-install-recommends bash ca-certificates coreutils curl git gzip ripgrep tar util-linux && rm -rf /var/lib/apt/lists/*
 COPY docker/install-gh.sh /usr/local/lib/rvw/install-gh.sh
 RUN sh /usr/local/lib/rvw/install-gh.sh
@@ -28,4 +28,10 @@ COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN uv python install 3.12 --default && uv venv --python 3.12 /opt/rvw-venv && uv pip install --python /opt/rvw-venv/bin/python --no-cache . && rvw --version && codex --version && node --version && rvw lanes list
 COPY docker/codex-config.toml /etc/rvw/codex-config.toml
+# Review-phase shims: git/gh/curl/wget refuse remote access while RVW_PHASE=review; the
+# profile hook keeps them first on PATH in the login shells Codex uses for tool commands.
+COPY docker/shims/ /opt/rvw-shims/
+COPY docker/rvw-shims.sh /etc/profile.d/rvw-shims.sh
+COPY docker/check-review-shims.sh /usr/local/lib/rvw/check-review-shims.sh
+RUN chmod 0755 /opt/rvw-shims/git /opt/rvw-shims/gh /opt/rvw-shims/curl /opt/rvw-shims/wget /usr/local/lib/rvw/check-review-shims.sh && bash /usr/local/lib/rvw/check-review-shims.sh
 WORKDIR /workspace

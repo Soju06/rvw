@@ -57,6 +57,26 @@ namespace; the fallback completed with full receipt coverage. The outer containe
 and `/workspace` mount are the isolation boundary, so keep them read-only as shown.
 Host-installed rvw still defaults to `--sandbox read-only`.
 
+## Review-phase shims
+
+Because Codex runs with full access inside the container, both images narrow what a
+model-driven tool command can reach. `/opt/rvw-shims/{git,gh,curl,wget}` precede the real
+binaries on `PATH`, and `/etc/profile.d/rvw-shims.sh` keeps them first in the login shells
+Codex uses for tool commands. rvw spawns Codex with `RVW_PHASE=review` and
+`GIT_ALLOW_PROTOCOL=none`; in that phase the `git` shim refuses `fetch`, `pull`, `clone`,
+`ls-remote`, `push`, remote and submodule mutations, and any URL argument with the single line
+`rvw: remote git is disabled during review` and exit 2, while local `git` (`status`, `diff`,
+`show`, `log`, `rev-parse`) passes through, and `gh`, `curl`, and `wget` refuse everything except
+`--version`/`help`. `GIT_ALLOW_PROTOCOL=none` makes even `/usr/bin/git fetch` fail at git's
+transport check. rvw's own clone and fetch run with `RVW_PHASE=checkout`, and its target
+resolution and publication run without a phase, so the shims pass them through unchanged.
+Host-installed rvw ships no shims: its read-only Codex sandbox already denies tool network.
+The image build runs the self-test once; rerun it against any built image with:
+
+```bash
+docker run --rm --entrypoint bash ghcr.io/soju06/rvw:vX.Y.Z /usr/local/lib/rvw/check-review-shims.sh
+```
+
 ## Release publication and immutable pins
 
 Every pushed `v*` release tag automatically builds the tagged source and publishes the

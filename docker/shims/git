@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# rvw review-phase shim for git: local git stays available, remote git is refused.
+set -euo pipefail
+shim_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=rvw-shim-lib.sh
+. "$shim_dir/rvw-shim-lib.sh"
+
+if rvw_in_review_phase; then
+  subcommand=""
+  expect_value=0
+  for arg in "$@"; do
+    case "$arg" in
+      https://*|http://*|ssh://*|git://*|git@*|*@*:*/*)
+        rvw_refuse 'rvw: remote git is disabled during review'
+        ;;
+    esac
+    if [[ -n "$subcommand" ]]; then
+      continue
+    fi
+    if (( expect_value )); then
+      expect_value=0
+      continue
+    fi
+    case "$arg" in
+      -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env|--list-cmds)
+        expect_value=1
+        ;;
+      -*)
+        ;;
+      *)
+        subcommand="$arg"
+        ;;
+    esac
+  done
+  case "$subcommand" in
+    fetch|pull|clone|ls-remote|push|request-pull|send-pack|fetch-pack|upload-pack|receive-pack|http-fetch|http-push)
+      rvw_refuse 'rvw: remote git is disabled during review'
+      ;;
+    remote)
+      for arg in "$@"; do
+        case "$arg" in
+          add|set-url|update|prune|rename|remove|rm|set-head|set-branches)
+            rvw_refuse 'rvw: remote git is disabled during review'
+            ;;
+        esac
+      done
+      ;;
+    submodule)
+      for arg in "$@"; do
+        case "$arg" in
+          add|update|sync|--remote)
+            rvw_refuse 'rvw: remote git is disabled during review'
+            ;;
+        esac
+      done
+      ;;
+    archive)
+      for arg in "$@"; do
+        case "$arg" in
+          --remote|--remote=*)
+            rvw_refuse 'rvw: remote git is disabled during review'
+            ;;
+        esac
+      done
+      ;;
+  esac
+fi
+
+rvw_exec_real git "$shim_dir" "$@"

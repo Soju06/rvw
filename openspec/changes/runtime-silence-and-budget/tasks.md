@@ -12,6 +12,6 @@
 
 ## 3. Block remote git and non-proxy egress from review tool commands
 
-- [ ] 3.1 Add failing tests: bash fixtures for the `git`, `gh`, `curl`, and `wget` shims in review and non-review phases; the runtime spawns Codex with `RVW_PHASE=review` and `GIT_ALLOW_PROTOCOL=none`; checkout commands run with `RVW_PHASE=checkout`; both Dockerfiles install the shims and the profile hook ahead of the real binaries; `configureCodexEgress` sets the allowlist.
-- [ ] 3.2 Implement the shims, the profile hook, the Dockerfile changes, the spawn and checkout environments, and the Worker allowlist; run the shim check inside the built image.
-- [ ] 3.3 Add the cloud-app-platform and runtime-contract deltas and update the main specs and context, then commit feat(cloud): block remote git and non-proxy egress from review tool commands.
+- [x] 3.1 Add failing tests: bash fixtures for the `git`, `gh`, `curl`, and `wget` shims in review and non-review phases; the runtime spawns Codex with `RVW_PHASE=review` and `GIT_ALLOW_PROTOCOL=none`; checkout commands run with `RVW_PHASE=checkout`; both Dockerfiles install the shims and the profile hook ahead of the real binaries; `configureCodexEgress` sets the allowlist.
+- [x] 3.2 Implement the shims, the profile hook, the Dockerfile changes, the spawn and checkout environments, and the Worker allowlist; run the shim check inside the built image.
+- [x] 3.3 Add the cloud-app-platform and runtime-contract deltas and update the main specs and context, then commit feat(cloud): block remote git and non-proxy egress from review tool commands.

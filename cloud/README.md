@@ -43,6 +43,19 @@ For deployment, pass the required non-secret values from private CI variables
 with Wrangler `--var CODEX_PROXY_HOST:<host> --var GITHUB_APP_ID:<id>` overrides.
 The reusable workflow maps caller inputs to those Worker binding names.
 
+### Sandbox egress
+
+HTTP(S) egress from a review sandbox is allowlisted for the whole run to the configured
+Codex proxy host, `api.github.com`, and `github.com` (`setAllowedHosts` beside the
+credential-injecting per-host handlers); every other host is answered by the Worker proxy
+with HTTP 520 and no credential. Non-HTTP protocols are not intercepted. Inside the
+container, model-driven tool commands additionally run behind the image's review-phase
+shims (see `docs/container-image.md`), so `git fetch`, `gh`, `curl`, and `wget` are refused
+while the rvw CLI's own clone, target resolution, and publication keep their access.
+`github.com` stays reachable after the clone completes because the CLI clones inside the
+review process; the gap and the follow-up (clone before `startProcess` behind `--repo-dir`,
+then `denyHost("github.com")`) are recorded in the cloud-app-platform context.
+
 This directory is the Cloudflare Worker + Sandbox SDK execution plane.
 The default Wrangler environment is local development (`RVW_ENV=dev`); `spike`
 enables the bounded A0 lifecycle endpoints with `standard-2` and two instances;

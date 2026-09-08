@@ -42,7 +42,12 @@ wins: a deadline kill remains `exit_nonzero:124`, and `no_output_after:*` is a
 distinct transient reason. `no_output_seconds` MUST be configured per runtime
 from the CLI `--no-output-timeout` option, then `RVW_NO_OUTPUT_SECONDS`, then a
 default of 660 seconds, MUST be rejected when below 1, and MUST be recorded in
-`usage.json`, `process.json`, and `environment.txt`.
+`usage.json`, `process.json`, and `environment.txt`. The adapter MUST spawn Codex
+with `RVW_PHASE=review` and `GIT_ALLOW_PROTOCOL=none` in the child environment
+and MUST NOT set `RVW_PHASE=review` in its own process, so the image's review-phase
+shims and git's transport check govern model-driven tool commands while the CLI's
+own target resolution and publication keep their access. Checkout provisioning
+MUST run its own `git` and `gh` commands with `RVW_PHASE=checkout`.
 
 #### Scenario: Tool-less inline discovery execution
 
@@ -114,6 +119,18 @@ default of 660 seconds, MUST be rejected when below 1, and MUST be recorded in
 - **WHEN** any RVW Codex invocation is built
 - **THEN** its argv carries `model_reasoning_summary="detailed"` after the
   reasoning-effort override and its `usage.json` records `reasoning_summary`
+
+#### Scenario: Runtime child environment carries the review phase
+
+- **WHEN** the adapter spawns Codex
+- **THEN** the child environment contains `RVW_PHASE=review` and
+  `GIT_ALLOW_PROTOCOL=none` while the rvw process environment does not
+
+#### Scenario: Checkout commands carry the checkout phase
+
+- **WHEN** rvw provisions or verifies a checkout with its own `git` and `gh` commands
+- **THEN** those commands run with `RVW_PHASE=checkout` and otherwise inherit the
+  process environment
 
 #### Scenario: Runtime leader exits before its child
 

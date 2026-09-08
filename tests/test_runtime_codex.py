@@ -657,6 +657,36 @@ async def test_lane_execute_forwards_discovery_workdir(
     assert "review" not in command
 
 
+_PRINT_PHASE_ENV_SCRIPT = """
+import os
+
+print("RVW_PHASE=" + os.environ.get("RVW_PHASE", "<unset>"))
+print("GIT_ALLOW_PROTOCOL=" + os.environ.get("GIT_ALLOW_PROTOCOL", "<unset>"))
+print("PATH=" + os.environ.get("PATH", "<unset>"))
+"""
+
+
+async def test_spawn_runs_the_runtime_child_in_the_review_phase(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("RVW_PHASE", raising=False)
+    monkeypatch.delenv("GIT_ALLOW_PROTOCOL", raising=False)
+    log_path = tmp_path / "phase.log"
+
+    exit_code = await codex_module._spawn(
+        [sys.executable, "-c", _PRINT_PHASE_ENV_SCRIPT], "", log_path
+    )
+
+    assert exit_code == 0
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert "RVW_PHASE=review" in lines
+    assert "GIT_ALLOW_PROTOCOL=none" in lines
+    assert f"PATH={os.environ['PATH']}" in lines
+    # The rvw process itself never enters the review phase; only the runtime child does.
+    assert "RVW_PHASE" not in os.environ
+    assert "GIT_ALLOW_PROTOCOL" not in os.environ
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux setpriv requirement")
 async def test_spawn_fails_closed_when_setpriv_is_unavailable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

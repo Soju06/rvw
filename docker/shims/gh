@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# rvw review-phase shim for the GitHub CLI: every remote call is refused during review.
+set -euo pipefail
+shim_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=rvw-shim-lib.sh
+. "$shim_dir/rvw-shim-lib.sh"
+
+if rvw_in_review_phase; then
+  case "${1:-}" in
+    --version|version|help|--help) ;;
+    *) rvw_refuse 'rvw: gh is disabled during review' ;;
+  esac
+fi
+
+rvw_exec_real gh "$shim_dir" "$@"

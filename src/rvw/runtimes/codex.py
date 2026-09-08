@@ -46,6 +46,12 @@ DEFAULT_NO_OUTPUT_SECONDS = 660
 NO_OUTPUT_SECONDS_ENV = "RVW_NO_OUTPUT_SECONDS"
 NO_OUTPUT_REASON_PREFIX = "no_output_after:"
 _WATCHDOG_POLL_SECONDS = 2.0
+# The runtime child, and every tool command it spawns, runs in the review phase: the image's
+# PATH shims refuse remote git, gh, curl, and wget when RVW_PHASE is "review", and git's own
+# transport check refuses every remote protocol regardless of which git binary is invoked.
+# The rvw process itself never carries these values, so its checkout and publication keep
+# their network access.
+REVIEW_PHASE_ENVIRONMENT: Mapping[str, str] = {"RVW_PHASE": "review", "GIT_ALLOW_PROTOCOL": "none"}
 
 
 def _sandbox_mode() -> str:
@@ -225,10 +231,16 @@ async def _cleanup_before_unwind(
     cleanup.result()
 
 
+def review_phase_environment(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return the runtime child's environment: the parent's plus the review-phase markers."""
+
+    return {**(os.environ if base is None else base), **REVIEW_PHASE_ENVIRONMENT}
+
+
 async def _spawn(
     cmd: list[str], stdin_text: str, log_path: Path, *, cwd: Path | None = None
 ) -> int:
-    """Run a command without a shell and combine its output in one log."""
+    """Run a command without a shell, in the review phase, combining its output in one log."""
 
     spawn_command = cmd
     if sys.platform.startswith("linux"):
@@ -242,6 +254,7 @@ async def _spawn(
             stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
+            env=review_phase_environment(),
             start_new_session=True,
         )
         pgid = process.pid if os.name == "posix" else None
@@ -739,10 +752,12 @@ __all__: list[str] = [
     "DEFAULT_NO_OUTPUT_SECONDS",
     "NO_OUTPUT_REASON_PREFIX",
     "NO_OUTPUT_SECONDS_ENV",
+    "REVIEW_PHASE_ENVIRONMENT",
     "CodexRuntime",
     "CodexRuntimeMode",
     "RuntimeLogCounts",
     "count_runtime_log_turns",
     "resolve_no_output_seconds",
+    "review_phase_environment",
     "validate_output",
 ]
