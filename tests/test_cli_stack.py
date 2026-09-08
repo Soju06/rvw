@@ -231,6 +231,53 @@ def test_stack_review_forwards_split_replica_defaults(
     assert calls[0]["deadline_seconds"] == 600
 
 
+@pytest.mark.parametrize(
+    "extra,environment_value,expected",
+    [([], None, 660), ([], "90", 90), (["--no-output-timeout", "120"], "90", 120)],
+)
+def test_stack_review_forwards_no_output_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    extra: list[str],
+    environment_value: str | None,
+    expected: int,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_stack_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_stack_review_pipeline", fake_stack_review_pipeline)
+    monkeypatch.delenv("RVW_NO_OUTPUT_SECONDS", raising=False)
+    if environment_value is not None:
+        monkeypatch.setenv("RVW_NO_OUTPUT_SECONDS", environment_value)
+
+    result = runner.invoke(cli_module.app, ["stack", "review", "--prs", "1,2", *extra])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls[0]["no_output_seconds"] == expected
+
+
+def test_stack_review_rejects_invalid_no_output_seconds_before_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_stack_review_pipeline(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "_stack_review_pipeline", fake_stack_review_pipeline)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["stack", "review", "--prs", "1,2"],
+        env={"RVW_NO_OUTPUT_SECONDS": "nope"},
+    )
+
+    assert result.exit_code == cli_module.EXIT_USER_ERROR
+    assert "RVW_NO_OUTPUT_SECONDS" in result.stderr
+    assert calls == []
+
+
 def test_stack_review_runs_members_in_order_and_rechecks_older_lineages(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

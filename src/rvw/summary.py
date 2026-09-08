@@ -179,6 +179,8 @@ class RuntimeSettings(ContractModel):
     publish: Literal["none", "github-comment"] = "none"
     host_concurrency: int = Field(default=12, ge=0)
     sandbox: Literal["read-only", "danger-full-access"] = "read-only"
+    no_output_seconds: int = Field(default=660, ge=1)
+    reasoning_summary: str = Field(default="detailed", min_length=1)
 
 
 class ProcessFailure(ContractModel):

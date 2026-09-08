@@ -239,6 +239,18 @@
           ],
           "title": "Sandbox",
           "type": "string"
+        },
+        "no_output_seconds": {
+          "default": 660,
+          "minimum": 1,
+          "title": "No Output Seconds",
+          "type": "integer"
+        },
+        "reasoning_summary": {
+          "default": "detailed",
+          "minLength": 1,
+          "title": "Reasoning Summary",
+          "type": "string"
         }
       },
       "title": "RuntimeSettings",

@@ -7,6 +7,7 @@ import {
   isDeadlineReached,
   shouldRestartForRerequest,
   parseArtifactSummary,
+  parseProcessResult,
   type JobState,
 } from "./review-job-contract";
 
@@ -234,3 +235,29 @@ it.each([{publication_failure: 1}, {language_fallback_used: "true"}, {language_f
     expect(() => parseArtifactSummary(JSON.stringify(summaryFixture(publication)))).toThrow();
   },
 );
+
+describe("process runtime watchdog settings", () => {
+  it("accepts the recorded no-output watchdog and reasoning summary settings", () => {
+    const runtime = processFixture().runtime as Record<string, unknown>;
+    expect(runtime).toMatchObject({no_output_seconds: 660, reasoning_summary: "detailed"});
+    expect(checkConclusionForResult(0, JSON.stringify(processFixture())).conclusion).toBe("success");
+  });
+  it("parses legacy runtime settings without the watchdog and summary keys", () => {
+    const process = processFixture();
+    const runtime: Record<string, unknown> = {...(process.runtime as Record<string, unknown>)};
+    delete runtime.no_output_seconds;
+    delete runtime.reasoning_summary;
+    expect(checkConclusionForResult(0, JSON.stringify({...process, runtime})).conclusion).toBe("success");
+  });
+  it.each([
+    {no_output_seconds: 0},
+    {no_output_seconds: -1},
+    {no_output_seconds: "660"},
+    {reasoning_summary: ""},
+    {reasoning_summary: 1},
+  ])("rejects invalid watchdog or summary settings %#", (overrides) => {
+    const process = processFixture();
+    const runtime = {...(process.runtime as Record<string, unknown>), ...overrides};
+    expect(() => parseProcessResult(JSON.stringify({...process, runtime}))).toThrow("process runtime settings are invalid");
+  });
+});
