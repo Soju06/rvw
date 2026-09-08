@@ -187,3 +187,16 @@ async def test_runtime_rewriter_uses_one_bounded_raw_execution(tmp_path: Path) -
     assert call["schema"]["properties"]["segments"]["maxItems"] == 1
     with pytest.raises(ValueError):
         call["validate"]({"segments": [KO, KO]})
+
+
+def test_protected_lane_identifiers_are_not_scored_as_prose() -> None:
+    lanes = ["correctness", "hygiene", "contracts", "security-exposure", "ci-integrity"]
+    sentence = f"검토를 완료하지 못한 규칙 묶음 {len(lanes)}개: {', '.join(lanes)}."
+    # Unprotected, five Latin lane ids outweigh the Korean chrome on this line.
+    assert not check_language(sentence, "ko")
+    assert check_language(sentence, "ko", protected_literals=lanes)
+    # Protection never hides genuinely foreign prose elsewhere on the line.
+    assert not check_language(
+        sentence + " This explanation is written in English prose.", "ko", protected_literals=lanes
+    )
+    assert check_language(f"Rule sets that did not finish: 2 ({lanes[0]}, {lanes[1]}).", "en")

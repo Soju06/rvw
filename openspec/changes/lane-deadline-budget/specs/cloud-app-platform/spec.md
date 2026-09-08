@@ -39,3 +39,22 @@ The App MUST invoke `rvw run` with the complete PR URL, captured webhook base an
 
 - **WHEN** `RVW_REVIEW_DEADLINE_SECONDS` is `900` and the App starts a review
 - **THEN** the review script executes `rvw run` with `--deadline 900`, and the resulting `process.json` records `runtime.deadline: 900`
+
+### Requirement: App check chrome is localized and separates diagnostics
+
+Worker Korean and English catalogs MUST have identical keys and format-compatible messages covering bootstrap, completion, deadline, superseded, exhausted queue, and missing-artifact paths. The check name MUST equal `short_name`; title MUST combine `display_name` with localized in-progress, complete, needs-changes, or incomplete state. A completed summary MUST consume Python's localized `markdown`, stating completion and CONFIRMED blocker plus CONFIRMED warning/suggestion counts with distinct uncovered-region disclosure and the unfinished rule-set sentence when applicable. Neutral or failure summaries MUST use a localized human-reason sentence without job IDs, stderr dumps, or operational counters. Structured job ID, counts, lane validity, and artifact key MUST be retained in the check `text` collapsed section and artifacts. The check `text` MUST label the lane-hunk receipt count `lane_hunk_receipts` and carry `uncovered_regions` beside it, and MUST carry `failed_lanes` with each lane's final reason and `wave_wall_seconds` per pipeline wave from the Python summary. Python summary presentation MUST govern final check chrome.
+
+#### Scenario: Completed check
+
+- **WHEN** Python supplies locale ko with configured display and short names
+- **THEN** the check uses those names and a Korean completion summary while structured details remain in text
+
+#### Scenario: Deadline expires
+
+- **WHEN** a job exceeds its deadline before Python completes
+- **THEN** the check uses catalog-localized incomplete prose and preserves job and diagnostic details in text
+
+#### Scenario: Degraded review completes
+
+- **WHEN** the summary reports 26 lane-hunk receipts, 13 distinct regions, two failed lanes with reason `exit_nonzero:124`, and discovery wave walls
+- **THEN** the check `text` carries `lane_hunk_receipts: 26`, `uncovered_regions: 13`, both failed lanes with their reasons, and the wave walls, while the summary sentence names both lanes

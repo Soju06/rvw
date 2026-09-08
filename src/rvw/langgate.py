@@ -150,13 +150,17 @@ def _matches(prose: str, locale: str) -> bool:
     return hangul == 0 and latin / len(letters) >= 0.9
 
 
-def check_language(markdown: str, locale: str) -> bool:
-    """Check each rendered prose line after removing code and technical tokens."""
+def check_language(markdown: str, locale: str, protected_literals: Sequence[str] = ()) -> bool:
+    """Check each rendered prose line after removing code and technical tokens.
+
+    ``protected_literals`` are identifiers the caller knows the document names verbatim
+    (for example lane identifiers); they are never scored as prose.
+    """
     if locale not in ("ko", "en"):
         raise ValueError("locale must be ko or en")
     return all(
         _matches(" ".join(piece.text for piece in line if piece.prose), locale)
-        for line in _lines(markdown)
+        for line in _lines(markdown, protected_literals)
     )
 
 
@@ -192,7 +196,7 @@ async def enforce_language(
     explicit fallback returns the original documents, preserving every fact.
     """
     original = tuple(documents)
-    if all(check_language(document, locale) for document in original):
+    if all(check_language(document, locale, protected_literals) for document in original):
         return LanguageGateResult(original)
     parsed = [
         tuple(piece for line in _lines(doc, protected_literals) for piece in line)
@@ -227,7 +231,9 @@ async def enforce_language(
                     )
                     for before, after in zip(parsed, rewritten, strict=True)
                 )
-                if preserved and all(check_language(document, locale) for document in rewritten):
+                if preserved and all(
+                    check_language(document, locale, protected_literals) for document in rewritten
+                ):
                     return LanguageGateResult(rewritten, rewrite_attempted=True)
         except Exception:
             # Runtime and malformed-output failures share the closed publication

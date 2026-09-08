@@ -546,7 +546,7 @@ def test_unexpected_adjudication_failure_summarizes_saved_discovery(
     )
     assert result.exit_code == 3
     summary = json.loads((out / "summary.json").read_text())
-    assert summary["lanes"] == {"dispatched": 1, "valid": 1, "uncovered": 0}
+    assert summary["lanes"] == {"dispatched": 1, "valid": 1, "uncovered": 0, "uncovered_regions": 0}
     assert json.loads((out / "run.json").read_text())["status"] == "failed"
     assert_manifest(out, json.loads((out / "process.json").read_text()))
 

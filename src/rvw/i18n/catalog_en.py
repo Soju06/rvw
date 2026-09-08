@@ -92,6 +92,7 @@ CATALOG: dict[str, str] = {
     "pub.empty": "None.",
     "pub.completed": "Review complete. Changes required: {b}. Needs attention: {w}.",
     "pub.partial": "Changed regions not reviewed: {n}.",
+    "pub.failed_lanes": "Rule sets that did not finish: {n} ({lanes}).",
     "severity.blocker": "Blocker",
     "severity.warning": "Warning",
     "severity.suggestion": "Suggestion",

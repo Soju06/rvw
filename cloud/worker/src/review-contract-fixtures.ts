@@ -13,7 +13,7 @@ export function processFixture(overrides: Record<string, unknown> = {}) {
     failure: null, artifacts: [], sdk_observations: null, ...overrides};
 }
 export function summaryFixture(overrides: Record<string, unknown> = {}) {
-  return {schema_version: 1, presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null}, lanes: {dispatched: 1, valid: 1, uncovered: 0},
+  return {schema_version: 1, presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null}, lanes: {dispatched: 1, valid: 1, uncovered: 0, uncovered_regions: 0},
     failed_lanes: [], wave_wall_seconds: waveWallFixture(),
     findings: {blocker: 0, warning: 0, suggestion: 0},
     verdicts: {CONFIRMED: 0, REJECTED: 0, UNCERTAIN: 0}, blockers: [],

@@ -177,6 +177,29 @@ def test_wave_walls_include_redispatch_and_adjudication_waves() -> None:
     }
 
 
+def test_lane_hunk_receipts_and_distinct_regions_are_both_counted() -> None:
+    dead_run = run(1, [attempt(1, "initial", reason="exit_nonzero:124", wall=600.0)])
+    coverage = [
+        LaneCoverage(
+            lane_id=lane_id,
+            dispatched=1,
+            valid=0,
+            findings=0,
+            runs=[dead_run],
+            redispatch_skipped="dead_by_timeout",
+            uncovered=["a.py@@-0,0+1,2@@", "b.py@@-0,0+1,2@@"],
+        )
+        for lane_id in ("correctness", "hygiene")
+    ]
+    summary = summary_for(coverage, None)
+    assert summary.lanes.model_dump() == {
+        "dispatched": 2,
+        "valid": 0,
+        "uncovered": 4,
+        "uncovered_regions": 2,
+    }
+
+
 def test_attempts_without_wall_time_leave_the_wave_null() -> None:
     coverage = [lane("legacy", [run(1, [attempt(1, "initial", reason=None, wall=None)])])]
     assert summary_for(coverage, None).wave_wall_seconds.discovery_initial is None

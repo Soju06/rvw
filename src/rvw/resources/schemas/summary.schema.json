@@ -111,6 +111,12 @@
           "minimum": 0,
           "title": "Uncovered",
           "type": "integer"
+        },
+        "uncovered_regions": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Uncovered Regions",
+          "type": "integer"
         }
       },
       "title": "SummaryLanes",

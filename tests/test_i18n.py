@@ -34,5 +34,12 @@ def test_translation_fails_closed_for_unknown_key_locale_or_missing_arguments() 
 
 def test_renderer_modules_have_no_hangul_literals() -> None:
     root = Path(__file__).resolve().parents[1] / "src" / "rvw"
-    for filename in ("report.py", "publish.py", "gate.py", "stack_report.py"):
+    for filename in (
+        "report.py",
+        "publish.py",
+        "gate.py",
+        "stack_report.py",
+        "publication.py",
+        "special_publication.py",
+    ):
         assert not re.search("[\uac00-\ud7a3]", (root / filename).read_text()), filename

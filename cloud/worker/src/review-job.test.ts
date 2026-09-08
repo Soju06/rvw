@@ -1,4 +1,4 @@
-import {processFixture, summaryFixture} from "./review-contract-fixtures";
+import {processFixture, summaryFixture, waveWallFixture} from "./review-contract-fixtures";
 import type {PresentationConfig} from "./presentation";
 import type {UpdateCheckRunInput} from "./github-app";
 import type {Process} from "@cloudflare/sandbox";
@@ -182,6 +182,34 @@ it.each([
   }
   expect(test.sandbox.exec.mock.calls.some(([command]) => command.includes("--failure-code 'start_failed'"))).toBe(false);
   expect(test.record().conclusion).toBe(conclusion);
+});
+
+it("puts failed lanes, per-wave walls, receipts, and distinct regions into the check text", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "/workspace/run-review.sh", status: "completed",
+    startTime: new Date("2026-09-07T10:13:27Z"), exitCode: 0} as Process);
+  const previous = JSON.parse(test.files.get("/workspace/result/process.json")!);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({...previous, status: "pass", exit_code: 0, failure: null})));
+  // Shape of bori#1744 after the dead-lane skip: 6 lanes, 4 valid, 13 regions uncovered by 2 dead lanes.
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture({
+    presentation: {display_name: "rvw", short_name: "rvw", locale: "ko", footer: null},
+    lanes: {dispatched: 6, valid: 4, uncovered: 26, uncovered_regions: 13},
+    failed_lanes: [{lane_id: "correctness", reason: "exit_nonzero:124"}, {lane_id: "hygiene", reason: "exit_nonzero:124"}],
+    wave_wall_seconds: waveWallFixture({discovery_initial: 600.134, discovery_retry: 600.085, adjudication_initial: 600.144}),
+    markdown: "검토를 마쳤습니다. 수정이 필요한 문제 0건, 확인이 필요한 항목 0건. 검토되지 않은 변경 구간이 13곳 있습니다. 검토를 완료하지 못한 규칙 묶음 2개: correctness, hygiene.",
+  })));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const update = mocks.updateCheckRun.mock.calls[0][1];
+  expect(update.conclusion).toBe("success");
+  expect(update.summary).toContain("검토를 완료하지 못한 규칙 묶음 2개: correctness, hygiene.");
+  const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
+  expect(facts.lanes).toEqual({dispatched: 6, valid: 4, lane_hunk_receipts: 26, uncovered_regions: 13});
+  expect(facts.failed_lanes).toEqual([{lane_id: "correctness", reason: "exit_nonzero:124"}, {lane_id: "hygiene", reason: "exit_nonzero:124"}]);
+  expect(facts.wave_wall_seconds).toMatchObject({discovery_initial: 600.134, discovery_retry: 600.085,
+    discovery_redispatch: null, adjudication_initial: 600.144, adjudication_expanded: null});
+  expect(facts).not.toHaveProperty("uncovered");
 });
 
 it("persists diagnostics when a Sandbox process disappears", async () => {

@@ -18,6 +18,6 @@
 
 ## 4. Name unfinished rule sets and the slowest phase in the check
 
-- [ ] 4.1 Add failing tests for the ko/en failed-lanes sentence, catalog parity, protected lane identifiers in the language gate, `lanes.uncovered_regions`, and check text carrying `failed_lanes`, `wave_wall_seconds`, `lane_hunk_receipts`, and `uncovered_regions`; add the bori#1744 replay fixture test.
-- [ ] 4.2 Implement the catalog keys, `publication_summary` sentence, gate protection, `uncovered_regions`, and Worker check text.
-- [ ] 4.3 Amend reporting and cloud-app-platform main specs and context, then commit feat(reporting): name unfinished rule sets and the slowest phase in the check.
+- [x] 4.1 Add failing tests for the ko/en failed-lanes sentence, catalog parity, protected lane identifiers in the language gate, `lanes.uncovered_regions`, and check text carrying `failed_lanes`, `wave_wall_seconds`, `lane_hunk_receipts`, and `uncovered_regions`; add the bori#1744 replay fixture test.
+- [x] 4.2 Implement the catalog keys, `publication_summary` sentence, gate protection, `uncovered_regions`, and Worker check text.
+- [x] 4.3 Amend reporting and cloud-app-platform main specs and context, then commit feat(reporting): name unfinished rule sets and the slowest phase in the check.

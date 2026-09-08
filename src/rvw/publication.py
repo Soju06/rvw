@@ -41,7 +41,13 @@ def publication_counts(merged: MergeResult, outcome: AdjudicationOutcome | None)
 
 
 def uncovered_regions(coverage: Sequence[LaneCoverage]) -> int:
+    """Distinct changed regions no lane covered; lane-hunk receipts count each lane again."""
     return len({hunk for lane in coverage for hunk in lane.uncovered})
+
+
+def failed_lane_ids(coverage: Sequence[LaneCoverage]) -> list[str]:
+    """Lane identifiers with a final INVALID planned execution, in coverage order."""
+    return [lane.lane_id for lane in coverage if any(not run.valid for run in lane.runs)]
 
 
 def publication_summary(
@@ -54,6 +60,11 @@ def publication_summary(
     result = t("pub.completed", presentation.locale, b=blockers, w=warnings)
     if uncovered := uncovered_regions(coverage):
         result += " " + t("pub.partial", presentation.locale, n=uncovered)
+    if failed := failed_lane_ids(coverage):
+        # Lane identifiers are verbatim data; the language gate protects them as identifiers.
+        result += " " + t(
+            "pub.failed_lanes", presentation.locale, n=len(failed), lanes=", ".join(failed)
+        )
     return result
 
 

@@ -14,7 +14,7 @@ from rvw.discover import DiscoverResult, LaneCoverage
 from rvw.merge import MergeResult
 from rvw.presentation import PresentationConfig
 from rvw.provenance import BuildProvenance, current_build_provenance
-from rvw.publication import publication_summary
+from rvw.publication import publication_summary, uncovered_regions
 from rvw.runtimes import RunDiagnostic
 
 
@@ -244,7 +244,10 @@ class ProcessResult(ContractModel):
 class SummaryLanes(ContractModel):
     dispatched: int = Field(default=0, ge=0)
     valid: int = Field(default=0, ge=0)
+    # Lane-hunk receipts: one per (lane, uncovered hunk); the check labels it lane_hunk_receipts.
     uncovered: int = Field(default=0, ge=0)
+    # Distinct changed regions no lane covered; the human summary counts these.
+    uncovered_regions: int = Field(default=0, ge=0)
 
 
 class SummaryFailedLane(ContractModel):
@@ -351,6 +354,7 @@ def execution_summary(
         dispatched=len(discovered.coverage),
         valid=sum(lane.valid > 0 for lane in discovered.coverage),
         uncovered=sum(len(lane.uncovered) for lane in discovered.coverage),
+        uncovered_regions=uncovered_regions(discovered.coverage),
     )
     counts = Counter(group.severity.value for group in merged.groups)
     findings = FindingCounts(**{key: counts[key] for key in ("blocker", "warning", "suggestion")})

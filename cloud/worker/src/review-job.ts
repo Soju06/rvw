@@ -154,7 +154,12 @@ function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSumm
     presentation_config_failure: record.presentationConfigFailure ?? null,
     publication_failure: summary?.publication_failure ?? mapping?.publication_failure ?? null,
     language_fallback_used: summary?.language_fallback_used ?? mapping?.language_fallback_used ?? false,
-    lanes: summary?.lanes ?? null, findings: summary?.findings ?? null,
+    // lane_hunk_receipts counts each (lane, hunk) pair; uncovered_regions is the distinct
+    // region count the human summary states (bori#1744: 26 receipts, 13 regions).
+    lanes: summary === null ? null : {dispatched: summary.lanes.dispatched, valid: summary.lanes.valid,
+      lane_hunk_receipts: summary.lanes.uncovered, uncovered_regions: summary.lanes.uncovered_regions},
+    failed_lanes: summary?.failed_lanes ?? null, wave_wall_seconds: summary?.wave_wall_seconds ?? null,
+    findings: summary?.findings ?? null,
     verdicts: summary?.verdicts ?? null, blockers: summary?.blockers ?? null,
     artifact_key: `jobs/${record.jobId}/`, artifacts: record.artifacts}, presentation);
 }
