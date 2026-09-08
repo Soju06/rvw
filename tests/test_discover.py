@@ -84,12 +84,14 @@ class FakeRuntime(Runtime):
         statuses: dict[str, Sequence[RunStatus]] | None = None,
         invalid_reasons: dict[str, Sequence[str]] | None = None,
         covered: dict[str, Sequence[list[str]]] | None = None,
+        walls: dict[str, Sequence[float]] | None = None,
     ) -> None:
         self.findings = findings or {}
         self.invalid_lanes = invalid_lanes or set()
         self.statuses = statuses or {}
         self.invalid_reasons = invalid_reasons or {}
         self.covered = covered or {}
+        self.walls = walls or {}
         self.prompts: list[tuple[str, str]] = []
         self.calls: list[tuple[str, int]] = []
         self.run_dirs: list[Path] = []
@@ -117,6 +119,8 @@ class FakeRuntime(Runtime):
             if lane.id in self.invalid_lanes
             else RunStatus.VALID
         )
+        walls = self.walls.get(lane.id, ())
+        wall_seconds = walls[call_index] if call_index < len(walls) else 0
         if status is RunStatus.INVALID:
             reasons = self.invalid_reasons.get(lane.id, ())
             invalid_reason = (
@@ -128,7 +132,7 @@ class FakeRuntime(Runtime):
                 status=RunStatus.INVALID,
                 output=None,
                 invalid_reason=invalid_reason,
-                wall_seconds=0,
+                wall_seconds=wall_seconds,
                 artifact_dir=run_dir,
             )
         return RunResult(
@@ -145,7 +149,7 @@ class FakeRuntime(Runtime):
                 findings=self.findings.get(lane.id, []),
             ),
             invalid_reason=None,
-            wall_seconds=0,
+            wall_seconds=wall_seconds,
             artifact_dir=run_dir,
         )
 
@@ -642,13 +646,22 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
                 "valid": True,
                 "findings": 0,
                 "invalid_reason": None,
-                "attempts": [{"attempt": 1, "valid": True, "invalid_reason": None}],
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "wave": "initial",
+                        "valid": True,
+                        "invalid_reason": None,
+                        "wall_seconds": 0.0,
+                    }
+                ],
                 "diagnostic": None,
             }
             for replica in (1, 2)
         ],
         "coverage_redispatched": False,
         "redispatch_skipped": None,
+        "redispatch": [],
         "uncovered": [],
     }
     assert coverage["bad"].model_dump() == {
@@ -666,10 +679,12 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
                 "attempts": [
                     {
                         "attempt": attempt,
+                        "wave": wave,
                         "valid": False,
                         "invalid_reason": "scripted invalid",
+                        "wall_seconds": 0.0,
                     }
-                    for attempt in (1, 2)
+                    for attempt, wave in ((1, "initial"), (2, "retry"))
                 ],
                 "diagnostic": None,
             }
@@ -677,6 +692,7 @@ async def test_coverage_keeps_all_invalid_lane(tmp_path: Path) -> None:
         ],
         "coverage_redispatched": False,
         "redispatch_skipped": None,
+        "redispatch": [],
         "uncovered": [],
     }
     assert len(runtime.calls) == 6  # two good + two initial bad + two retry bad
@@ -705,8 +721,14 @@ async def test_retried_coverage_preserves_ordered_attempt_status_and_reason(
     assert run.valid is True
     assert run.invalid_reason is None
     assert [attempt.model_dump() for attempt in run.attempts] == [
-        {"attempt": 1, "valid": False, "invalid_reason": "exit_nonzero:124"},
-        {"attempt": 2, "valid": True, "invalid_reason": None},
+        {
+            "attempt": 1,
+            "wave": "initial",
+            "valid": False,
+            "invalid_reason": "exit_nonzero:124",
+            "wall_seconds": 0.0,
+        },
+        {"attempt": 2, "wave": "retry", "valid": True, "invalid_reason": None, "wall_seconds": 0.0},
     ]
 
 
@@ -727,10 +749,194 @@ async def test_non_retried_coverage_has_one_attempt_mirroring_row(tmp_path: Path
     assert [attempt.model_dump() for attempt in run.attempts] == [
         {
             "attempt": 1,
+            "wave": "initial",
             "valid": run.valid,
             "invalid_reason": run.invalid_reason,
+            "wall_seconds": 0.0,
         }
     ]
+
+
+async def test_attempts_and_redispatch_carry_wave_and_runtime_wall(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "base-review", Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={"base-review": [RunStatus.INVALID, RunStatus.VALID, RunStatus.VALID]},
+        invalid_reasons={"base-review": [DEAD_BY_TIMEOUT_REASON]},
+        covered={"base-review": [[], ["src/a.py"], ["src/b.py:10-11"]]},
+        walls={"base-review": [600.06, 571.2, 42.5]},
+    )
+
+    result = await discover(
+        registry=registry(("base-review", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=two_file_target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    lane = result.coverage[0]
+    assert [attempt.model_dump() for attempt in lane.runs[0].attempts] == [
+        {
+            "attempt": 1,
+            "wave": "initial",
+            "valid": False,
+            "invalid_reason": DEAD_BY_TIMEOUT_REASON,
+            "wall_seconds": 600.06,
+        },
+        {
+            "attempt": 2,
+            "wave": "retry",
+            "valid": True,
+            "invalid_reason": None,
+            "wall_seconds": 571.2,
+        },
+    ]
+    assert lane.coverage_redispatched is True
+    assert [attempt.model_dump() for attempt in lane.redispatch] == [
+        {
+            "attempt": 1,
+            "wave": "coverage_redispatch",
+            "valid": True,
+            "invalid_reason": None,
+            "wall_seconds": 42.5,
+        }
+    ]
+    reloaded = discover_module.LaneCoverage.model_validate_json(lane.model_dump_json())
+    assert reloaded == lane
+
+
+async def test_invalid_redispatch_result_is_recorded_not_hidden(tmp_path: Path) -> None:
+    lanes_root = tmp_path / "lanes"
+    write_lane(lanes_root, "hygiene", Tier.BASE)
+    runtime = FakeRuntime(
+        statuses={"hygiene": [RunStatus.INVALID] * 3},
+        invalid_reasons={"hygiene": ["exit_nonzero:1"] * 3},
+        walls={"hygiene": [104.9, 98.2, 101.5]},
+    )
+    expected = [hunk.hunk_id for hunk in discover_module.parse_hunks(two_file_target().diff)]
+
+    result = await discover(
+        registry=registry(("hygiene", Tier.BASE)),
+        lanes_root=lanes_root,
+        target=two_file_target(),
+        runtime=runtime,
+        out_root=tmp_path / "out",
+        repo_dir=tmp_path,
+    )
+
+    lane = result.coverage[0]
+    assert len(runtime.calls) == 3
+    assert lane.coverage_redispatched is True
+    assert lane.valid == 0
+    assert lane.redispatch[0].model_dump() == {
+        "attempt": 1,
+        "wave": "coverage_redispatch",
+        "valid": False,
+        "invalid_reason": "exit_nonzero:1",
+        "wall_seconds": 101.5,
+    }
+    assert lane.uncovered == expected
+
+
+def test_legacy_attempt_records_without_wave_load_as_initial_then_retry() -> None:
+    run = RunCoverage.model_validate(
+        {
+            "replica": 1,
+            "chunk": 1,
+            "valid": True,
+            "findings": 0,
+            "invalid_reason": None,
+            "attempts": [
+                {"attempt": 1, "valid": False, "invalid_reason": "exit_nonzero:124"},
+                {"attempt": 2, "valid": True, "invalid_reason": None},
+            ],
+        }
+    )
+    assert [(attempt.wave, attempt.wall_seconds) for attempt in run.attempts] == [
+        ("initial", None),
+        ("retry", None),
+    ]
+    legacy_lane = discover_module.LaneCoverage.model_validate(
+        {
+            "lane_id": "legacy",
+            "dispatched": 1,
+            "valid": 1,
+            "findings": 0,
+            "runs": [run.model_dump()],
+            "coverage_redispatched": True,
+            "uncovered": [],
+        }
+    )
+    assert legacy_lane.redispatch == []
+    assert legacy_lane.redispatch_skipped is None
+
+
+def test_run_coverage_rejects_redispatch_wave_inside_planned_attempts() -> None:
+    with pytest.raises(ValueError, match="initial wave followed only by retries"):
+        RunCoverage(
+            replica=1,
+            chunk=1,
+            valid=True,
+            findings=0,
+            invalid_reason=None,
+            attempts=[
+                {"attempt": 1, "wave": "initial", "valid": False, "invalid_reason": "empty"},
+                {
+                    "attempt": 2,
+                    "wave": "coverage_redispatch",
+                    "valid": True,
+                    "invalid_reason": None,
+                },
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"coverage_redispatched": False}, "require coverage_redispatched"),
+        (
+            {
+                "redispatch": [
+                    {"attempt": 1, "wave": "retry", "valid": True, "invalid_reason": None}
+                ]
+            },
+            "coverage_redispatch wave",
+        ),
+        (
+            {
+                "redispatch": [
+                    {
+                        "attempt": 2,
+                        "wave": "coverage_redispatch",
+                        "valid": True,
+                        "invalid_reason": None,
+                    }
+                ]
+            },
+            "numbered 1..N",
+        ),
+    ],
+)
+def test_lane_coverage_rejects_malformed_redispatch_lists(
+    overrides: dict[str, object], match: str
+) -> None:
+    payload: dict[str, object] = {
+        "lane_id": "lane",
+        "dispatched": 0,
+        "valid": 0,
+        "findings": 0,
+        "runs": [],
+        "coverage_redispatched": True,
+        "redispatch": [
+            {"attempt": 1, "wave": "coverage_redispatch", "valid": True, "invalid_reason": None}
+        ],
+        **overrides,
+    }
+    with pytest.raises(ValueError, match=match):
+        discover_module.LaneCoverage.model_validate(payload)
 
 
 @pytest.mark.parametrize(
@@ -804,6 +1010,14 @@ def test_run_coverage_rejects_valid_run_with_diagnostic() -> None:
         {"attempt": 1, "valid": False, "invalid_reason": None},
         {"attempt": 1, "valid": False, "invalid_reason": "   "},
         {"attempt": 1, "valid": True, "invalid_reason": None, "extra": "forbidden"},
+        {"attempt": 1, "wave": "third", "valid": True, "invalid_reason": None},
+        {
+            "attempt": 1,
+            "wave": "initial",
+            "valid": True,
+            "invalid_reason": None,
+            "wall_seconds": -1,
+        },
     ],
 )
 def test_run_attempt_is_strict_and_enforces_validity_reason_invariant(

@@ -6,9 +6,9 @@
 
 ## 2. Record attempt wave and wall time, expose failed lanes
 
-- [ ] 2.1 Add failing tests for `RunAttempt.wave`/`wall_seconds`, legacy attempt loading, the `LaneCoverage.redispatch` list, adjudication `wave_wall_seconds`, and summary `failed_lanes`/`wave_wall_seconds`.
-- [ ] 2.2 Implement attempt wave/wall persistence, redispatch attempts, adjudication wave telemetry, summary fields, the regenerated summary schema resource, and Worker parser acceptance of the new summary fields.
-- [ ] 2.3 Amend discovery and runtime-contract main specs and context, then commit feat(discovery): record attempt wave and wall time, expose failed lanes.
+- [x] 2.1 Add failing tests for `RunAttempt.wave`/`wall_seconds`, legacy attempt loading, the `LaneCoverage.redispatch` list, adjudication `wave_wall_seconds`, and summary `failed_lanes`/`wave_wall_seconds`.
+- [x] 2.2 Implement attempt wave/wall persistence, redispatch attempts, adjudication wave telemetry, summary fields, the regenerated summary schema resource, and Worker parser acceptance of the new summary fields.
+- [x] 2.3 Amend discovery and runtime-contract main specs and context, then commit feat(discovery): record attempt wave and wall time, expose failed lanes.
 
 ## 3. Pass an explicit review deadline and check job-cap coherence
 

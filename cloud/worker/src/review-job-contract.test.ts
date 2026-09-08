@@ -1,4 +1,4 @@
-import {processFixture, summaryFixture} from "./review-contract-fixtures";
+import {processFixture, summaryFixture, waveWallFixture} from "./review-contract-fixtures";
 import {describe, expect, it} from "vitest";
 
 import {
@@ -132,6 +132,32 @@ describe("Python artifact summary", () => {
   });
   it("rejects malformed summary artifacts", () => {
     expect(() => parseArtifactSummary("{}")).toThrow(/artifact/i);
+  });
+  it("passes through failed lanes and per-wave wall seconds from Python", () => {
+    const failed = [{lane_id: "correctness", reason: "exit_nonzero:124"}, {lane_id: "hygiene", reason: "exit_nonzero:124"}];
+    const walls = waveWallFixture({discovery_initial: 600.134, discovery_retry: 600.085, adjudication_initial: 600.144});
+    const parsed = parseArtifactSummary(JSON.stringify(summaryFixture({
+      lanes: {dispatched: 6, valid: 4, uncovered: 26}, failed_lanes: failed, wave_wall_seconds: walls})));
+    expect(parsed.failed_lanes).toEqual(failed);
+    expect(parsed.wave_wall_seconds).toEqual(walls);
+  });
+  it("defaults legacy summaries without failure or wave facts", () => {
+    const summary: Record<string, unknown> = summaryFixture();
+    delete summary.failed_lanes;
+    delete summary.wave_wall_seconds;
+    expect(parseArtifactSummary(JSON.stringify(summary))).toMatchObject({failed_lanes: [], wave_wall_seconds: null});
+  });
+  it.each([
+    {failed_lanes: [{lane_id: "", reason: "empty"}]},
+    {failed_lanes: [{lane_id: "lane"}]},
+    {failed_lanes: [{lane_id: "lane", reason: "empty", extra: 1}]},
+    {failed_lanes: "correctness"},
+    {wave_wall_seconds: waveWallFixture({discovery_initial: -1})},
+    {wave_wall_seconds: {...waveWallFixture(), unknown_wave: 1}},
+    {wave_wall_seconds: {discovery_initial: 1}},
+    {wave_wall_seconds: waveWallFixture({adjudication_initial: "600" as unknown as number})},
+  ])("rejects malformed failure or wave facts %#", (overrides) => {
+    expect(() => parseArtifactSummary(JSON.stringify(summaryFixture(overrides)))).toThrow();
   });
 });
 

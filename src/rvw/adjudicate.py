@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -133,6 +133,9 @@ def build_adjudication_prompt(
     return "\n\n".join(parts)
 
 
+AdjudicationWave = Literal["initial", "initial-retry", "expanded", "expanded-retry"]
+
+
 class AdjudicationOutcome(BaseModel):
     """Strict persisted adjudication outcome."""
 
@@ -144,6 +147,11 @@ class AdjudicationOutcome(BaseModel):
     replica_votes: dict[str, list[Verdict]]
     unresolved: list[str]
     coerced_rejections: int = Field(ge=0)
+    # Telemetry only: the longest replica wall per executed wave, keyed by the
+    # runtime artifact label. Absent in outcomes persisted before it existed.
+    wave_wall_seconds: dict[AdjudicationWave, Annotated[float, Field(ge=0)]] = Field(
+        default_factory=dict
+    )
 
     @model_validator(mode="after")
     def _uncertain_verdicts_require_reasons(self) -> AdjudicationOutcome:
@@ -332,12 +340,13 @@ async def adjudicate(
 
     semaphore = asyncio.Semaphore(concurrency)
     reviewed = reviewed_diff(target.diff)
+    wave_wall_seconds: dict[AdjudicationWave, float] = {}
 
     async def execute_wave(
         groups: Sequence[CollapseGroup],
         *,
         expanded: bool,
-        label: str,
+        label: AdjudicationWave,
         deadline: int,
         pass_runtime: Runtime,
         retry_invalid_reasons: Sequence[str] = (),
@@ -364,14 +373,21 @@ async def adjudicate(
                         validate=RuntimeAdjudication.model_validate,
                     )
 
-        return list(
+        results = list(
             await asyncio.gather(
                 *(asyncio.create_task(execute_one(replica)) for replica in range(1, replicas + 1))
             )
         )
+        # The wave barrier waits for its slowest replica; record that wall.
+        wave_wall_seconds[label] = max(result.wall_seconds for result in results)
+        return results
 
     async def execute_pass(
-        groups: Sequence[CollapseGroup], *, expanded: bool, label: str, deadline: int
+        groups: Sequence[CollapseGroup],
+        *,
+        expanded: bool,
+        label: Literal["initial", "expanded"],
+        deadline: int,
     ) -> list[RunResult[Any]]:
         pass_runtime = expanded_runtime if expanded else runtime
         results = await execute_wave(
@@ -389,7 +405,7 @@ async def adjudicate(
             retry_results = await execute_wave(
                 groups,
                 expanded=expanded,
-                label=f"{label}-retry",
+                label="initial-retry" if label == "initial" else "expanded-retry",
                 deadline=deadline,
                 pass_runtime=pass_runtime,
                 retry_invalid_reasons=retry_invalid_reasons,
@@ -439,6 +455,7 @@ async def adjudicate(
         replica_votes=replica_votes,
         unresolved=unresolved,
         coerced_rejections=coerced_rejections,
+        wave_wall_seconds=wave_wall_seconds,
     )
 
 
@@ -446,6 +463,7 @@ __all__ = [
     "AdjudicationAttempt",
     "AdjudicationInfrastructureError",
     "AdjudicationOutcome",
+    "AdjudicationWave",
     "adjudicate",
     "adjudication_schema",
     "build_adjudication_prompt",

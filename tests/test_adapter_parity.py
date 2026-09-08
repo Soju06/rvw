@@ -15,7 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "https://github.com/fixture/project/pull/42"
-TIMING_FIELDS = {"duration_ms", "wall_seconds"}
+TIMING_FIELDS = {"duration_ms", "wall_seconds", "wave_wall_seconds"}
 
 
 def _execute(arguments: list[str], *, cwd: Path, environ: dict[str, str]) -> str:
