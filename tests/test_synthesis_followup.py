@@ -61,15 +61,12 @@ def test_invented_literal_is_rejected_in_every_prose_field(field: str) -> None:
     "literal",
     [
         "`connectedAccountId`",
-        "connectedAccountId",
         "`CONNECTED_ACCOUNT_ID`",
         "`connected_account`",
-        '"invented account error"',
-        "'invented account error'",
         "`src/review/other.py`",
         "src/review/other.py",
-        "xY",
-        "HTTPError",
+        "`xY`",
+        "`HTTPError`",
     ],
 )
 def test_mutated_or_invented_literal_fails_even_if_original_is_repeated(literal: str) -> None:
@@ -102,10 +99,12 @@ def test_backticks_may_wrap_verbatim_unformatted_source(source: str) -> None:
     ("original", "mutation"),
     [("JSON.stringify", "JSON.parse"), ("lookupRecipient.id", "lookupRecipient.key")],
 )
-def test_bare_qualified_identifier_cannot_change_its_member(original: str, mutation: str) -> None:
+def test_backticked_qualified_identifier_cannot_change_its_member(
+    original: str, mutation: str
+) -> None:
     candidate = group(body=f"{original} ignores the requested user.")
     value = english_document()
-    value.findings[0].what = f"{mutation} ignores the requested user."
+    value.findings[0].what = f"`{mutation}` ignores the requested user."
     with pytest.raises(ValueError, match="literals absent from source"):
         validate_synthesis(value, merged(candidate), outcome_for([candidate]), locale="en")
 

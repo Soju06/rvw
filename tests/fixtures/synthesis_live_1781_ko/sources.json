@@ -1,0 +1,201 @@
+{
+  "pr_title": "fix(gmail): 생활 알림 계정 동기화의 서비스 인증 불일치 수정",
+  "pr_body": "## Summary\n\n<!-- 이 PR이 해결하는 문제 또는 추가하는 기능을 1-2줄로 요약 -->\n\nAPI가 Agent Backend 전용 경로를 호출해 Gmail 생활 알림 계정 동기화가 403으로 실패하는 문제를 해결합니다. API 전용 계정 조회 계약을 추가하고, 불확실한 조회 결과가 기존 수집 상태를 비활성화하지 않도록 합니다.\n\n## Changes\n\n<!-- 주요 변경 사항을 bullet point로 나열 -->\n\n- API 토큰만 허용하는 `GET /internal/connectors/google_gmail/accounts`와 공유 응답 스키마를 추가합니다. 기존 Agent 경로의 인증 정책은 유지합니다.\n- Hub에 저장된 전체 연결 계정을 조회합니다. `connected` 계정만 활성화하고, 재인증 등 `unavailable` 계정은 기존 cursor를 보존합니다.\n- 식별자가 없는 신규 `initiated` 슬롯은 제외하고, 기존 식별자가 있는 재인증 슬롯은 보존합니다. 다른 활성 상태의 식별자 누락·조회 실패·계약 불일치는 재시도하며, 정상 조회된 목록만 누락 계정 비활성화의 근거로 사용합니다.\n- 실패 단계·HTTP 상태·허용된 Prisma 코드·trace ID를 기록합니다. 원문 오류, 토큰, 사용자·계정 식별자는 진단 정보에 포함하지 않습니다.\n- 서비스 경계별 계약 테스트를 추가합니다. API는 실제 HTTP 요청 경로·인증 헤더·응답 처리를, Hub는 실제 라우팅·인증·OAuth 상태별 inventory를 검증합니다. Changeset 및 복구 runbook도 추가합니다.\n- 커밋은 최초 인증 계약 수정, 미완료 OAuth 처리, 테스트 의존성 분리, 인증 실패 보고 근거 문서화로 나눴습니다.\n\n## Testing\n\n<!-- 이 PR에서 어떤 테스트를 수행했는지 구체적으로 작성 (수동 테스트, 자동화 테스트, 재현 확인 등) -->\n\n리뷰 반영 후 최신 main(`e12f8b134`)으로 rebase한 코드에서 확인 완료:\n\n- 미완료 OAuth 단독/정상 계정과 공존 두 경우의 503을 회귀 테스트로 먼저 재현한 뒤 수정했습니다.\n- `pnpm --filter @bori/connector-hub test`: 1,289개 통과, 7개 skip; connector registry 검증 통과.\n- `pnpm --filter @bori/api exec vitest run src/services/life-gmail-discovery-reconciliation-hub.test.ts src/services/life-gmail-discovery-reconciliation.test.ts src/services/life-gmail-reconciliation-reporting.test.ts src/services/life-notification-job-scheduler.test.ts`: 29개 통과.\n- `pnpm --filter @bori/connector-hub typecheck`, `pnpm --filter @bori/api build`, 두 패키지 `check`, 커밋 훅, `git diff --check` 통과.\n- 테스트를 포함한 `pnpm --filter @bori/api exec tsc --noEmit`는 기존 오류 439건으로 실패합니다. 신규 HTTP 계약 테스트를 제외해도 동일한 439건이며 추가 진단은 없습니다.\n- 최초 구현 시 API 관련 75개·contracts 523개 테스트, contracts 타입 검사, API/Hub dev dry-run도 통과했습니다. 리뷰 수정 후 dry-run은 재실행하지 않았습니다.\n\n실제 DB와 배포 환경에서의 수정 후 복구는 아직 검증하지 않았습니다. 갱신된 GitHub CI 결과는 별도 확인이 필요합니다.\n\n## Checklist\n\n- [x] 프롬프트 크리티컬 경로(promptCriticalPaths — scripts/qa/system-prompt-evidence-lib.mjs)\n      변경 여부를 확인했다. 변경했다면 `pnpm qa:prompt-evidence -- check`가 그린이고, 렌더\n      바이트가 움직이는 변경은 evidence 재캡처(capture + record-eval)를 동봉했다.\n\n해당 경로 변경은 없습니다.\n\n## Notes\n\n<!-- 리뷰어가 알아야 할 컨텍스트, 스크린샷, 논의 사항 등 -->\n\n- 관련 이슈: [BORI-API-24](https://vooy-hq.sentry.io/issues/7718436369/). 2026-09-08 14:15 KST Cloudflare 로그에서 기존 Agent context 경로 5건의 403과 Sentry 배치 실패 5건을 확인했습니다.\n- 실제 배포는 아직입니다. 개발 환경 Hub는 저장소 정책에 따라 main GitHub Actions에서만 배포합니다. **Hub → API 순서**로 배포해야 합니다.\n- 머지·배포 후 `failure_count` 초기화, `last_scanned_at` 갱신, cursor 및 `gmail.scan` 예약 생성, 기존 opt-out/checkpoint 보존을 확인해야 합니다.\n- 재시도 backoff는 최대 6시간입니다. 오류가 사라졌다는 사실만으로 전체 backlog 복구를 판정하거나 claim·checkpoint를 임의로 초기화하지 않습니다.\n- 세부 절차: `docs/runbooks/gmail-discovery-reconciliation.md`.\n\n<!-- codesmith:footer -->\n---\n<a href=\"https://app.blacksmith.sh/clawroid/codesmith/bori/pr/1781\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://pr-comments-assets.blacksmith.sh/codesmith/view-with-codesmith-dark-v2.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://pr-comments-assets.blacksmith.sh/codesmith/view-with-codesmith-light-v2.svg\"><img alt=\"View with [code]smith\" src=\"https://pr-comments-assets.blacksmith.sh/codesmith/view-with-codesmith-dark-v2.svg\"></picture></a> <a href=\"https://backend.blacksmith.sh/track/enable-autofix?expires=1791442780&installation_model_id=424501&pr_number=1781&repository=clawroid%2Fbori&return_to=https%3A%2F%2Fgithub.com%2Fclawroid%2Fbori%2Fpull%2F1781&signature=99e40cada0d435d86ce40e054a901ab81eee121f6d90938a6c9e1d7e774e3562\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://pr-comments-assets.blacksmith.sh/codesmith/autofix-with-codesmith-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://pr-comments-assets.blacksmith.sh/codesmith/autofix-with-codesmith-light.svg\"><img alt=\"Autofix with [code]smith\" src=\"https://pr-comments-assets.blacksmith.sh/codesmith/autofix-with-codesmith-dark.svg\"></picture></a>\n<sup>Need help on this PR? Tag <code>@codesmith</code> with what you need. Autofix is disabled.</sup>\n\n<!-- codesmith:autofix:disabled -->\n<!-- /codesmith:footer -->",
+  "merge": {
+    "groups": [
+      {
+        "agreement": 1,
+        "anchorable": true,
+        "bodies": [
+          "이 테스트는 `enableGmailDiscoveryIfUnchangedSince`가 `false`를 반환하도록 설정했지만 해당 메서드가 실제로 호출되었는지 검증하지 않습니다. 따라서 구현이 커서 갱신 단계를 완전히 건너뛰고 곧바로 `complete`를 호출해도 동일한 성공 결과와 `complete` 호출 검증을 통과합니다. 이 경우 테스트 이름이 주장하는 “변경된 커서를 되살리지 않음” 동작을 전혀 보호하지 못합니다. 최소한 해당 메서드가 `CLAIM.userId`, 계정 ID, `NOW` 인자로 호출되었음을 검증해야 합니다."
+        ],
+        "file": "apps/api/src/services/life-gmail-discovery-reconciliation.test.ts",
+        "findings": [
+          {
+            "anchorable": true,
+            "body": "이 테스트는 `enableGmailDiscoveryIfUnchangedSince`가 `false`를 반환하도록 설정했지만 해당 메서드가 실제로 호출되었는지 검증하지 않습니다. 따라서 구현이 커서 갱신 단계를 완전히 건너뛰고 곧바로 `complete`를 호출해도 동일한 성공 결과와 `complete` 호출 검증을 통과합니다. 이 경우 테스트 이름이 주장하는 “변경된 커서를 되살리지 않음” 동작을 전혀 보호하지 못합니다. 최소한 해당 메서드가 `CLAIM.userId`, 계정 ID, `NOW` 인자로 호출되었음을 검증해야 합니다.",
+            "file": "apps/api/src/services/life-gmail-discovery-reconciliation.test.ts",
+            "hunk_id": "apps/api/src/services/life-gmail-discovery-reconciliation.test.ts@@-14,305+15,241@@",
+            "lane_id": "test-integrity",
+            "line": 104,
+            "replica": 1,
+            "rule_id": "test-ci/critical-flaw",
+            "schema_version": 1,
+            "severity": "blocker",
+            "verdict": null,
+            "verdict_reason": null
+          }
+        ],
+        "hunk_id": "apps/api/src/services/life-gmail-discovery-reconciliation.test.ts@@-14,305+15,241@@",
+        "key": "ee7d1d036a42d3704d456cfdad0781829a29f683",
+        "lane_ids": [
+          "test-integrity"
+        ],
+        "line": 104,
+        "priority": [
+          0,
+          1,
+          1,
+          3
+        ],
+        "rule_id": "test-ci/critical-flaw",
+        "severity": "blocker"
+      },
+      {
+        "agreement": 1,
+        "anchorable": true,
+        "bodies": [
+          "이 검증은 `reportError`의 첫 번째 인자로 전달된 `Error` 객체를 `JSON.stringify`한 결과에만 의존합니다. `Error`의 `message`, `name` 및 사용자 정의 속성은 기본 직렬화에서 제외되므로, 구현이 민감한 문자열을 `call[0].message`에 넣어도 `JSON.stringify(call)`에는 나타나지 않아 테스트가 통과합니다. 따라서 테스트가 주장하는 예외 메시지·이름·코드·payload 비노출을 실제로 보호하지 못합니다. 예를 들어 `reportError(new Error(\"private SQL and account\"), metadata)` 같은 구현도 이 테스트를 통과합니다."
+        ],
+        "file": "apps/api/src/services/life-gmail-reconciliation-reporting.test.ts",
+        "findings": [
+          {
+            "anchorable": true,
+            "body": "이 검증은 `reportError`의 첫 번째 인자로 전달된 `Error` 객체를 `JSON.stringify`한 결과에만 의존합니다. `Error`의 `message`, `name` 및 사용자 정의 속성은 기본 직렬화에서 제외되므로, 구현이 민감한 문자열을 `call[0].message`에 넣어도 `JSON.stringify(call)`에는 나타나지 않아 테스트가 통과합니다. 따라서 테스트가 주장하는 예외 메시지·이름·코드·payload 비노출을 실제로 보호하지 못합니다. 예를 들어 `reportError(new Error(\"private SQL and account\"), metadata)` 같은 구현도 이 테스트를 통과합니다.",
+            "file": "apps/api/src/services/life-gmail-reconciliation-reporting.test.ts",
+            "hunk_id": "apps/api/src/services/life-gmail-reconciliation-reporting.test.ts@@-0,0+1,73@@",
+            "lane_id": "test-integrity",
+            "line": 67,
+            "replica": 1,
+            "rule_id": "test-ci/critical-flaw",
+            "schema_version": 1,
+            "severity": "warning",
+            "verdict": null,
+            "verdict_reason": null
+          }
+        ],
+        "hunk_id": "apps/api/src/services/life-gmail-reconciliation-reporting.test.ts@@-0,0+1,73@@",
+        "key": "9090e1f6a78c9ba2744093abb27044dc5b8ff814",
+        "lane_ids": [
+          "test-integrity"
+        ],
+        "line": 67,
+        "priority": [
+          0,
+          1,
+          1,
+          2
+        ],
+        "rule_id": "test-ci/critical-flaw",
+        "severity": "warning"
+      },
+      {
+        "agreement": 1,
+        "anchorable": true,
+        "bodies": [
+          "배치에서 여러 `claim`을 병렬 처리한 뒤 실패를 `failures` 배열로 집계하지만, `GmailReconciliationFailure`에는 `claim.userId`나 기타 계정 식별자가 없습니다. 따라서 동일한 `stage`/`code`의 실패가 발생하면 어느 사용자의 Gmail 연결과 어느 데이터베이스 레코드가 문제인지 로그만으로는 재현하거나 격리할 수 없습니다. 각 실패 항목에 비밀·PII가 아닌 안정적인 `userId`(또는 기존 상관 식별자)를 포함하고 `reportGmailReconciliationFailures`의 `extra`에 전달해 장애 시 개별 claim을 추적할 수 있게 하세요."
+        ],
+        "file": "apps/api/src/services/life-gmail-reconciliation-reporting.ts",
+        "findings": [
+          {
+            "anchorable": true,
+            "body": "배치에서 여러 `claim`을 병렬 처리한 뒤 실패를 `failures` 배열로 집계하지만, `GmailReconciliationFailure`에는 `claim.userId`나 기타 계정 식별자가 없습니다. 따라서 동일한 `stage`/`code`의 실패가 발생하면 어느 사용자의 Gmail 연결과 어느 데이터베이스 레코드가 문제인지 로그만으로는 재현하거나 격리할 수 없습니다. 각 실패 항목에 비밀·PII가 아닌 안정적인 `userId`(또는 기존 상관 식별자)를 포함하고 `reportGmailReconciliationFailures`의 `extra`에 전달해 장애 시 개별 claim을 추적할 수 있게 하세요.",
+            "file": "apps/api/src/services/life-gmail-reconciliation-reporting.ts",
+            "hunk_id": "apps/api/src/services/life-gmail-reconciliation-reporting.ts@@-0,0+1,90@@",
+            "lane_id": "backend-observability",
+            "line": 14,
+            "replica": 1,
+            "rule_id": "backend/logging-gap",
+            "schema_version": 1,
+            "severity": "suggestion",
+            "verdict": null,
+            "verdict_reason": null
+          }
+        ],
+        "hunk_id": "apps/api/src/services/life-gmail-reconciliation-reporting.ts@@-0,0+1,90@@",
+        "key": "99561ac3235e22883e336a9b61afb112de62249b",
+        "lane_ids": [
+          "backend-observability"
+        ],
+        "line": 14,
+        "priority": [
+          0,
+          1,
+          1,
+          1
+        ],
+        "rule_id": "backend/logging-gap",
+        "severity": "suggestion"
+      }
+    ],
+    "pattern_folds": [],
+    "region_folds": [],
+    "sites": [
+      {
+        "corroboration": 1,
+        "cross_layer": false,
+        "file": "apps/api/src/services/life-gmail-discovery-reconciliation.test.ts",
+        "group_keys": [
+          "ee7d1d036a42d3704d456cfdad0781829a29f683"
+        ],
+        "hunk_id": "apps/api/src/services/life-gmail-discovery-reconciliation.test.ts@@-14,305+15,241@@",
+        "lanes": [
+          "test-integrity"
+        ]
+      },
+      {
+        "corroboration": 1,
+        "cross_layer": false,
+        "file": "apps/api/src/services/life-gmail-reconciliation-reporting.test.ts",
+        "group_keys": [
+          "9090e1f6a78c9ba2744093abb27044dc5b8ff814"
+        ],
+        "hunk_id": "apps/api/src/services/life-gmail-reconciliation-reporting.test.ts@@-0,0+1,73@@",
+        "lanes": [
+          "test-integrity"
+        ]
+      },
+      {
+        "corroboration": 1,
+        "cross_layer": false,
+        "file": "apps/api/src/services/life-gmail-reconciliation-reporting.ts",
+        "group_keys": [
+          "99561ac3235e22883e336a9b61afb112de62249b"
+        ],
+        "hunk_id": "apps/api/src/services/life-gmail-reconciliation-reporting.ts@@-0,0+1,90@@",
+        "lanes": [
+          "backend-observability"
+        ]
+      }
+    ]
+  },
+  "outcome": {
+    "coerced_rejections": 0,
+    "evidence": {
+      "9090e1f6a78c9ba2744093abb27044dc5b8ff814": "`expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain(\n      \"secret\"\n    );`\n`expect(JSON.stringify(call)).not.toContain(\"private\");`",
+      "99561ac3235e22883e336a9b61afb112de62249b": "`export interface GmailReconciliationFailure {\n  readonly code:\n    | \"auth_rejected\"\n    | \"hub_request_failed\"\n    | \"invalid_inventory\"\n    | \"persistence_failed\"\n    | \"claim_lost\";\n  readonly database_code?: string;\n  readonly http_status?: number;\n  readonly stage: GmailReconciliationStage;\n}`\n`extra: { failed, failures },`",
+      "ee7d1d036a42d3704d456cfdad0781829a29f683": "`vi.mocked(cursors.enableGmailDiscoveryIfUnchangedSince).mockResolvedValue(\n      false\n    );`\n`expect(claims.complete).toHaveBeenCalledWith(CLAIM, NOW);`"
+    },
+    "reasons": {
+      "9090e1f6a78c9ba2744093abb27044dc5b8ff814": "검증이 `Error` 객체를 포함한 호출을 `JSON.stringify`한 문자열에 의존합니다. 이 직렬화에서는 `Error`의 `message`, `name` 및 사용자 정의 속성이 제외되므로 민감한 값이 `call[0]`에 있어도 검증을 우회할 수 있습니다.",
+      "99561ac3235e22883e336a9b61afb112de62249b": "`GmailReconciliationFailure`에 `claim.userId`나 상관 식별자가 없고, `extra`에는 집계된 `failures`만 전달됩니다. 동일한 단계와 코드의 실패가 여러 claim에서 발생하면 개별 사용자를 식별할 수 없습니다.",
+      "ee7d1d036a42d3704d456cfdad0781829a29f683": "테스트는 반환값을 `false`로 설정하지만 `enableGmailDiscoveryIfUnchangedSince` 호출 여부나 인자를 검증하지 않고 `complete` 호출만 확인하므로, 구현이 해당 갱신 단계를 생략해도 통과할 수 있습니다."
+    },
+    "replica_votes": {
+      "9090e1f6a78c9ba2744093abb27044dc5b8ff814": [
+        "CONFIRMED",
+        "CONFIRMED",
+        "CONFIRMED"
+      ],
+      "99561ac3235e22883e336a9b61afb112de62249b": [
+        "CONFIRMED",
+        "CONFIRMED",
+        "CONFIRMED"
+      ],
+      "ee7d1d036a42d3704d456cfdad0781829a29f683": [
+        "CONFIRMED",
+        "CONFIRMED",
+        "CONFIRMED"
+      ]
+    },
+    "unresolved": [],
+    "verdicts": {
+      "9090e1f6a78c9ba2744093abb27044dc5b8ff814": "CONFIRMED",
+      "99561ac3235e22883e336a9b61afb112de62249b": "CONFIRMED",
+      "ee7d1d036a42d3704d456cfdad0781829a29f683": "CONFIRMED"
+    },
+    "wave_wall_seconds": {
+      "initial": 39.20759100932628
+    }
+  }
+}

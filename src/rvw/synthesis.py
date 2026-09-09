@@ -34,12 +34,15 @@ _FORBIDDEN_PROSE = (
     ("five-year", re.compile(r"\bfive-year", re.IGNORECASE)),
     ("다섯 살", re.compile("다섯 살")),
 )
-_BACKTICK_LITERAL = re.compile(r"`([^`\n]+)`")
+_BACKTICK_LITERAL = re.compile(r"`([^`]+)`")
 _QUOTED_LITERAL = re.compile(
     r"""(?<![\\\w])(?:"([^"\n]+)"|\u201c([^\u201d\n]+)\u201d|'([^'\n]+)'|\u2018([^\u2019\n]+)\u2019)"""
 )
 _PATH_LITERAL = re.compile(
     r"(?<![A-Za-z0-9_.-])/?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./-]*[A-Za-z0-9_-]"
+)
+_PATH_LINE_LITERAL = re.compile(
+    r"(?<![A-Za-z0-9_.-])/?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./-]*[A-Za-z0-9_-]:[1-9][0-9]*"
 )
 _CODE_IDENTIFIER = re.compile(
     r"(?<![A-Za-z0-9_])(?:(?:[A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*|"
@@ -47,6 +50,7 @@ _CODE_IDENTIFIER = re.compile(
     r"[A-Z]{2,}[a-z])[A-Za-z0-9]*|"
     r"[A-Z][A-Z0-9_]{2,}|[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)(?![A-Za-z0-9_])"
 )
+_INVENTED_LITERAL = re.compile(r"`([^`]+)`")
 
 
 class SynthesisFinding(BaseModel):
@@ -130,12 +134,30 @@ def _technical_literals(text: str) -> tuple[str, ...]:
 
 
 def _source_texts(group: CollapseGroup, outcome: AdjudicationOutcome) -> tuple[str, ...]:
+    evidence = outcome.evidence.get(group.key, "")
+    evidence_lines = [
+        int(match.group(1) or match.group(2))
+        for match in re.finditer(
+            r"(?im)(?:\bline\s+|\bL)([1-9][0-9]*)\b|^\s*([1-9][0-9]*)\s*:", evidence
+        )
+    ]
+    locations = tuple(
+        f"{group.file}:{line}"
+        for line in dict.fromkeys(
+            [*([group.line] if group.line is not None else []), *evidence_lines]
+        )
+    )
     return (
         group.file,
         *group.bodies,
         outcome.reasons.get(group.key, ""),
-        outcome.evidence.get(group.key, ""),
+        evidence,
+        *locations,
     )
+
+
+def _pr_texts(target: ResolvedTarget | None) -> tuple[str, ...]:
+    return () if target is None else (target.pr_title or "", target.pr_body or "")
 
 
 def _source_literals(group: CollapseGroup, outcome: AdjudicationOutcome) -> tuple[str, ...]:
@@ -145,12 +167,35 @@ def _source_literals(group: CollapseGroup, outcome: AdjudicationOutcome) -> tupl
     return tuple(dict.fromkeys(literal for literal in literals if literal))
 
 
+def _invention_literals(text: str) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            (
+                *_INVENTED_LITERAL.findall(text),
+                *_PATH_LINE_LITERAL.findall(text),
+                *_PATH_LITERAL.findall(text),
+            )
+        )
+    )
+
+
 def _literal_in_sources(literal: str, sources: Sequence[str]) -> bool:
     # Code newly wrapped in backticks can be verbatim raw evidence. Boundaries
     # prevent accepting a shortened identifier/path as an exact source match.
     boundary = "A-Za-z0-9_./-" if _PATH_LITERAL.fullmatch(literal) else "A-Za-z0-9_"
     pattern = re.compile(rf"(?<![{boundary}]){re.escape(literal)}(?![{boundary}])")
-    return any(pattern.search(source) for source in sources)
+    collapsed_literal = re.sub(r"\s+", " ", literal).strip()
+    collapsed_pattern = re.compile(
+        rf"(?<![{boundary}]){re.escape(collapsed_literal)}(?![{boundary}])"
+    )
+    compact_literal = re.sub(r"\s+", "", literal)
+    compact_pattern = re.compile(rf"(?<![{boundary}]){re.escape(compact_literal)}(?![{boundary}])")
+    return any(
+        pattern.search(source)
+        or collapsed_pattern.search(re.sub(r"\s+", " ", source))
+        or compact_pattern.search(re.sub(r"\s+", "", source))
+        for source in sources
+    )
 
 
 def _finding_prose(finding: SynthesisFinding) -> str:
@@ -165,7 +210,12 @@ def _without_literals(text: str, literals: Sequence[str]) -> str:
 
 
 def validate_synthesis(
-    value: object, merged: MergeResult, outcome: AdjudicationOutcome, *, locale: str = "en"
+    value: object,
+    merged: MergeResult,
+    outcome: AdjudicationOutcome,
+    *,
+    locale: str = "en",
+    target: ResolvedTarget | None = None,
 ) -> SynthesisDocument:
     """Validate schema, identity, reviewer vocabulary, literal fidelity and locale."""
 
@@ -186,9 +236,13 @@ def validate_synthesis(
             details.append(f"unexpected keys={unexpected}")
         raise ValueError("synthesis finding identity mismatch: " + "; ".join(details))
 
-    sources_by_key = {group.key: _source_texts(group, outcome) for group in included}
+    sources_by_key = {
+        group.key: (*_source_texts(group, outcome), *_pr_texts(target)) for group in included
+    }
     protected_by_key = {group.key: _source_literals(group, outcome) for group in included}
     overview_sources = tuple(source for sources in sources_by_key.values() for source in sources)
+    if not included:
+        overview_sources = _pr_texts(target)
     overview_literals = tuple(
         dict.fromkeys(literal for literals in protected_by_key.values() for literal in literals)
     )
@@ -210,6 +264,7 @@ def validate_synthesis(
     errors: list[str] = []
     wrong_language: list[str] = []
     for label, prose, sources, protected in prose_segments:
+        language_protected = tuple(dict.fromkeys((*protected, *_technical_literals(prose))))
         unprotected = _without_literals(prose, protected)
         found = next(
             (label for label, pattern in _FORBIDDEN_PROSE if pattern.search(unprotected)), None
@@ -218,12 +273,15 @@ def validate_synthesis(
             raise ValueError(f"forbidden vocabulary {found!r} in synthesis prose {label!r}")
         invented = [
             literal
-            for literal in _technical_literals(prose)
+            for literal in _invention_literals(prose)
             if not _literal_in_sources(literal, sources)
         ]
         if invented:
-            errors.append(f"synthesis prose {label!r} has literals absent from source: {invented}")
-        if not check_language(prose, locale, protected):
+            errors.append(
+                f"synthesis prose {label!r} has literals absent from source: {invented}; "
+                "not found in finding bodies, adjudication reason, evidence, or pull request text"
+            )
+        if not check_language(prose, locale, language_protected):
             wrong_language.append(label)
     if wrong_language:
         errors.append(f"synthesis prose is not in locale {locale!r}: {', '.join(wrong_language)}")
@@ -536,7 +594,7 @@ async def synthesize(
             return None, facts(f"fallback:{reason}")
         try:
             document = validate_synthesis(
-                result.output, merged, outcome, locale=presentation.locale
+                result.output, merged, outcome, locale=presentation.locale, target=target
             )
         except (ValidationError, ValueError) as exc:
             if attempt_number == 1:

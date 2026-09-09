@@ -28,3 +28,9 @@
 - [x] 5.2 Add failing Korean/English field language, retry diagnostics, prompt header and retained artifact tests.
 - [x] 5.3 Implement no-mutation fidelity, source protection and per-field language validation with the explicit prompt header.
 - [x] 5.4 Synchronize specs/context, run all bare gates, append the follow-up report, commit and print the branch log.
+
+## Follow-up 2 (literal check)
+
+- [x] 6.1 Add persisted Korean replay fixtures and literal/source regressions.
+- [x] 6.2 Separate invented checks from language protection; include PR text and composed source spans in runtime and retained validation.
+- [x] 6.3 Synchronize specifications, run bare gates, append report, commit and print the branch log.

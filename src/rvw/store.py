@@ -321,8 +321,16 @@ class RunHandle:
         """Legacy or unusable synthesis cannot prevent diagnostic/report replay."""
         try:
             raw = self._load_contained_json("synthesis.json", "synthesis")
+            try:
+                target = self.load_target()
+            except StageMissing:
+                target = None
             return validate_synthesis(
-                raw, self.load_merge(), self.load_outcome(), locale=self.load_presentation().locale
+                raw,
+                self.load_merge(),
+                self.load_outcome(),
+                locale=self.load_presentation().locale,
+                target=target,
             )
         except (OSError, ValueError, KeyError):
             return None
