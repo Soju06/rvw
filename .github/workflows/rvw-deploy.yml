@@ -38,6 +38,16 @@ on:
         type: number
         required: false
         default: 120
+      codex_model:
+        description: Optional RVW_CODEX_MODEL override for this deployment (empty = packaged default). Used for A/B cells; deploy again without it to clear.
+        type: string
+        required: false
+        default: ""
+      codex_reasoning_effort:
+        description: Optional RVW_CODEX_REASONING_EFFORT override for this deployment (empty = packaged default). Used for A/B cells; deploy again without it to clear.
+        type: string
+        required: false
+        default: ""
       account_id:
         description: Cloudflare account ID.
         type: string
@@ -101,6 +111,8 @@ jobs:
       RVW_CODEX_PROXY_HOST: ${{ inputs.codex_proxy_host }}
       RVW_GITHUB_APP_ID: ${{ inputs.github_app_id }}
       RVW_JOB_DEADLINE_MINUTES: ${{ inputs.job_deadline_minutes }}
+      RVW_CODEX_MODEL_OVERRIDE: ${{ inputs.codex_model }}
+      RVW_CODEX_REASONING_EFFORT_OVERRIDE: ${{ inputs.codex_reasoning_effort }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
     steps:
@@ -211,12 +223,16 @@ jobs:
           npx wrangler containers list --json 2>/dev/null \
             | jq -r --arg name "$container_name" '.. | objects | select(.name? == $name) | .image_digest? // .imageDigest? // empty' 2>/dev/null \
             | grep -E '^sha256:[0-9a-f]{64}$' | head -n 1 > /tmp/rvw-previous-digest || true
+          override_vars=()
+          if [ -n "${RVW_CODEX_MODEL_OVERRIDE}" ]; then override_vars+=(--var "RVW_CODEX_MODEL:${RVW_CODEX_MODEL_OVERRIDE}"); fi
+          if [ -n "${RVW_CODEX_REASONING_EFFORT_OVERRIDE}" ]; then override_vars+=(--var "RVW_CODEX_REASONING_EFFORT:${RVW_CODEX_REASONING_EFFORT_OVERRIDE}"); fi
           npx wrangler deploy --env "$RVW_ENVIRONMENT" \
             --name "$worker_name" \
             --var "CODEX_PROXY_HOST:${RVW_CODEX_PROXY_HOST}" \
             --var "GITHUB_APP_ID:${RVW_GITHUB_APP_ID}" \
             --var "RVW_JOB_DEADLINE_MINUTES:${RVW_JOB_DEADLINE_MINUTES}" \
-            --var "RVW_VERSION:${RVW_REF#v}" | tee /tmp/rvw-wrangler-deploy.log
+            --var "RVW_VERSION:${RVW_REF#v}" \
+            "${override_vars[@]}" | tee /tmp/rvw-wrangler-deploy.log
           grep -Eo 'sha256:[0-9a-f]{64}' /tmp/rvw-wrangler-deploy.log | tail -n 1 > /tmp/rvw-expected-digest || true
 
       - name: Put Worker secrets
