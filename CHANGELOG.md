@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/Soju06/rvw/compare/v0.19.0...v0.20.0) (2026-09-09)
+
+
+### Features
+
+* **runtime:** default the Codex model to gpt-6-astra ([#93](https://github.com/Soju06/rvw/issues/93)) ([570c631](https://github.com/Soju06/rvw/commit/570c63126c8cfd8e972159f0531acc420d8235fb))
+
 ## [0.19.0](https://github.com/Soju06/rvw/compare/v0.18.0...v0.19.0) (2026-09-09)
 
 
