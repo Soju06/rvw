@@ -193,12 +193,12 @@ persistent or unverified cleanup in the run log and return so the original
 cancellation or timeout classification can continue. Runtime identity and
 usage MUST record the selected mode so resume cannot reuse a result from
 another mode. The packaged default policy MUST remain `gpt-6-astra` with
-`max` reasoning effort. The effective model and reasoning effort MUST be
+`high` reasoning effort. The effective model and reasoning effort MUST be
 resolved once per command from the explicit `--model` and `--reasoning-effort`
 options, then `RVW_CODEX_MODEL` and `RVW_CODEX_REASONING_EFFORT`, then the
 packaged default, and MUST be passed to every review runtime the command
 constructs (discovery with its retry and coverage redispatch, initial and
-expanded adjudication, stack presence, sample, and re-adjudication) so none of
+expanded adjudication, synthesis, stack presence, sample, and re-adjudication) so none of
 them falls back to the packaged default on its own; only the publication
 language rewriter keeps the packaged default. The effective
 reasoning effort MUST be one of the Codex 0.152.0 values `none`, `minimal`,
@@ -336,7 +336,7 @@ MUST run its own `git` and `gh` commands with `RVW_PHASE=checkout`.
   receives no `--model`, `--reasoning-effort`, `RVW_CODEX_MODEL`, or
   `RVW_CODEX_REASONING_EFFORT` override
 - **THEN** an RVW Codex invocation still carries `--model gpt-6-astra` and an
-  explicit `model_reasoning_effort="max"` override
+  explicit `model_reasoning_effort="high"` override
 
 #### Scenario: Override resolution follows the documented precedence
 
@@ -424,3 +424,17 @@ Version-1 `summary.json` MUST include `failed_lanes`, an ordered list of `{lane_
 
 - **WHEN** a `summary.json` or `outcome.json` persisted before these fields is loaded
 - **THEN** loading succeeds with an empty failed-lane list, null wave walls, and empty adjudication wave telemetry
+
+### Requirement: Execution summaries retain synthesis facts
+
+The strict summary.json contract MUST include `synthesis` with `status`, `model`, `reasoning_effort`, `wall_seconds`, and `tool_calls`. Status MUST be `ok` or `fallback:<reason>`. Model and effort MUST identify the runtime policy when invoked; wall seconds and tool calls MUST aggregate attempted synthesis executions, using null for unavailable telemetry. Legacy summaries without synthesis MUST remain readable with an explicit unavailable fallback. These facts MUST NOT change review status or judgments.
+
+#### Scenario: Successful retry
+
+- **WHEN** synthesis produces one invalid output followed by valid output
+- **THEN** status is ok and synthesis telemetry includes both attempts
+
+#### Scenario: Legacy summary
+
+- **WHEN** an adapter reads a summary with no synthesis field
+- **THEN** parsing succeeds and no successful synthesis is inferred

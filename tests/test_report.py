@@ -6,6 +6,7 @@ from pathlib import Path
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.diffbudget import DiffBudgetReport, DiffChunkPlacement
 from rvw.discover import EnrichedFinding, LaneCoverage, RunCoverage
+from rvw.i18n import t
 from rvw.merge import MergeResult, merge
 from rvw.report import render_report
 from rvw.schema import Severity, Tier, Verdict
@@ -148,7 +149,8 @@ def test_synthesis_placeholder_and_verbatim_injection() -> None:
     synthesis = "첫 문단입니다.\n\n- 그대로 유지\n"
     injected = render_real(synthesis=synthesis)
 
-    assert "_(종합은 오케스트레이터가 작성합니다 — rvw report --synthesis 로 주입)_" in placeholder
+    assert "종합이 제공되지 않았습니다." in placeholder
+    assert t("report.synthesis_placeholder", "en") == "No synthesis was supplied."
     assert synthesis in injected
     assert "종합은 오케스트레이터" not in injected
 

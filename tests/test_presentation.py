@@ -10,7 +10,11 @@ import pytest
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from rvw.presentation import PresentationConfig, PresentationConfigInvalid
+from rvw.presentation import (
+    PresentationConfig,
+    PresentationConfigInvalid,
+    parse_presentation_config,
+)
 from rvw.registry import load_repo_presentation
 from rvw.store import RunStore
 from rvw.target import ResolvedTarget
@@ -64,6 +68,13 @@ def anchored(tmp_path: Path) -> tuple[Path, ResolvedTarget]:
         {"short_name": 12},
         {"unknown": True},
         {"footer": False},
+        {"voice": None},
+        {"voice": {"audience": "authors"}},
+        {"voice": {"register": "casual"}},
+        {"voice": {"guidance": 42}},
+        {"voice": {"guidance": "x" * 801}},
+        {"voice": {"guidance": "unsafe\x00text"}},
+        {"voice": {"unknown": True}},
     ],
 )
 def test_presentation_schema_rejects_invalid(payload: dict[str, object]) -> None:
@@ -77,6 +88,7 @@ def test_presentation_defaults_and_unicode_names() -> None:
         "short_name": "rvw",
         "locale": "en",
         "footer": None,
+        "voice": {"audience": "engineers", "register": "formal", "guidance": None},
     }
     assert (
         PresentationConfig(
@@ -84,6 +96,63 @@ def test_presentation_defaults_and_unicode_names() -> None:
         ).short_name
         == "검토"
     )
+
+
+def test_voice_config_parses_multiline_unicode_guidance() -> None:
+    raw = """\
+display_name: 검토 시스템
+locale: ko
+voice:
+  audience: mixed
+  register: neutral
+  guidance: |
+    API 소비자에게 미치는 영향을 먼저 설명합니다.
+    `retry_after`는 그대로 씁니다.
+"""
+    config = parse_presentation_config(raw)
+    assert config.voice.model_dump() == {
+        "audience": "mixed",
+        "register": "neutral",
+        "guidance": "API 소비자에게 미치는 영향을 먼저 설명합니다.\n`retry_after`는 그대로 씁니다.\n",
+    }
+
+
+def test_voice_guidance_limit_counts_unicode_characters() -> None:
+    assert (
+        len(parse_presentation_config(f"voice:\n  guidance: {'한' * 800}\n").voice.guidance or "")
+        == 800
+    )
+    with pytest.raises(PresentationConfigInvalid, match="presentation_config_invalid"):
+        parse_presentation_config(f"voice:\n  guidance: {'한' * 801}\n")
+
+
+@pytest.mark.parametrize(
+    ("raw", "guidance"),
+    [
+        ("voice:\n  guidance: |\n    text", "text"),
+        ("voice:\n  guidance: |\n    text\n", "text\n"),
+        ("voice:\n  guidance: |\n    text\n\n\n", "text\n"),
+        ("voice:\n  guidance: | # repository convention\n    text\nlocale: ko", "text\n"),
+    ],
+)
+def test_voice_literal_guidance_follows_yaml_clip_semantics(raw: str, guidance: str) -> None:
+    assert parse_presentation_config(raw).voice.guidance == guidance
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "voice:",
+        "voice: # no mapping",
+        "voice:\n  audience: authors",
+        "voice:\n  register: casual",
+        "voice:\n  guidance: 42",
+        "voice:\n  unknown: nope",
+    ],
+)
+def test_invalid_voice_yaml_fails_closed(raw: str) -> None:
+    with pytest.raises(PresentationConfigInvalid, match="presentation_config_invalid"):
+        parse_presentation_config(raw)
 
 
 def test_config_reads_base_not_head_or_worktree(anchored: tuple[Path, ResolvedTarget]) -> None:

@@ -136,7 +136,8 @@ def test_dry_run_writes_exact_split_payload_without_calling_gh(
     assert "종합 본문" not in payload["body"]
     assert "REJECTED-BODY" not in payload["body"]
     assert "NON-ANCHORABLE-BODY" in payload["body"]
-    assert "INLINE-ONLY-BODY" not in payload["body"]
+    assert "INLINE-ONLY-BODY" in payload["body"]
+    assert "## Changes required\n\nNone." not in payload["body"]
     assert len(payload["comments"]) == 1
     assert payload["comments"][0] == {
         "path": "src/a.py",

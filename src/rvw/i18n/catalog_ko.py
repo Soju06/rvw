@@ -1,7 +1,7 @@
 """ko renderer chrome catalog; placeholders are part of the contract."""
 
 CATALOG: dict[str, str] = {
-    "report.synthesis_placeholder": "_(종합은 오케스트레이터가 작성합니다 — rvw report --synthesis 로 주입)_",
+    "report.synthesis_placeholder": "종합이 제공되지 않았습니다.",
     "target.commit": "커밋 {p0}",
     "target.uncommitted": "커밋되지 않은 변경",
     "report.region": "(인접: {p0} L{p1}\N{EN DASH}{p2})",
@@ -95,6 +95,7 @@ CATALOG: dict[str, str] = {
     "pub.completed": "검토를 마쳤습니다. 수정이 필요한 문제 {b}건, 확인이 필요한 항목 {w}건.",
     "pub.partial": "검토되지 않은 변경 구간이 {n}곳 있습니다.",
     "pub.failed_lanes": "검토를 완료하지 못한 규칙 묶음 {n}개: {lanes}.",
+    "pub.evidence": "근거 보기",
     "severity.blocker": "차단",
     "severity.warning": "경고",
     "severity.suggestion": "제안",

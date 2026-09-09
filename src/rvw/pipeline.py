@@ -21,8 +21,9 @@ from rvw.registry import EffectiveRegistry, Registry
 from rvw.report import render_report
 from rvw.runtimes import Runtime
 from rvw.schema import Verdict
-from rvw.store import RunHandle, RunStore, StageMissing
-from rvw.summary import RunError, RunSummary, summarize_run
+from rvw.store import RunHandle, RunStore, StageMissing, _write_json
+from rvw.summary import RunError, RunSummary, execution_summary, summarize_run
+from rvw.synthesis import SynthesisDocument, report_synthesis, synthesize
 from rvw.target import ResolvedTarget
 
 Adjudicator = Callable[
@@ -45,6 +46,7 @@ class PipelineArtifacts:
     report_path: Path
     summary: RunSummary | None = None
     presentation: PresentationConfig = field(default_factory=PresentationConfig)
+    synthesis: SynthesisDocument | None = None
 
 
 class PipelineInfrastructureError(RuntimeError):
@@ -110,7 +112,7 @@ async def execute_pipeline(
     run_handle: RunHandle | None = None,
     presentation: PresentationConfig | None = None,
 ) -> PipelineArtifacts | None:
-    """Execute and persist DISCOVER, MERGE, ADJUDICATE, and REPORT."""
+    """Execute and persist DISCOVER, MERGE, ADJUDICATE, SYNTHESIZE, and REPORT."""
 
     if discover_replicas < 1:
         raise ValueError("discover_replicas must be at least 1")
@@ -214,6 +216,12 @@ async def execute_pipeline(
             )
             run.save_report(report_md)
             run.save_summary(failed_summary)
+            _write_json(
+                run.dir / "summary.json",
+                execution_summary(discovered, merged, None, [], presentation).model_dump(
+                    mode="json"
+                ),
+            )
             artifacts = PipelineArtifacts(
                 run=run,
                 target=target,
@@ -228,6 +236,15 @@ async def execute_pipeline(
             raise PipelineInfrastructureError(artifacts) from exc
         run.save_outcome(outcome)
 
+    run.save_summary(summary)
+    synthesis = None
+    if outcome is not None:
+        synthesis, summary = await synthesize_run(
+            run,
+            runtime=adjudication_runtime,
+            deadline_seconds=deadline_seconds,
+            host_gate=host_gate,
+        )
     report_md = render_report(
         presentation=presentation,
         target=target,
@@ -235,13 +252,19 @@ async def execute_pipeline(
         outcome=outcome,
         coverage=discovered.coverage,
         budget=discovered.budget,
-        synthesis=None,
+        synthesis=report_synthesis(synthesis) if synthesis is not None else None,
         summary=summary,
     )
     if rule_source_warning:
         report_md = f"> {rule_source_warning}\n\n{report_md}"
     run.save_report(report_md)
     run.save_summary(summary)
+    _write_json(
+        run.dir / "summary.json",
+        execution_summary(
+            discovered, merged, outcome, [], presentation, summary.synthesis
+        ).model_dump(mode="json"),
+    )
     report_path = run.dir / "report.md"
     return PipelineArtifacts(
         run=run,
@@ -253,7 +276,49 @@ async def execute_pipeline(
         report_path=report_path,
         summary=summary,
         presentation=presentation,
+        synthesis=synthesis,
     )
+
+
+async def synthesize_run(
+    run: RunHandle,
+    *,
+    runtime: Runtime,
+    deadline_seconds: int,
+    host_gate: HostSlotGate | None = None,
+    out_root: Path | None = None,
+) -> tuple[SynthesisDocument | None, RunSummary]:
+    """Read the stage boundary from disk and retain nonfatal synthesis facts."""
+    target = run.load_target()
+    merged = run.load_merge()
+    outcome = run.load_outcome()
+    discovered = run.load_discover()
+    presentation = run.load_presentation()
+    summary = run.load_summary()
+    # Invalidate the previous explanation before a fresh attempt, including cancellation.
+    run.save_synthesis(None)
+    synthesis, facts = await synthesize(
+        target=target,
+        merged=merged,
+        outcome=outcome,
+        coverage=discovered.coverage,
+        status=summary.status.value,
+        presentation=presentation,
+        runtime=runtime,
+        out_root=out_root or run.dir / "synthesis-runtime",
+        deadline_seconds=deadline_seconds,
+        host_gate=host_gate,
+    )
+    run.save_synthesis(synthesis)
+    summary = summary.model_copy(update={"synthesis": facts})
+    run.save_summary(summary)
+    _write_json(
+        run.dir / "summary.json",
+        execution_summary(
+            discovered, merged, outcome, [], presentation=presentation, synthesis=facts
+        ).model_dump(mode="json"),
+    )
+    return synthesis, summary
 
 
 def load_pipeline_artifacts(
@@ -284,6 +349,7 @@ def load_pipeline_artifacts(
         report_path=run.dir / "report.md",
         summary=summary,
         presentation=run.load_presentation(),
+        synthesis=run.load_synthesis(),
     )
 
 

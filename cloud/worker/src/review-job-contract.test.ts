@@ -157,6 +157,32 @@ describe("Python artifact summary", () => {
   it("defaults legacy summaries without publication facts", () => {
     expect(parseArtifactSummary(JSON.stringify(summaryFixture()))).toMatchObject({publish: null, publication_skipped: null});
   });
+  it("passes through strict synthesis facts and defaults legacy summaries", () => {
+    const synthesis = {status: "fallback:schema-invalid", model: "gpt-6-astra", reasoning_effort: "high",
+      wall_seconds: 3.25, tool_calls: 0};
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture({synthesis}))).synthesis).toEqual(synthesis);
+    const legacy: Record<string, unknown> = summaryFixture();
+    delete legacy.synthesis;
+    expect(parseArtifactSummary(JSON.stringify(legacy)).synthesis).toEqual({
+      status: "fallback:not-run", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: null,
+    });
+  });
+  it.each([
+    {synthesis: null},
+    {synthesis: {status: "success", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: null}},
+    {synthesis: {status: "fallback:", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: null}},
+    {synthesis: {status: "fallback:   ", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: null}},
+    {synthesis: {status: "fallback:schema invalid", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: null}},
+    {synthesis: {status: "ok", model: "", reasoning_effort: null, wall_seconds: null, tool_calls: null}},
+    {synthesis: {status: "ok", model: null, reasoning_effort: "", wall_seconds: null, tool_calls: null}},
+    {synthesis: {status: "ok", model: 6, reasoning_effort: null, wall_seconds: null, tool_calls: null}},
+    {synthesis: {status: "ok", model: null, reasoning_effort: null, wall_seconds: -0.1, tool_calls: null}},
+    {synthesis: {status: "ok", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: 1.5}},
+    {synthesis: {status: "ok", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: -1}},
+    {synthesis: {status: "ok", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: 0, extra: true}},
+  ])("rejects malformed synthesis facts %#", (overrides) => {
+    expect(() => parseArtifactSummary(JSON.stringify(summaryFixture(overrides)))).toThrow(/synthesis/);
+  });
   it.each([
     {publish: publishFactsFixture({event: "DISMISS"})},
     {publish: publishFactsFixture({policy_source: "head"})},
@@ -245,6 +271,7 @@ it("defaults legacy process and summary contracts without presentation", () => {
   expect(checkConclusionForResult(0, JSON.stringify(process)).conclusion).toBe("success");
   expect(parseArtifactSummary(JSON.stringify(summary)).presentation).toEqual({
     display_name: "rvw", short_name: "rvw", locale: "en", footer: null,
+    voice: {audience: "engineers", register: "formal", guidance: null},
   });
 });
 

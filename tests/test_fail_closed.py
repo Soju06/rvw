@@ -233,7 +233,7 @@ async def test_readjudication_constructs_its_runtime_with_the_resolved_policy(
     """The re-adjudication construction site must carry the resolved policy, not the default."""
 
     from rvw.runtime_policy import CodexRuntimePolicy
-    from rvw.runtimes.codex import CodexRuntime
+    from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 
     target = target_fixture()
     run = RunStore(tmp_path).create(target)
@@ -252,10 +252,15 @@ async def test_readjudication_constructs_its_runtime_with_the_resolved_policy(
     constructed: list[CodexRuntime] = []
 
     class RecordingRuntime(CodexRuntime):
-        # Pins the construction call: re-adjudication passes exactly ``policy=``.
-        def __init__(self, *, policy: CodexRuntimePolicy) -> None:
-            super().__init__(policy=policy)
+        def __init__(
+            self, *, policy: CodexRuntimePolicy, mode: CodexRuntimeMode = CodexRuntimeMode.AGENTIC
+        ) -> None:
+            super().__init__(policy=policy, mode=mode)
             constructed.append(self)
+
+        async def execute_raw(self, **kwargs):
+            # Keep this construction test offline; synthesis runtime failure is nonfatal.
+            raise RuntimeError("scripted synthesis failure")
 
     observed: dict[str, object] = {}
 
@@ -287,7 +292,10 @@ async def test_readjudication_constructs_its_runtime_with_the_resolved_policy(
     )
 
     assert report_path == run.dir / "report.md"
-    assert len(constructed) == 1
+    assert len(constructed) == 2
     assert observed["runtime"] is constructed[0]
     assert constructed[0].policy == policy
     assert constructed[0].policy.reasoning_summary == "detailed"
+    assert constructed[1].policy == policy
+    assert constructed[1].mode is CodexRuntimeMode.TOOL_LESS
+    assert run.load_summary().synthesis.status.startswith("fallback:")

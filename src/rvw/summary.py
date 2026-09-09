@@ -17,6 +17,7 @@ from rvw.provenance import BuildProvenance, current_build_provenance
 from rvw.publication import publication_summary, uncovered_regions
 from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
 from rvw.runtimes import RunDiagnostic
+from rvw.synthesis import SynthesisFacts
 
 
 class ReviewStatus(StrEnum):
@@ -75,6 +76,7 @@ class RunSummary(BaseModel):
     coverage_totals: CoverageTotals
     error: RunError | None
     build: BuildProvenance = Field(default_factory=current_build_provenance)
+    synthesis: SynthesisFacts = Field(default_factory=SynthesisFacts)
 
 
 def coverage_totals(discovered: DiscoverResult) -> CoverageTotals:
@@ -351,6 +353,7 @@ class ExecutionSummary(ContractModel):
     blockers: list[str] = Field(default_factory=list)
     markdown: str = "Review has not completed."
     publish: PublishFacts = Field(default_factory=PublishFacts)
+    synthesis: SynthesisFacts = Field(default_factory=SynthesisFacts)
 
 
 def summary_failed_lanes(coverage: Sequence[LaneCoverage]) -> list[SummaryFailedLane]:
@@ -406,6 +409,7 @@ def execution_summary(
     outcome: AdjudicationOutcome | None,
     blockers: list[str],
     presentation: PresentationConfig | None = None,
+    synthesis: SynthesisFacts | None = None,
 ) -> ExecutionSummary:
     """Compute presentation facts once for every review adapter."""
     lanes = SummaryLanes(
@@ -429,4 +433,5 @@ def execution_summary(
         verdicts=verdicts,
         blockers=blockers,
         markdown=markdown,
+        synthesis=synthesis or SynthesisFacts(),
     )

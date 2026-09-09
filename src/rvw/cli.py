@@ -85,6 +85,7 @@ from rvw.pipeline import (
     execute_pipeline,
     load_pipeline_artifacts,
     optional_outcome,
+    synthesize_run,
     verdict_counts,
 )
 from rvw.policy import (
@@ -181,6 +182,7 @@ from rvw.summary import (
     execution_summary,
     summarize_run,
 )
+from rvw.synthesis import SynthesisFacts, report_synthesis
 from rvw.target import ResolvedTarget, TargetResolutionError, resolve_target
 from rvw.threads import GitHubClient
 
@@ -792,6 +794,7 @@ def _review_payload(artifacts: PipelineArtifacts) -> dict[str, object]:
         "coverage_totals": summary.coverage_totals.model_dump(mode="json"),
         "error": summary.error.model_dump(mode="json") if summary.error is not None else None,
         "build": summary.build.model_dump(mode="json"),
+        "synthesis": summary.synthesis.model_dump(mode="json"),
     }
 
 
@@ -2326,6 +2329,7 @@ def _run_command(
                             artifacts.outcome,
                             [],
                             presentation=process.presentation,
+                            synthesis=health.synthesis,
                         ).model_dump(mode="json"),
                     )
                     detail = (
@@ -2341,6 +2345,7 @@ def _run_command(
                         artifacts.outcome,
                         decision.blocking,
                         presentation=process.presentation,
+                        synthesis=health.synthesis,
                     ).model_dump(mode="json"),
                 )
                 stage = "publication"
@@ -2455,6 +2460,11 @@ def _run_command(
                         artifacts.outcome if artifacts else None,
                         [],
                         presentation=process.presentation,
+                        synthesis=(
+                            _artifact_summary(artifacts).synthesis
+                            if artifacts is not None
+                            else SynthesisFacts()
+                        ),
                     ).model_dump(mode="json"),
                 )
     finally:
@@ -2637,7 +2647,15 @@ async def _adjudicate_existing_run(
         run.save_summary(summarize_run(run.run_id, discovered, error=error, build=build))
         raise
 
-    summary = summarize_run(run.run_id, discovered, build=build)
+    run.save_outcome(outcome)
+    run.save_summary(summarize_run(run.run_id, discovered, build=build))
+    synthesis, summary = await synthesize_run(
+        run,
+        runtime=CodexRuntime(policy=runtime_policy, mode=CodexRuntimeMode.TOOL_LESS),
+        deadline_seconds=deadline_seconds,
+        host_gate=host_gate,
+        out_root=run.dir / "synthesis-runtime" / attempt_id,
+    )
     report_md = render_report(
         presentation=run.load_presentation(),
         target=target,
@@ -2645,10 +2663,9 @@ async def _adjudicate_existing_run(
         outcome=outcome,
         coverage=discovered.coverage,
         budget=discovered.budget,
-        synthesis=None,
+        synthesis=report_synthesis(synthesis) if synthesis is not None else None,
         summary=summary,
     )
-    run.save_outcome(outcome)
     run.save_report(report_md)
     run.save_summary(summary)
     return run.dir / "report.md"
@@ -2679,6 +2696,8 @@ def report_command(
     except StageMissing:
         summary = summarize_run(run.run_id, discovered)
     synthesis_text = synthesis.read_text(encoding="utf-8") if synthesis is not None else None
+    if synthesis is None and (retained_synthesis := run.load_synthesis()) is not None:
+        synthesis_text = report_synthesis(retained_synthesis)
     report_md = render_report(
         presentation=run.load_presentation(),
         target=target,

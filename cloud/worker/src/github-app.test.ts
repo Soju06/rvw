@@ -209,7 +209,8 @@ it.each(["missing", "malformed", "symlink"])("uses safe bootstrap defaults for %
     type: kind === "symlink" ? "symlink" : "file", encoding: "base64", content: btoa("locale: fr"),
   }));
   expect(await getPresentationConfig("token", {owner: "a", repo: "b", baseSha: "base"}, fetcher)).toEqual({
-    presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null},
+    presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null,
+      voice: {audience: "engineers", register: "formal", guidance: null}},
     ...(kind === "missing" ? {} : {failure: "presentation_config_invalid"}),
   });
 });
@@ -224,7 +225,8 @@ it("uses configured bootstrap names and puts the job id only in structured text"
     return Response.json({id: 42});
   });
   await createCheckRun("token", {owner: "a", repo: "b", headSha: "head", jobId: "job-private",
-    presentation: {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko", footer: null}}, fetcher);
+    presentation: {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko", footer: null,
+      voice: {audience: "engineers", register: "formal", guidance: null}}}, fetcher);
 });
 it("updates a check name and diagnostic text", async () => {
   const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

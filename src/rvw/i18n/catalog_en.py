@@ -1,7 +1,7 @@
 """en renderer chrome catalog; placeholders are part of the contract."""
 
 CATALOG: dict[str, str] = {
-    "report.synthesis_placeholder": "_(The orchestrator supplies the synthesis — inject it with `rvw report --synthesis`)_",
+    "report.synthesis_placeholder": "No synthesis was supplied.",
     "target.commit": "commit {p0}",
     "target.uncommitted": "uncommitted",
     "report.region": "(adjacent: {p0} L{p1}\N{EN DASH}{p2})",
@@ -95,6 +95,7 @@ CATALOG: dict[str, str] = {
     "pub.completed": "Review complete. Changes required: {b}. Needs attention: {w}.",
     "pub.partial": "Changed regions not reviewed: {n}.",
     "pub.failed_lanes": "Rule sets that did not finish: {n} ({lanes}).",
+    "pub.evidence": "Evidence",
     "severity.blocker": "Blocker",
     "severity.warning": "Warning",
     "severity.suggestion": "Suggestion",

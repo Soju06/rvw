@@ -168,6 +168,7 @@ function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSumm
     lanes: summary === null ? null : {dispatched: summary.lanes.dispatched, valid: summary.lanes.valid,
       lane_hunk_receipts: summary.lanes.uncovered, uncovered_regions: summary.lanes.uncovered_regions},
     failed_lanes: summary?.failed_lanes ?? null, wave_wall_seconds: summary?.wave_wall_seconds ?? null,
+    synthesis: summary?.synthesis ?? null,
     findings: summary?.findings ?? null,
     verdicts: summary?.verdicts ?? null, blockers: summary?.blockers ?? null,
     // Publication facts come verbatim from Python: the event, its policy source, and every
