@@ -301,10 +301,10 @@ describe("process runtime watchdog settings", () => {
 describe("process runtime model and reasoning effort", () => {
   it("passes the recorded model and effort through to the mapping", () => {
     const runtime = processFixture().runtime as Record<string, unknown>;
-    expect(runtime).toMatchObject({model: "gpt-5.6-sol", reasoning_effort: "max"});
-    expect(parseProcessResult(JSON.stringify(processFixture())).runtime).toEqual({model: "gpt-5.6-sol", reasoning_effort: "max"});
+    expect(runtime).toMatchObject({model: "gpt-6-astra", reasoning_effort: "max"});
+    expect(parseProcessResult(JSON.stringify(processFixture())).runtime).toEqual({model: "gpt-6-astra", reasoning_effort: "max"});
     expect(checkConclusionForResult(0, JSON.stringify(processFixture()))).toMatchObject({
-      conclusion: "success", runtime: {model: "gpt-5.6-sol", reasoning_effort: "max"}});
+      conclusion: "success", runtime: {model: "gpt-6-astra", reasoning_effort: "max"}});
     const overridden = processFixture();
     Object.assign(overridden.runtime as Record<string, unknown>, {model: "gpt-6-astra", reasoning_effort: "high"});
     expect(checkConclusionForResult(0, JSON.stringify(overridden)).runtime).toEqual({model: "gpt-6-astra", reasoning_effort: "high"});
@@ -322,7 +322,7 @@ describe("process runtime model and reasoning effort", () => {
     expect(checkConclusionForResult(0, JSON.stringify({...process, runtime})).conclusion).toBe("success");
     const modelOnly = {...(process.runtime as Record<string, unknown>)};
     delete modelOnly.reasoning_effort;
-    expect(parseProcessResult(JSON.stringify({...process, runtime: modelOnly})).runtime).toEqual({model: "gpt-5.6-sol", reasoning_effort: null});
+    expect(parseProcessResult(JSON.stringify({...process, runtime: modelOnly})).runtime).toEqual({model: "gpt-6-astra", reasoning_effort: null});
   });
   it.each([
     {model: ""},

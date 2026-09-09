@@ -192,7 +192,7 @@ exists or cannot be verified because a probe receives `EPERM`, it MUST record
 persistent or unverified cleanup in the run log and return so the original
 cancellation or timeout classification can continue. Runtime identity and
 usage MUST record the selected mode so resume cannot reuse a result from
-another mode. The packaged default policy MUST remain `gpt-5.6-sol` with
+another mode. The packaged default policy MUST remain `gpt-6-astra` with
 `max` reasoning effort. The effective model and reasoning effort MUST be
 resolved once per command from the explicit `--model` and `--reasoning-effort`
 options, then `RVW_CODEX_MODEL` and `RVW_CODEX_REASONING_EFFORT`, then the
@@ -335,7 +335,7 @@ MUST run its own `git` and `gh` commands with `RVW_PHASE=checkout`.
 - **WHEN** a host config selects another model or reasoning effort and rvw
   receives no `--model`, `--reasoning-effort`, `RVW_CODEX_MODEL`, or
   `RVW_CODEX_REASONING_EFFORT` override
-- **THEN** an RVW Codex invocation still carries `--model gpt-5.6-sol` and an
+- **THEN** an RVW Codex invocation still carries `--model gpt-6-astra` and an
   explicit `model_reasoning_effort="max"` override
 
 #### Scenario: Override resolution follows the documented precedence

@@ -253,12 +253,12 @@ def run_invocation(record: OfflineRun, out: Path, *extra: str) -> list[str]:
 @pytest.mark.parametrize(
     "environment,extra,expected_model,expected_effort",
     [
-        ({}, [], "gpt-5.6-sol", "high"),
-        ({"RVW_CODEX_REASONING_EFFORT": "medium"}, [], "gpt-5.6-sol", "medium"),
+        ({}, [], "gpt-6-astra", "high"),
+        ({"RVW_CODEX_REASONING_EFFORT": "medium"}, [], "gpt-6-astra", "medium"),
         (
             {"RVW_CODEX_REASONING_EFFORT": "medium"},
-            ["--model", "gpt-6-astra"],
-            "gpt-6-astra",
+            ["--model", "gpt-5.6-sol"],
+            "gpt-5.6-sol",
             "medium",
         ),
     ],
