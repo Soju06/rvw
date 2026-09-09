@@ -57,7 +57,7 @@ class CodexRuntimePolicy:
 
 DEFAULT_CODEX_RUNTIME_POLICY = CodexRuntimePolicy(
     model="gpt-5.6-sol",
-    reasoning_effort="max",
+    reasoning_effort="high",
 )
 
 

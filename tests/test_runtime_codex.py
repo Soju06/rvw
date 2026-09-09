@@ -271,7 +271,7 @@ async def test_valid_run_materializes_artifacts_and_command(
                 "--model",
                 "gpt-5.6-sol",
                 "-c",
-                'model_reasoning_effort="max"',
+                'model_reasoning_effort="high"',
                 "-c",
                 'model_reasoning_summary="detailed"',
                 "--sandbox",
@@ -293,7 +293,7 @@ async def test_valid_run_materializes_artifacts_and_command(
     ]
     usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
     assert usage.model == "gpt-5.6-sol"
-    assert usage.reasoning_effort == "max"
+    assert usage.reasoning_effort == "high"
     assert usage.status is RunUsageStatus.COMPLETED
     assert usage.cli_tokens_used == 42
     assert result.usage == usage
@@ -1273,7 +1273,7 @@ async def test_runtime_argv_requests_reasoning_summaries(
 
     assert result.status is RunStatus.VALID
     command = calls[0][0]
-    effort_index = command.index('model_reasoning_effort="max"')
+    effort_index = command.index('model_reasoning_effort="high"')
     assert command[effort_index + 1 : effort_index + 3] == [
         "-c",
         'model_reasoning_summary="detailed"',
@@ -1302,7 +1302,7 @@ def test_legacy_usage_without_reasoning_summary_loads() -> None:
     usage = RunUsage.model_validate(
         {
             "model": "gpt-5.6-sol",
-            "reasoning_effort": "max",
+            "reasoning_effort": "high",
             "status": "completed",
             "wall_seconds": 1.5,
         }
@@ -1504,7 +1504,7 @@ async def test_real_codex_returns_valid_result(tmp_path: Path) -> None:
 
 def test_runtime_defaults_to_the_packaged_policy() -> None:
     assert CodexRuntime().policy is DEFAULT_CODEX_RUNTIME_POLICY
-    assert CodexRuntime().policy == CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="max")
+    assert CodexRuntime().policy == CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="high")
 
 
 async def test_runtime_renders_an_overridden_policy_into_argv_and_usage(
@@ -1524,7 +1524,7 @@ async def test_runtime_renders_an_overridden_policy_into_argv_and_usage(
     assert command[command.index("--model") + 1] == "gpt-6-astra"
     effort_index = command.index('model_reasoning_effort="medium"')
     assert command[effort_index - 1] == "-c"
-    assert 'model_reasoning_effort="max"' not in command
+    assert 'model_reasoning_effort="high"' not in command
     assert command[effort_index + 1 : effort_index + 3] == [
         "-c",
         'model_reasoning_summary="detailed"',

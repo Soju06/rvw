@@ -260,7 +260,7 @@
           "type": "string"
         },
         "reasoning_effort": {
-          "default": "max",
+          "default": "high",
           "minLength": 1,
           "title": "Reasoning Effort",
           "type": "string"
