@@ -252,6 +252,18 @@
           "minLength": 1,
           "title": "Reasoning Summary",
           "type": "string"
+        },
+        "model": {
+          "default": "gpt-5.6-sol",
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "default": "max",
+          "minLength": 1,
+          "title": "Reasoning Effort",
+          "type": "string"
         }
       },
       "title": "RuntimeSettings",

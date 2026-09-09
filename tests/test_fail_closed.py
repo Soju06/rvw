@@ -225,3 +225,69 @@ async def test_failed_readjudication_preserves_existing_outcome_and_report(
 
     assert (run.dir / "outcome.json").read_bytes() == outcome_before
     assert (run.dir / "report.md").read_bytes() == report_before
+
+
+async def test_readjudication_constructs_its_runtime_with_the_resolved_policy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The re-adjudication construction site must carry the resolved policy, not the default."""
+
+    from rvw.runtime_policy import CodexRuntimePolicy
+    from rvw.runtimes.codex import CodexRuntime
+
+    target = target_fixture()
+    run = RunStore(tmp_path).create(target)
+    discovered = DiscoverResult(
+        lane_results={},
+        findings=[finding("security")],
+        coverage=[coverage("security", valid=True, findings=1)],
+    )
+    merged = merge(discovered.findings, lane_tiers={"security": Tier.BASE})
+    group_key = merged.groups[0].key
+    run.save_target(target)
+    run.save_discover(discovered)
+    run.save_merge(merged)
+    repo_dir = tmp_path / "checkout"
+    repo_dir.mkdir()
+    constructed: list[CodexRuntime] = []
+
+    class RecordingRuntime(CodexRuntime):
+        # Pins the construction call: re-adjudication passes exactly ``policy=``.
+        def __init__(self, *, policy: CodexRuntimePolicy) -> None:
+            super().__init__(policy=policy)
+            constructed.append(self)
+
+    observed: dict[str, object] = {}
+
+    async def fake_adjudicate(*args: object, **kwargs: object) -> AdjudicationOutcome:
+        del args
+        observed.update(kwargs)
+        return AdjudicationOutcome(
+            verdicts={group_key: Verdict.CONFIRMED},
+            reasons={group_key: "verified"},
+            evidence={group_key: "source quote"},
+            replica_votes={group_key: [Verdict.CONFIRMED]},
+            unresolved=[],
+            coerced_rejections=0,
+        )
+
+    monkeypatch.setattr(cli_module, "CodexRuntime", RecordingRuntime)
+    monkeypatch.setattr(cli_module, "adjudicate", fake_adjudicate)
+    policy = CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="medium")
+
+    report_path = await cli_module._adjudicate_existing_run(
+        run_id=run.run_id,
+        repo_dir=repo_dir,
+        out_root=tmp_path,
+        replicas=1,
+        concurrency=1,
+        deadline_seconds=30,
+        host_gate=None,
+        runtime_policy=policy,
+    )
+
+    assert report_path == run.dir / "report.md"
+    assert len(constructed) == 1
+    assert observed["runtime"] is constructed[0]
+    assert constructed[0].policy == policy
+    assert constructed[0].policy.reasoning_summary == "detailed"

@@ -450,3 +450,92 @@ it("retains process language-fallback facts when summary is missing", async () =
   expect(output.text).toContain('"publication_failure": "publication_language_mismatch"');
   expect(output.text).toContain('"language_fallback_used": true');
 });
+
+describe("Codex runtime policy on the App path", () => {
+  it("passes the Worker override vars into the review script and omits the flags without them", async () => {
+    const overridden = setup("provisioning", {RVW_CODEX_MODEL: "gpt-6-astra", RVW_CODEX_REASONING_EFFORT: "high"});
+    delete overridden.record().processId;
+    await expect(overridden.job.start(message)).rejects.toThrow("process failed to start");
+    const script = overridden.sandbox.writeFile.mock.calls.find(([path]) => path === "/workspace/run-review.sh")?.[1] as string;
+    expect(script).toContain("--deadline 900 --policy auto --publish github-review --json --model 'gpt-6-astra' --reasoning-effort 'high'\n");
+    expect(script).toBe(reviewScript(message, 900, {model: "gpt-6-astra", reasoningEffort: "high"}));
+
+    const plain = setup("provisioning");
+    delete plain.record().processId;
+    await expect(plain.job.start(message)).rejects.toThrow("process failed to start");
+    const plainScript = plain.sandbox.writeFile.mock.calls.find(([path]) => path === "/workspace/run-review.sh")?.[1] as string;
+    expect(plainScript).toContain("--publish github-review --json\n");
+    expect(plainScript).not.toContain("--model");
+    expect(plainScript).not.toContain("--reasoning-effort");
+    expect(plainScript).toBe(reviewScript(message, 900));
+    expect(reviewScript(message, 900, {})).toBe(reviewScript(message, 900));
+  });
+
+  it("passes only the supplied field through reviewScript", () => {
+    expect(reviewScript(message, 900, {model: "gpt-6-astra"})).toContain("--json --model 'gpt-6-astra'\n");
+    expect(reviewScript(message, 900, {reasoningEffort: "medium"})).toContain("--json --reasoning-effort 'medium'\n");
+    expect(reviewScript(message, 900, {reasoningEffort: "medium"})).not.toContain("--model");
+  });
+
+  it("fails closed before provisioning when an override var is malformed", async () => {
+    const test = setup("provisioning", {RVW_CODEX_REASONING_EFFORT: "turbo"});
+    await expect(test.job.start(message)).rejects.toMatchObject({code: "config_invalid", variable: "RVW_CODEX_REASONING_EFFORT"});
+    expect(mocks.createCheckRun).not.toHaveBeenCalled();
+    expect(mocks.sandboxFor).not.toHaveBeenCalled();
+  });
+
+  it("carries the effective model and effort from process.json into the check text facts", async () => {
+    const test = setup("publishing");
+    test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+    test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 0} as Process);
+    const process = processFixture();
+    Object.assign(process.runtime as Record<string, unknown>, {model: "gpt-6-astra", reasoning_effort: "high"});
+    test.files.set("/workspace/result/process.json", JSON.stringify(process));
+    test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture()));
+    refreshManifest(test.files);
+    await test.job.alarm();
+    const update = mocks.updateCheckRun.mock.calls[0][1];
+    expect(update.conclusion).toBe("success");
+    const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
+    expect(facts.runtime).toEqual({model: "gpt-6-astra", reasoning_effort: "high"});
+  });
+
+  it("reports null model and effort fields for a legacy process.json without the keys", async () => {
+    const test = setup("publishing");
+    test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+    test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 0} as Process);
+    const process = processFixture();
+    const runtime = {...(process.runtime as Record<string, unknown>)};
+    delete runtime.model;
+    delete runtime.reasoning_effort;
+    test.files.set("/workspace/result/process.json", JSON.stringify({...process, runtime}));
+    test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture()));
+    refreshManifest(test.files);
+    await test.job.alarm();
+    const update = mocks.updateCheckRun.mock.calls[0][1];
+    expect(update.conclusion).toBe("success");
+    const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
+    expect(facts.runtime).toEqual({model: null, reasoning_effort: null});
+  });
+
+  it.each(["missing", "malformed"])("reports runtime null when process.json is %s", async (condition) => {
+    const test = setup("publishing");
+    test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+    test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed", startTime: new Date(), exitCode: 0} as Process);
+    if (condition === "missing") test.files.delete("/workspace/result/process.json");
+    else test.files.set("/workspace/result/process.json", "{broken");
+    await test.job.alarm();
+    const update = mocks.updateCheckRun.mock.calls[0][1];
+    expect(update.conclusion).toBe("neutral");
+    const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
+    expect(facts.runtime).toBeNull();
+  });
+
+  it("reports runtime null on the neutral timeout path that never parses process.json", async () => {
+    const test = setup("running");
+    await test.job.alarm();
+    const update = mocks.updateCheckRun.mock.calls[0][1];
+    const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
+    expect(facts).toHaveProperty("runtime", null);
+  });
+});

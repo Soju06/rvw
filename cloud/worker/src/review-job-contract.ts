@@ -59,12 +59,19 @@ interface PublicationFacts {
   language_fallback_used: boolean;
 }
 
+/** Effective Codex runtime policy recorded by Python; null fields for legacy envelopes. */
+export interface RuntimePolicyFacts {
+  model: string | null;
+  reasoning_effort: string | null;
+}
+
 export interface ReviewResultMapping extends Partial<PublicationFacts> {
   terminalState: "completed" | "failed";
   conclusion: CheckConclusion;
   reason: string;
   reasonCode?: string;
   presentation?: PresentationConfig;
+  runtime?: RuntimePolicyFacts;
 }
 
 export interface ProcessResult extends PublicationFacts {
@@ -74,6 +81,7 @@ export interface ProcessResult extends PublicationFacts {
   exit_code: number;
   failure: {code: string; detail: string} | null;
   presentation: PresentationConfig;
+  runtime: RuntimePolicyFacts;
 }
 
 function recordValue(value: unknown, label: string): Record<string, unknown> {
@@ -132,20 +140,25 @@ export function parseProcessResult(output: string): ProcessResult {
     throw new Error("process lane sources are invalid");
   }
   const runtime = recordValue(value.runtime, "process runtime");
-  // Watchdog and reasoning-summary settings are additive; legacy envelopes omit them.
+  // Watchdog, reasoning-summary, model, and effort settings are additive; legacy envelopes omit them.
+  const optionalRuntimeStrings = ["reasoning_summary", "model", "reasoning_effort"];
   fields(runtime, ["replicas", "adjudicate_replicas", "concurrency", "deadline", "discovery_mode",
     "publish", "host_concurrency", "sandbox",
-    ...["no_output_seconds", "reasoning_summary"].filter((key) => key in runtime)], "process runtime");
+    ...["no_output_seconds", ...optionalRuntimeStrings].filter((key) => key in runtime)], "process runtime");
   if (["replicas", "adjudicate_replicas", "concurrency", "deadline"].some((key) => !integer(runtime[key], 1)) ||
       Number(runtime.deadline) > 1800 || !integer(runtime.host_concurrency) ||
       !["agentic", "inline"].includes(runtime.discovery_mode as string) ||
       !["none", "github-review", "github-comment"].includes(runtime.publish as string) ||
       !["read-only", "danger-full-access"].includes(runtime.sandbox as string) ||
       ("no_output_seconds" in runtime && !integer(runtime.no_output_seconds, 1)) ||
-      ("reasoning_summary" in runtime &&
-        (typeof runtime.reasoning_summary !== "string" || runtime.reasoning_summary.length === 0))) {
+      optionalRuntimeStrings.some((key) =>
+        key in runtime && (typeof runtime[key] !== "string" || (runtime[key] as string).length === 0))) {
     throw new Error("process runtime settings are invalid");
   }
+  const runtimePolicy: RuntimePolicyFacts = {
+    model: "model" in runtime ? (runtime.model as string) : null,
+    reasoning_effort: "reasoning_effort" in runtime ? (runtime.reasoning_effort as string) : null,
+  };
   artifactManifest(output);
   if (value.sdk_observations !== null) {
     const observed = recordValue(value.sdk_observations, "SDK observations");
@@ -169,7 +182,8 @@ export function parseProcessResult(output: string): ProcessResult {
   if (["invalid", "infra_failed"].includes(status) !== (failure !== null)) {
     throw new Error("process status and failure disagree");
   }
-  return {schema_version: 1, run_id: value.run_id, status, exit_code: value.exit_code, failure, presentation, ...publication};
+  return {schema_version: 1, run_id: value.run_id, status, exit_code: value.exit_code, failure, presentation,
+    runtime: runtimePolicy, ...publication};
 }
 
 export function checkConclusionForResult(
@@ -178,7 +192,8 @@ export function checkConclusionForResult(
 ): ReviewResultMapping {
   try {
     const payload = parseProcessResult(output);
-    const publication = {publication_failure: payload.publication_failure, language_fallback_used: payload.language_fallback_used};
+    const publication = {publication_failure: payload.publication_failure, language_fallback_used: payload.language_fallback_used,
+      runtime: payload.runtime};
     if (exitCode !== null && exitCode !== payload.exit_code) {
       throw new Error(`SDK exit ${exitCode} disagrees with process exit ${payload.exit_code}`);
     }

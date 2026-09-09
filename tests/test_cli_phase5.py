@@ -14,6 +14,7 @@ from rvw.diffbudget import apply_diff_budget
 from rvw.discover import DiscoverResult, EnrichedFinding, LaneCoverage, RunCoverage
 from rvw.merge import merge
 from rvw.presentation import PresentationConfig
+from rvw.runtime_policy import CodexRuntimePolicy
 from rvw.sample import SampleReport, SampleSiteVariance
 from rvw.schema import Tier, Verdict
 from rvw.store import RunStore
@@ -332,6 +333,9 @@ def test_sample_empty_review_json_is_user_error(
     fixture.write_text(sample_diff_segment("src/large.py", "x" * 767_000), encoding="utf-8")
 
     class NoRuntime:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+
         async def execute_raw(self, **kwargs: object) -> object:
             raise AssertionError(f"runtime must not execute: {kwargs}")
 
@@ -513,3 +517,152 @@ def test_doctor_cli_empty_and_fixture_store(tmp_path: Path) -> None:
     assert populated.exit_code == 0
     assert "lane" in populated.stdout
     assert "invalid" in populated.stdout
+
+
+def test_sample_constructs_the_runtime_with_the_resolved_codex_policy(
+    tmp_path: Path,
+    sample_registry: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructed: list[dict[str, object]] = []
+    received: list[dict[str, object]] = []
+
+    class RecordingRuntime:
+        name = "recording"
+
+        def __init__(self, **kwargs: object) -> None:
+            constructed.append(kwargs)
+
+    async def fake_sample(*args: object, **kwargs: object) -> SampleReport:
+        del args
+        received.append(kwargs)
+        return SampleReport(
+            lane_id="test-lane",
+            enum_findings=[],
+            free_findings=[],
+            enum_only=[],
+            free_only=[],
+            novel_rule_ids=[],
+            site_variance=[],
+            verdict="PASS",
+            replicas=3,
+            chunk_count=1,
+        )
+
+    monkeypatch.setattr(cli_module, "CodexRuntime", RecordingRuntime)
+    monkeypatch.setattr(cli_module, "sample_lane", fake_sample)
+    monkeypatch.delenv("RVW_CODEX_MODEL", raising=False)
+    monkeypatch.setenv("RVW_CODEX_REASONING_EFFORT", "medium")
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "sample",
+            "--lane",
+            "test-lane",
+            "--fixture",
+            str(tmp_path / "fixture.py"),
+            "--registry",
+            str(sample_registry),
+            "--model",
+            "gpt-6-astra",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert len(constructed) == 1
+    assert constructed[0]["policy"] == CodexRuntimePolicy(
+        model="gpt-6-astra", reasoning_effort="medium"
+    )
+    assert isinstance(received[0]["runtime"], RecordingRuntime)
+
+
+def test_sample_rejects_malformed_reasoning_effort_environment_before_execution(
+    tmp_path: Path,
+    sample_registry: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def forbidden_sample(*args: object, **kwargs: object) -> SampleReport:
+        raise AssertionError(f"sample_lane must not run: {kwargs}")
+
+    monkeypatch.setattr(cli_module, "sample_lane", forbidden_sample)
+    monkeypatch.setenv("RVW_CODEX_REASONING_EFFORT", "turbo")
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "sample",
+            "--lane",
+            "test-lane",
+            "--fixture",
+            str(tmp_path / "fixture.py"),
+            "--registry",
+            str(sample_registry),
+        ],
+    )
+
+    assert result.exit_code == 2, result.stdout
+    assert "RVW_CODEX_REASONING_EFFORT" in result.stderr
+
+
+def test_adjudicate_command_forwards_the_resolved_codex_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_adjudicate_existing_run(**kwargs: object) -> Path:
+        calls.append(kwargs)
+        return tmp_path / "report.md"
+
+    monkeypatch.setattr(cli_module, "_adjudicate_existing_run", fake_adjudicate_existing_run)
+    monkeypatch.setattr(cli_module, "_command_host_gate", lambda: None)
+    monkeypatch.setenv("RVW_CODEX_MODEL", "env-model")
+    monkeypatch.delenv("RVW_CODEX_REASONING_EFFORT", raising=False)
+    repo_dir = tmp_path / "checkout"
+    repo_dir.mkdir()
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "adjudicate",
+            "--run",
+            "rvw-run",
+            "--repo-dir",
+            str(repo_dir),
+            "--out",
+            str(tmp_path),
+            "--reasoning-effort",
+            "high",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert len(calls) == 1
+    assert calls[0]["runtime_policy"] == CodexRuntimePolicy(
+        model="env-model", reasoning_effort="high"
+    )
+
+
+def test_adjudicate_command_rejects_malformed_reasoning_effort_environment_before_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_adjudicate_existing_run(**kwargs: object) -> Path:
+        calls.append(kwargs)
+        return tmp_path / "report.md"
+
+    monkeypatch.setattr(cli_module, "_adjudicate_existing_run", fake_adjudicate_existing_run)
+    monkeypatch.setenv("RVW_CODEX_REASONING_EFFORT", "turbo")
+    repo_dir = tmp_path / "checkout"
+    repo_dir.mkdir()
+
+    result = runner.invoke(
+        cli_module.app,
+        ["adjudicate", "--run", "rvw-run", "--repo-dir", str(repo_dir), "--out", str(tmp_path)],
+    )
+
+    assert result.exit_code == 2, result.stderr
+    assert "RVW_CODEX_REASONING_EFFORT" in result.stderr
+    assert calls == []

@@ -15,6 +15,7 @@ from rvw.merge import MergeResult
 from rvw.presentation import PresentationConfig
 from rvw.provenance import BuildProvenance, current_build_provenance
 from rvw.publication import publication_summary, uncovered_regions
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
 from rvw.runtimes import RunDiagnostic
 
 
@@ -182,6 +183,11 @@ class RuntimeSettings(ContractModel):
     sandbox: Literal["read-only", "danger-full-access"] = "read-only"
     no_output_seconds: int = Field(default=660, ge=1)
     reasoning_summary: str = Field(default="detailed", min_length=1)
+    # The effective Codex policy: the packaged default unless the run overrode it.
+    model: str = Field(default=DEFAULT_CODEX_RUNTIME_POLICY.model, min_length=1)
+    reasoning_effort: str = Field(
+        default=DEFAULT_CODEX_RUNTIME_POLICY.reasoning_effort, min_length=1
+    )
 
 
 class ProcessFailure(ContractModel):

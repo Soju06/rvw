@@ -3,6 +3,10 @@ interface DeployerBindings {
   CODEX_PROXY_HOST?: string;
   /** Required deployer var supplied outside the committed Wrangler config. */
   GITHUB_APP_ID?: string;
+  /** Optional deployer var: `--model` for every review runtime; absent keeps the packaged CLI default. */
+  RVW_CODEX_MODEL?: string;
+  /** Optional deployer var: `--reasoning-effort` for every review runtime; absent keeps the packaged CLI default. */
+  RVW_CODEX_REASONING_EFFORT?: string;
   /** Secret binding provisioned with `wrangler secret put CODEX_API_KEY`. */
   CODEX_API_KEY: string;
   /** Secret binding provisioned with `wrangler secret put GITHUB_APP_PRIVATE_KEY`. */

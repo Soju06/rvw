@@ -120,7 +120,14 @@ from rvw.registry import (
     load_repo_presentation,
 )
 from rvw.report import render_report
-from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY
+from rvw.runtime_policy import (
+    CODEX_MODEL_ENV,
+    DEFAULT_CODEX_RUNTIME_POLICY,
+    REASONING_EFFORT_ENV,
+    REASONING_EFFORT_VALUES,
+    CodexRuntimePolicy,
+    resolve_codex_runtime_policy,
+)
 from rvw.runtimes.codex import (
     DEFAULT_NO_OUTPUT_SECONDS,
     CodexRuntime,
@@ -274,6 +281,28 @@ _error_console = Console(stderr=True)
 Option = cast(Callable[..., object], typer.Option)
 Argument = cast(Callable[..., object], typer.Argument)
 
+_ModelOption = Annotated[
+    str | None,
+    Option(
+        "--model",
+        help=(
+            "Codex model for every runtime this command starts "
+            f"(default {DEFAULT_CODEX_RUNTIME_POLICY.model}; env {CODEX_MODEL_ENV})."
+        ),
+    ),
+]
+_ReasoningEffortOption = Annotated[
+    str | None,
+    Option(
+        "--reasoning-effort",
+        help=(
+            "Codex reasoning effort for every runtime this command starts "
+            f"(default {DEFAULT_CODEX_RUNTIME_POLICY.reasoning_effort}; "
+            f"env {REASONING_EFFORT_ENV}; one of {', '.join(sorted(REASONING_EFFORT_VALUES))})."
+        ),
+    ),
+]
+
 
 _PipelineArtifacts = PipelineArtifacts
 
@@ -302,6 +331,22 @@ def _command_no_output_seconds(explicit: int | None) -> int:
 
     try:
         return resolve_no_output_seconds(explicit)
+    except ValueError as exc:
+        _error_console.print(str(exc), markup=False)
+        raise typer.Exit(EXIT_USER_ERROR) from exc
+
+
+def _command_runtime_policy(
+    explicit_model: str | None, explicit_effort: str | None
+) -> CodexRuntimePolicy:
+    """Resolve the Codex model and reasoning effort once, before any runtime work.
+
+    A present but malformed option or environment value fails closed here so no runtime
+    can start under a policy the operator did not intend.
+    """
+
+    try:
+        return resolve_codex_runtime_policy(explicit_model, explicit_effort)
     except ValueError as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_USER_ERROR) from exc
@@ -676,7 +721,10 @@ def review(
     ] = False,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
     allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
+    model: _ModelOption = None,
+    reasoning_effort: _ReasoningEffortOption = None,
 ) -> None:
+    runtime_policy = _command_runtime_policy(model, reasoning_effort)
     host_gate = _command_host_gate()
     no_output_seconds = _command_no_output_seconds(no_output_timeout)
     try:
@@ -699,6 +747,7 @@ def review(
                 host_gate=host_gate,
                 discovery_mode=discovery_mode,
                 allow_language_fallback=allow_language_fallback,
+                runtime_policy=runtime_policy,
             )
         )
     except PublicationLanguageMismatch as exc:
@@ -765,6 +814,7 @@ async def _review_pipeline(
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
     allow_language_fallback: bool = False,
     no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
+    runtime_policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
 ) -> None:
     resolved_target: ResolvedTarget | None = None
     selected: _PublicationPolicy | None = None
@@ -799,6 +849,7 @@ async def _review_pipeline(
             allow_worktree_rules=allow_worktree_rules,
             discovery_mode=discovery_mode,
             no_output_seconds=no_output_seconds,
+            runtime_policy=runtime_policy,
         )
     except PipelineInfrastructureError as exc:
         artifacts = exc.artifacts
@@ -889,6 +940,7 @@ async def _execute_pipeline(
     lane_sources: dict[str, int] | None = None,
     presentation: PresentationConfig | None = None,
     no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
+    runtime_policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
 ) -> _PipelineArtifacts | None:
     """Execute and persist common review stages without publishing or rendering CLI output."""
     target = resolved_target or _resolve_cli_target(target_spec)
@@ -922,6 +974,7 @@ async def _execute_pipeline(
             lanes_root=lanes_root,
             target=target,
             runtime=CodexRuntime(
+                policy=runtime_policy,
                 mode=(
                     CodexRuntimeMode.AGENTIC
                     if discovery_mode is DiscoveryMode.AGENTIC
@@ -930,10 +983,14 @@ async def _execute_pipeline(
                 no_output_seconds=no_output_seconds,
             ),
             adjudication_runtime=CodexRuntime(
-                mode=CodexRuntimeMode.TOOL_LESS, no_output_seconds=no_output_seconds
+                policy=runtime_policy,
+                mode=CodexRuntimeMode.TOOL_LESS,
+                no_output_seconds=no_output_seconds,
             ),
             expanded_adjudication_runtime=CodexRuntime(
-                mode=CodexRuntimeMode.AGENTIC, no_output_seconds=no_output_seconds
+                policy=runtime_policy,
+                mode=CodexRuntimeMode.AGENTIC,
+                no_output_seconds=no_output_seconds,
             ),
             adjudicator=adjudicate,
             active_lanes=active_lanes,
@@ -1252,9 +1309,12 @@ def gate(
     json_output: Annotated[bool, Option("--json")] = False,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
     allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
+    model: _ModelOption = None,
+    reasoning_effort: _ReasoningEffortOption = None,
 ) -> None:
     """Run or resume a fail-closed, artifact-backed pull-request gate."""
 
+    runtime_policy = _command_runtime_policy(model, reasoning_effort)
     if inherit_run_id is not None and no_inherit:
         _error_console.print(
             "--inherit cannot be combined with --no-inherit",
@@ -1291,6 +1351,7 @@ def gate(
             host_gate=host_gate,
             discovery_mode=discovery_mode,
             allow_language_fallback=allow_language_fallback,
+            runtime_policy=runtime_policy,
         )
     )
 
@@ -1314,6 +1375,7 @@ async def _gate_pipeline(
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
     allow_language_fallback: bool = False,
     no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
+    runtime_policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
 ) -> None:
     artifacts: _PipelineArtifacts
     plan: GatePlan
@@ -1379,6 +1441,7 @@ async def _gate_pipeline(
                     host_gate=host_gate,
                     discovery_mode=discovery_mode,
                     no_output_seconds=no_output_seconds,
+                    runtime_policy=runtime_policy,
                 )
                 if executed is not None:
                     executed.run.save_policy(gate_policy)
@@ -1979,6 +2042,8 @@ def auto(
     head_ref: Annotated[str | None, Option("--head-ref")] = None,
     out: Annotated[Path | None, Option("--out")] = None,
     allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
+    model: _ModelOption = None,
+    reasoning_effort: _ReasoningEffortOption = None,
 ) -> None:
     """Compatibility alias of run, using the policy's publication preference."""
     if allow_approve:
@@ -1999,6 +2064,8 @@ def auto(
         out,
         allow_language_fallback,
         no_output_timeout=no_output_timeout,
+        model=model,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -2027,6 +2094,8 @@ def run_command(
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
     json_output: Annotated[bool, Option("--json")] = False,
     allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
+    model: _ModelOption = None,
+    reasoning_effort: _ReasoningEffortOption = None,
 ) -> None:
     """Execute a policy-gated review and persist the shared result contract."""
     _run_command(
@@ -2045,6 +2114,8 @@ def run_command(
         out,
         allow_language_fallback,
         no_output_timeout=no_output_timeout,
+        model=model,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -2064,6 +2135,8 @@ def _run_command(
     out: Path | None,
     allow_language_fallback: bool = False,
     no_output_timeout: int | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> None:
     started = time.monotonic()
     if publish == "github-comment":
@@ -2125,6 +2198,14 @@ def _run_command(
         # The canonical command records the effective watchdog like --publish below.
         runtime.no_output_seconds = resolve_no_output_seconds(no_output_timeout)
         process.command.extend(["--no-output-timeout", str(runtime.no_output_seconds)])
+        # The effective Codex policy is resolved once here and handed to every runtime below;
+        # the canonical command records it even when it came from the environment or default.
+        codex_policy = resolve_codex_runtime_policy(model, reasoning_effort)
+        runtime.model = codex_policy.model
+        runtime.reasoning_effort = codex_policy.reasoning_effort
+        process.command.extend(
+            ["--model", codex_policy.model, "--reasoning-effort", codex_policy.reasoning_effort]
+        )
         sandbox = os.environ.get("RVW_CODEX_SANDBOX", "read-only")
         if sandbox not in {"read-only", "danger-full-access"}:
             raise ValueError(f"invalid RVW_CODEX_SANDBOX: {sandbox}")
@@ -2230,6 +2311,7 @@ def _run_command(
                         lane_sources=process.lane_sources,
                         presentation=process.presentation,
                         no_output_seconds=runtime.no_output_seconds,
+                        runtime_policy=codex_policy,
                     )
                 )
                 if artifacts is None:
@@ -2477,7 +2559,10 @@ def adjudicate_command(
     deadline: Annotated[
         int, Option("--deadline", min=1, max=MAX_DEADLINE_SECONDS)
     ] = DEFAULT_DEADLINE_SECONDS,
+    model: _ModelOption = None,
+    reasoning_effort: _ReasoningEffortOption = None,
 ) -> None:
+    runtime_policy = _command_runtime_policy(model, reasoning_effort)
     host_gate = _command_host_gate()
     try:
         report_path = asyncio.run(
@@ -2489,6 +2574,7 @@ def adjudicate_command(
                 concurrency=concurrency,
                 deadline_seconds=deadline,
                 host_gate=host_gate,
+                runtime_policy=runtime_policy,
             )
         )
     except InvalidRunId as exc:
@@ -2515,6 +2601,7 @@ async def _adjudicate_existing_run(
     concurrency: int,
     deadline_seconds: int,
     host_gate: HostSlotGate | None,
+    runtime_policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
 ) -> Path:
     if not repo_dir.is_dir():
         raise ValueError(f"adjudication checkout is not a directory: {repo_dir}")
@@ -2532,7 +2619,7 @@ async def _adjudicate_existing_run(
             merged,
             locale=run.load_presentation().locale,
             target=target,
-            runtime=CodexRuntime(),
+            runtime=CodexRuntime(policy=runtime_policy),
             repo_dir=repo_dir,
             out_root=run.dir / "adjudicate-runtime" / attempt_id,
             replicas=replicas,
@@ -2772,9 +2859,12 @@ def stack_review(
     out_root: Annotated[Path, Option("--out")] = DEFAULT_RUN_ROOT,
     json_output: Annotated[bool, Option("--json")] = False,
     discovery_mode: Annotated[DiscoveryMode, Option("--discovery-mode")] = DiscoveryMode.AGENTIC,
+    model: _ModelOption = None,
+    reasoning_effort: _ReasoningEffortOption = None,
 ) -> None:
     """Review every member and recheck earlier claims at descendant heads."""
 
+    runtime_policy = _command_runtime_policy(model, reasoning_effort)
     host_gate = _command_host_gate()
     no_output_seconds = _command_no_output_seconds(no_output_timeout)
     try:
@@ -2791,6 +2881,7 @@ def stack_review(
                 json_output=json_output,
                 host_gate=host_gate,
                 discovery_mode=discovery_mode,
+                runtime_policy=runtime_policy,
             )
         )
     except EmptyReviewDiffError as exc:
@@ -2821,6 +2912,7 @@ async def _stack_review_pipeline(
     host_gate: HostSlotGate | None = None,
     discovery_mode: DiscoveryMode = DiscoveryMode.AGENTIC,
     no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
+    runtime_policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
 ) -> None:
     numbers = parse_pr_numbers(prs)
     members = resolve_stack(numbers, cwd=Path.cwd())
@@ -2864,6 +2956,7 @@ async def _stack_review_pipeline(
                 host_gate=host_gate,
                 discovery_mode=discovery_mode,
                 no_output_seconds=no_output_seconds,
+                runtime_policy=runtime_policy,
             )
             if artifacts is None or artifacts.outcome is None:
                 raise RuntimeError(
@@ -2886,7 +2979,9 @@ async def _stack_review_pipeline(
                     pr_number=member.number,
                     member_order=numbers,
                     target=target,
-                    runtime=CodexRuntime(no_output_seconds=no_output_seconds),
+                    runtime=CodexRuntime(
+                        policy=runtime_policy, no_output_seconds=no_output_seconds
+                    ),
                     repo_dir=checkout,
                     out_root=handle.dir / "presence-runtime" / f"pr-{member.number}",
                     replicas=adjudicate_replicas,
@@ -3331,7 +3426,10 @@ def sample(
     ] = DEFAULT_DEADLINE_SECONDS,
     out_root: Annotated[Path, Option("--out")] = Path("/tmp/rvw-sample"),
     json_output: Annotated[bool, Option("--json")] = False,
+    model: _ModelOption = None,
+    reasoning_effort: _ReasoningEffortOption = None,
 ) -> None:
+    runtime_policy = _command_runtime_policy(model, reasoning_effort)
     host_gate = _command_host_gate()
     if registry_root.expanduser() == DEFAULT_REGISTRY_ROOT:
         registry, lanes_root = _catalog_registry(registry_root)
@@ -3371,7 +3469,7 @@ def sample(
             sample_lane(
                 lane,
                 fixture_diff=fixture_diff,
-                runtime=CodexRuntime(),
+                runtime=CodexRuntime(policy=runtime_policy),
                 out_root=out_root,
                 replicas=replicas,
                 concurrency=concurrency,

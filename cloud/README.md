@@ -27,6 +27,8 @@ passes deployer values as CLI overrides.
 | Variable | `GITHUB_APP_ID` | Numeric GitHub App identifier; required, and empty/unset fails closed. |
 | Variable | `RVW_REVIEW_DEADLINE_SECONDS` | Explicit per-runtime `--deadline` passed to `rvw run` (1 to 1800); committed default 900 for every environment. Missing or out-of-range values fail closed with `config_missing` or `config_invalid`. |
 | Variable | `RVW_JOB_DEADLINE_MINUTES` | Hard job deadline in minutes; committed default 120 for every environment, 90 when the var is absent, and a malformed value fails closed with `config_invalid`. Must satisfy `minutes * 60 >= 5 * RVW_REVIEW_DEADLINE_SECONDS + 600` or every request fails closed with `config_incoherent` (`job_deadline_below_review_budget`). The reusable deploy workflow overlays this var from its `job_deadline_minutes` input (default 120, matching the committed value); raise it whenever you raise the review deadline. |
+| Variable | `RVW_CODEX_MODEL` | Optional Codex model passed as `--model` to every review runtime (discovery and adjudication) of every App job and spike run. Absent means the packaged CLI default `gpt-5.6-sol`; a present but empty value fails closed with `config_invalid`. The effective value is recorded in `process.json` `runtime.model`, `environment.txt`, `usage.json`, and the check `text` facts. Not set in the committed Wrangler config. |
+| Variable | `RVW_CODEX_REASONING_EFFORT` | Optional Codex reasoning effort passed as `--reasoning-effort` to every review runtime. Absent means the packaged CLI default `max`; the value must be exactly one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, `persistent` (lowercase) or every request fails closed with `config_invalid`. The effective value is recorded in `process.json` `runtime.reasoning_effort`, `environment.txt`, `usage.json`, and the check `text` facts. Not set in the committed Wrangler config. |
 | Secret | `CODEX_API_KEY` | Required upstream Codex credential, injected only at the configured proxy boundary. |
 | Secret | `GITHUB_APP_PRIVATE_KEY` | Required GitHub App private key used to mint installation tokens. |
 | Secret | `GITHUB_WEBHOOK_SECRET` | Required secret used to verify GitHub webhook signatures. |
@@ -42,6 +44,23 @@ CI/environment configuration. Never commit these values.
 For deployment, pass the required non-secret values from private CI variables
 with Wrangler `--var CODEX_PROXY_HOST:<host> --var GITHUB_APP_ID:<id>` overrides.
 The reusable workflow maps caller inputs to those Worker binding names.
+
+### Codex model and reasoning effort overrides
+
+Every review runtime runs the packaged default `gpt-5.6-sol` at reasoning effort `max`
+unless a deployer opts in to an override. Precedence per field is explicit CLI option >
+environment variable > packaged default, on both the CLI and the App path: the Worker
+appends `--model` / `--reasoning-effort` to the `rvw run` argv only when
+`RVW_CODEX_MODEL` / `RVW_CODEX_REASONING_EFFORT` are set, so an unset var leaves the
+container's own resolution untouched. The effective values travel into every artifact
+(`process.json` `runtime.model` and `runtime.reasoning_effort`, `environment.txt`
+`model=` / `reasoning_effort=`, `usage.json`, and the canonical `command`) and the
+check `text` facts carry `runtime: {model, reasoning_effort}` read back from
+`process.json` (`null` when `process.json` is missing or unparseable; per-field `null`
+for envelopes written by an image that predates the keys). Set both vars with Wrangler
+`--var RVW_CODEX_MODEL:<model> --var RVW_CODEX_REASONING_EFFORT:<effort>` for an A/B
+cell and drop them to return to the default; a malformed value fails every request
+closed with `config_invalid` naming the variable.
 
 ### Sandbox egress
 
@@ -104,6 +123,34 @@ The optional observer deadline defaults to 1,500 seconds (25 minutes). The
 driver polls until it sees the process completion marker or the deadline,
 fetches available result artifacts, prints a final outcome summary, and always
 attempts `/destroy` via an EXIT trap.
+
+`POST /start` keeps `repo` and `target` as query parameters and accepts an optional
+JSON body carrying per-run Codex overrides for an A/B cell:
+
+```bash
+curl --fail-with-body --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"model":"gpt-6-astra","reasoning_effort":"high"}' \
+  "https://<worker-host>/start?repo=https://github.com/<owner>/<repo>&target=<target-sha>"
+```
+
+Both keys are optional; a body override wins over the Worker's `RVW_CODEX_MODEL` /
+`RVW_CODEX_REASONING_EFFORT` vars for that run, and an absent field falls back to the
+var and then to the packaged CLI default. `model` must be a non-empty string and
+`reasoning_effort` must be one of the nine effort values listed in the configuration
+table. Malformed JSON, an unknown key, an empty model, or an off-enum effort is answered
+with HTTP 400 and no sandbox is created, so a typo cannot silently run the default cell.
+The 202 response echoes the effective `model` and `reasoning_effort` (`null` when the
+CLI default applies), and the run's `process.json` records the values the container
+actually used. The driver forwards its own environment: when `RVW_CODEX_MODEL` or
+`RVW_CODEX_REASONING_EFFORT` is set in the shell that runs `drive-spike.sh`, it sends
+them as that JSON body (built with `jq -n --arg`) and saves it as
+`spike-evidence/run/start-body.json`; otherwise the request is unchanged.
+
+```bash
+RVW_CODEX_MODEL=gpt-6-astra RVW_CODEX_REASONING_EFFORT=high \
+  scripts/drive-spike.sh https://<worker-host> https://github.com/<owner>/<repo> <target-sha>
+```
 
 Exit status `0` means the completion marker reported review exit `0`. Usage
 errors exit `2`; transport, API, or malformed-response failures exit `3`; a
@@ -190,7 +237,8 @@ consumers may manage Terraform themselves and set it false.
    history, logs, `.dev.vars`, or committed files. `GITHUB_APP_PRIVATE_KEY`,
    `GITHUB_WEBHOOK_SECRET`, `CODEX_API_KEY`, and `RVW_ADMIN_TOKEN` are secret
    bindings; `GITHUB_APP_ID`, `RVW_JOB_DEADLINE_MINUTES`, `RVW_REVIEW_DEADLINE_SECONDS`,
-   and `CODEX_PROXY_HOST` are non-secret vars supplied by the deployer.
+   `CODEX_PROXY_HOST`, and the optional `RVW_CODEX_MODEL` / `RVW_CODEX_REASONING_EFFORT`
+   are non-secret vars supplied by the deployer.
 
 ### Publication identity and permissions
 

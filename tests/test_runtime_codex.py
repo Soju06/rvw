@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict
 
 import rvw.runtimes.codex as codex_module
 from rvw.lane import Lane, load_lane
-from rvw.runtime_policy import CodexRuntimePolicy
+from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY, CodexRuntimePolicy
 from rvw.runtimes import RunStatus, RunUsage, RunUsageStatus
 from rvw.runtimes.codex import (
     CodexRuntime,
@@ -1500,3 +1500,57 @@ async def test_real_codex_returns_valid_result(tmp_path: Path) -> None:
 
     assert result.status is RunStatus.VALID, result.invalid_reason
     assert result.output is not None
+
+
+def test_runtime_defaults_to_the_packaged_policy() -> None:
+    assert CodexRuntime().policy is DEFAULT_CODEX_RUNTIME_POLICY
+    assert CodexRuntime().policy == CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="max")
+
+
+async def test_runtime_renders_an_overridden_policy_into_argv_and_usage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "override" / "r1"
+    calls = install_spawn(monkeypatch, run_dir=run_dir, payload=valid_payload())
+    policy = CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="medium")
+
+    result = await CodexRuntime(policy=policy).execute(
+        lane=lane, prompt="Review this tiny diff.", run_dir=run_dir, deadline_seconds=60
+    )
+
+    assert result.status is RunStatus.VALID
+    command = calls[0][0]
+    assert command[command.index("--model") + 1] == "gpt-6-astra"
+    effort_index = command.index('model_reasoning_effort="medium"')
+    assert command[effort_index - 1] == "-c"
+    assert 'model_reasoning_effort="max"' not in command
+    assert command[effort_index + 1 : effort_index + 3] == [
+        "-c",
+        'model_reasoning_summary="detailed"',
+    ]
+    usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
+    assert usage.model == "gpt-6-astra"
+    assert usage.reasoning_effort == "medium"
+    assert usage.reasoning_summary == "detailed"
+    assert result.usage is not None
+    assert (result.usage.model, result.usage.reasoning_effort) == ("gpt-6-astra", "medium")
+
+
+async def test_invalid_run_usage_records_the_overridden_policy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lane = load_lane(FIXTURE)
+    run_dir = tmp_path / "override-invalid" / "r1"
+    install_spawn(monkeypatch, run_dir=run_dir, exit_code=1)
+    policy = CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="high")
+
+    result = await CodexRuntime(policy=policy).execute(
+        lane=lane, prompt="Review this tiny diff.", run_dir=run_dir, deadline_seconds=60
+    )
+
+    assert result.status is RunStatus.INVALID
+    assert result.invalid_reason == "exit_nonzero:1"
+    usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
+    assert usage.status is RunUsageStatus.INVALID
+    assert (usage.model, usage.reasoning_effort) == ("gpt-6-astra", "high")
