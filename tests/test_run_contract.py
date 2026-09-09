@@ -735,10 +735,10 @@ def test_explicit_codex_policy_beats_environment_and_reaches_the_process_contrac
 @pytest.mark.parametrize(
     "environment,expected_model,expected_effort",
     [
-        ({}, "gpt-5.6-sol", "max"),
+        ({}, "gpt-5.6-sol", "high"),
         ({"RVW_CODEX_MODEL": "env-model", "RVW_CODEX_REASONING_EFFORT": "low"}, "env-model", "low"),
         ({"RVW_CODEX_REASONING_EFFORT": "medium"}, "gpt-5.6-sol", "medium"),
-        ({"RVW_CODEX_MODEL": "env-model"}, "env-model", "max"),
+        ({"RVW_CODEX_MODEL": "env-model"}, "env-model", "high"),
     ],
 )
 def test_codex_policy_falls_back_to_environment_then_default(

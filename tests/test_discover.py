@@ -1333,7 +1333,7 @@ async def test_attempts_copy_tool_call_telemetry_from_runtime_usage(tmp_path: Pa
     write_lane(lanes_root, "silent", Tier.BASE)
     usage = RunUsage(
         model="gpt-test",
-        reasoning_effort="max",
+        reasoning_effort="high",
         status=RunUsageStatus.COMPLETED,
         wall_seconds=12.5,
         tool_calls=7,
@@ -1374,7 +1374,7 @@ async def test_redispatch_attempts_carry_tool_call_telemetry(tmp_path: Path) -> 
     write_lane(lanes_root, "base-review", Tier.BASE)
     usage = RunUsage(
         model="gpt-test",
-        reasoning_effort="max",
+        reasoning_effort="high",
         status=RunUsageStatus.COMPLETED,
         wall_seconds=42.5,
         tool_calls=33,

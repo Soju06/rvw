@@ -17,10 +17,10 @@ from rvw.runtime_policy import (
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent")
 
 
-def test_packaged_default_policy_is_unchanged() -> None:
+def test_packaged_default_policy_is_high_effort() -> None:
     assert (
         CodexRuntimePolicy(
-            model="gpt-5.6-sol", reasoning_effort="max", reasoning_summary="detailed"
+            model="gpt-5.6-sol", reasoning_effort="high", reasoning_summary="detailed"
         )
         == DEFAULT_CODEX_RUNTIME_POLICY
     )
@@ -68,10 +68,10 @@ def test_environment_model_combines_with_explicit_effort() -> None:
 
 
 def test_each_field_falls_back_to_its_own_default() -> None:
-    assert resolve_codex_runtime_policy("gpt-6-astra", None, {}).reasoning_effort == "max"
+    assert resolve_codex_runtime_policy("gpt-6-astra", None, {}).reasoning_effort == "high"
     assert resolve_codex_runtime_policy(None, "medium", {}).model == "gpt-5.6-sol"
     assert resolve_codex_runtime_policy(None, None, {CODEX_MODEL_ENV: "env-model"}) == (
-        CodexRuntimePolicy(model="env-model", reasoning_effort="max")
+        CodexRuntimePolicy(model="env-model", reasoning_effort="high")
     )
     assert resolve_codex_runtime_policy(None, None, {REASONING_EFFORT_ENV: "medium"}) == (
         CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="medium")
