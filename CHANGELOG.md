@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/Soju06/rvw/compare/v0.17.0...v0.18.0) (2026-09-09)
+
+
+### Features
+
+* **runtime:** default the Codex reasoning effort to high ([#89](https://github.com/Soju06/rvw/issues/89)) ([c415885](https://github.com/Soju06/rvw/commit/c415885cfcc664180e99658f415d3a4fade971be))
+
 ## [0.17.0](https://github.com/Soju06/rvw/compare/v0.16.0...v0.17.0) (2026-09-09)
 
 
