@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/Soju06/rvw/compare/v0.16.0...v0.17.0) (2026-09-09)
+
+
+### Features
+
+* make the Codex model and reasoning effort overridable per run ([#87](https://github.com/Soju06/rvw/issues/87)) ([ef68057](https://github.com/Soju06/rvw/commit/ef680571e3e6898986288c67c9d59f6b05c68a70))
+
 ## [0.16.0](https://github.com/Soju06/rvw/compare/v0.15.0...v0.16.0) (2026-09-08)
 
 
