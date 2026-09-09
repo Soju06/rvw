@@ -37,7 +37,7 @@ def _review() -> tuple[MergeResult, AdjudicationOutcome]:
             hunk_id="handler",
             line=91,
             severity=Severity.WARNING,
-            body="dense warning body",
+            body="dense warning body in `handleUser`",
             anchorable=False,
             lane_id="contracts",
             replica=1,
@@ -350,6 +350,7 @@ def test_bori_1800_persisted_fixture_shows_reader_first_before_after(tmp_path: P
             diff="",
         )
     )
+    run.save_presentation(PresentationConfig(locale="ko"))
     run.save_merge(merged)
     run.save_outcome(outcome)
     run.save_synthesis(synthesis)

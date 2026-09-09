@@ -24,3 +24,7 @@ Non-goals: discovery, adjudication, event selection, reconciliation, runtime pol
 - Additional latency → one small tool-less attempt, one content-validation retry only, existing watchdog and telemetry.
 - Legacy artifacts lack synthesis/voice → documented defaults and current human rendering remain valid.
 - Source literals can contain forbidden words → protect source code/literals before testing reviewer vocabulary, so valid identifiers are never translated or censored.
+
+## Follow-up 1: live-run defects
+
+Fidelity checks output literals against the corresponding raw source bodies, adjudication reason/evidence and path, allowing an unestablished claim and its literal to disappear. Raw-source matching permits new backtick grouping of existing code while token boundaries prevent accepting a shortened identifier as an exact match. Opening prose uses the union of included sources. Language validation uses the existing checker independently for each prose field, protects source literals, and reports all mismatches to the single retry. Retained artifact validation uses its saved presentation locale too. The prompt places a direct Language section after Role, gives a locale-specific example, and requires backticks around technical literals. Publication, judgment, runtime and fallback contracts are unchanged.

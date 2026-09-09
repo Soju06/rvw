@@ -108,8 +108,8 @@ def document(*groups: CollapseGroup) -> SynthesisDocument:
                 key=candidate.key,
                 title="다른 사용자의 수신자를 반환할 수 있습니다",
                 what=(
-                    "`lookupRecipient`가 src/review/lane_lookup.py에서 요청 ID를 무시하고 "
-                    '"RECIPIENT_NOT_FOUND"를 반환합니다.'
+                    "`lookupRecipient`가 `src/review/lane_lookup.py`에서 요청 ID를 무시하고 "
+                    "`RECIPIENT_NOT_FOUND`를 반환합니다."
                 ),
                 consequence="요청한 사용자와 다른 수신자를 선택할 수 있습니다.",
                 fix="조회 인수를 검증하고 해당 ID의 레코드만 반환해야 합니다.",
@@ -252,15 +252,15 @@ def test_validate_requires_every_non_rejected_key_exactly_once_and_no_extras() -
     adjudicated = outcome_for([first, second, rejected], rejected=[rejected.key])
     valid = document(first, second)
 
-    assert validate_synthesis(valid.model_dump(), combined, adjudicated) == valid
+    assert validate_synthesis(valid.model_dump(), combined, adjudicated, locale="ko") == valid
     duplicate = valid.model_copy(update={"findings": [valid.findings[0], valid.findings[0]]})
     with pytest.raises(ValueError, match="exactly once"):
-        validate_synthesis(duplicate, combined, adjudicated)
+        validate_synthesis(duplicate, combined, adjudicated, locale="ko")
     extra = valid.model_copy(
         update={"findings": [*valid.findings, document(group("invented")).findings[0]]}
     )
     with pytest.raises(ValueError, match="unexpected"):
-        validate_synthesis(extra, combined, adjudicated)
+        validate_synthesis(extra, combined, adjudicated, locale="ko")
 
 
 @pytest.mark.parametrize(
@@ -282,7 +282,7 @@ def test_validate_rejects_internal_or_audience_vocabulary(forbidden: str) -> Non
     invalid.findings[0].consequence = f"{forbidden} internal wording"
 
     with pytest.raises(ValueError, match="forbidden vocabulary"):
-        validate_synthesis(invalid, merged(candidate), outcome_for([candidate]))
+        validate_synthesis(invalid, merged(candidate), outcome_for([candidate]), locale="ko")
 
 
 @pytest.mark.parametrize("forbidden", ["`Confirmed:`", "replicas", "lanes"])
@@ -293,14 +293,16 @@ def test_overview_and_action_cannot_hide_internal_vocabulary(forbidden: str, fie
     setattr(invalid, field, f"독자에게 {forbidden} 표현을 노출합니다.")
 
     with pytest.raises(ValueError, match="forbidden vocabulary"):
-        validate_synthesis(invalid, merged(candidate), outcome_for([candidate]))
+        validate_synthesis(invalid, merged(candidate), outcome_for([candidate]), locale="ko")
 
 
 def test_source_literal_may_contain_forbidden_substring_and_literals_survive() -> None:
     candidate = group()
     synthesized = document(candidate)
 
-    validated = validate_synthesis(synthesized, merged(candidate), outcome_for([candidate]))
+    validated = validate_synthesis(
+        synthesized, merged(candidate), outcome_for([candidate]), locale="ko"
+    )
 
     protected = synthesis_protected_literals(validated, merged(candidate), outcome_for([candidate]))
     assert "src/review/lane_lookup.py" in protected
@@ -324,16 +326,18 @@ def test_validate_rejects_changed_code_and_error_literals() -> None:
     ):
         synthesized = document(candidate)
         synthesized.findings[0].what = synthesized.findings[0].what.replace(source, replacement)
-        with pytest.raises(ValueError, match="source literals verbatim"):
-            validate_synthesis(synthesized, merged(candidate), outcome_for([candidate]))
+        with pytest.raises(ValueError, match="literals absent from source"):
+            validate_synthesis(
+                synthesized, merged(candidate), outcome_for([candidate]), locale="ko"
+            )
 
 
-def test_metadata_path_need_not_be_duplicated_in_explanation() -> None:
-    candidate = group(body="`lookupRecipient` ignores the requested ID.")
+def test_quoted_source_literals_may_be_omitted_from_explanation() -> None:
+    candidate = group()
     synthesized = document(candidate)
-    synthesized.findings[0].what = "`lookupRecipient`가 요청 ID를 무시합니다."
+    synthesized.findings[0].what = "조회 함수가 요청한 사용자 식별자를 무시합니다."
 
-    assert validate_synthesis(synthesized, merged(candidate), outcome_for([candidate]))
+    assert validate_synthesis(synthesized, merged(candidate), outcome_for([candidate]), locale="ko")
     assert candidate.file in synthesis_protected_literals(
         synthesized, merged(candidate), outcome_for([candidate])
     )
@@ -434,7 +438,7 @@ async def test_schema_retry_includes_field_validation_error(tmp_path: Path) -> N
         outcome=outcome_for([candidate]),
         coverage=[],
         status="complete",
-        presentation=PresentationConfig(),
+        presentation=PresentationConfig(locale="ko"),
         runtime=runtime,
         out_root=tmp_path,
     )
@@ -464,7 +468,7 @@ async def test_second_invalid_output_falls_back_with_aggregated_telemetry(
         outcome=outcome_for([candidate]),
         coverage=[],
         status="failed",
-        presentation=PresentationConfig(),
+        presentation=PresentationConfig(locale="ko"),
         runtime=runtime,
         out_root=tmp_path,
         deadline_seconds=500,
@@ -491,7 +495,7 @@ async def test_process_failure_and_exception_fall_back_without_retry(tmp_path: P
         outcome=outcome_for([candidate]),
         coverage=[],
         status="complete",
-        presentation=PresentationConfig(),
+        presentation=PresentationConfig(locale="ko"),
         runtime=process_runtime,
         out_root=tmp_path / "process",
     )
@@ -506,7 +510,7 @@ async def test_process_failure_and_exception_fall_back_without_retry(tmp_path: P
         outcome=outcome_for([candidate]),
         coverage=[],
         status="complete",
-        presentation=PresentationConfig(),
+        presentation=PresentationConfig(locale="ko"),
         runtime=exception_runtime,
         out_root=tmp_path / "exception",
     )
@@ -538,7 +542,7 @@ async def test_partial_telemetry_becomes_unknown_when_retry_raises(tmp_path: Pat
         outcome=outcome_for([candidate]),
         coverage=[],
         status="complete",
-        presentation=PresentationConfig(),
+        presentation=PresentationConfig(locale="ko"),
         runtime=runtime,
         out_root=tmp_path,
     )
@@ -560,7 +564,7 @@ async def test_cancellation_is_not_converted_to_fallback(tmp_path: Path) -> None
             outcome=outcome_for([candidate]),
             coverage=[],
             status="complete",
-            presentation=PresentationConfig(),
+            presentation=PresentationConfig(locale="ko"),
             runtime=runtime,
             out_root=tmp_path,
         )

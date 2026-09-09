@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import LaneCoverage
 from rvw.hostslots import HostSlotGate, host_slot
+from rvw.langgate import check_language
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.presentation import PresentationConfig
 from rvw.runtimes import RunResult, RunStatus, Runtime
@@ -34,11 +35,17 @@ _FORBIDDEN_PROSE = (
     ("다섯 살", re.compile("다섯 살")),
 )
 _BACKTICK_LITERAL = re.compile(r"`([^`\n]+)`")
-_QUOTED_LITERAL = re.compile(r"(?<![\\\w])[\"\u201c]([^\"\u201d\n]+)[\"\u201d]")
-_PATH_LITERAL = re.compile(r"(?<![\w.-])(?:[\w.-]+/)+[\w./-]*[\w.-]")
+_QUOTED_LITERAL = re.compile(
+    r"""(?<![\\\w])(?:"([^"\n]+)"|\u201c([^\u201d\n]+)\u201d|'([^'\n]+)'|\u2018([^\u2019\n]+)\u2019)"""
+)
+_PATH_LITERAL = re.compile(
+    r"(?<![A-Za-z0-9_.-])/?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./-]*[A-Za-z0-9_-]"
+)
 _CODE_IDENTIFIER = re.compile(
-    r"\b(?:[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*|[A-Z][A-Z0-9_]{2,}|"
-    r"[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)\b"
+    r"(?<![A-Za-z0-9_])(?:(?:[A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*|"
+    r"(?:[a-z][A-Za-z0-9]*[A-Z]|[A-Z][a-z0-9]+[A-Z]|"
+    r"[A-Z]{2,}[a-z])[A-Za-z0-9]*|"
+    r"[A-Z][A-Z0-9_]{2,}|[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)(?![A-Za-z0-9_])"
 )
 
 
@@ -114,7 +121,7 @@ def _technical_literals(text: str) -> tuple[str, ...]:
         dict.fromkeys(
             [
                 *_BACKTICK_LITERAL.findall(text),
-                *_QUOTED_LITERAL.findall(text),
+                *(part for match in _QUOTED_LITERAL.findall(text) for part in match if part),
                 *_PATH_LITERAL.findall(text),
                 *_CODE_IDENTIFIER.findall(text),
             ]
@@ -122,12 +129,28 @@ def _technical_literals(text: str) -> tuple[str, ...]:
     )
 
 
-def _source_literals(group: CollapseGroup, evidence: str = "") -> tuple[str, ...]:
+def _source_texts(group: CollapseGroup, outcome: AdjudicationOutcome) -> tuple[str, ...]:
+    return (
+        group.file,
+        *group.bodies,
+        outcome.reasons.get(group.key, ""),
+        outcome.evidence.get(group.key, ""),
+    )
+
+
+def _source_literals(group: CollapseGroup, outcome: AdjudicationOutcome) -> tuple[str, ...]:
     literals = [group.file]
-    for body in group.bodies:
-        literals.extend(_technical_literals(body))
-    literals.extend(_technical_literals(evidence))
+    for text in _source_texts(group, outcome):
+        literals.extend(_technical_literals(text))
     return tuple(dict.fromkeys(literal for literal in literals if literal))
+
+
+def _literal_in_sources(literal: str, sources: Sequence[str]) -> bool:
+    # Code newly wrapped in backticks can be verbatim raw evidence. Boundaries
+    # prevent accepting a shortened identifier/path as an exact source match.
+    boundary = "A-Za-z0-9_./-" if _PATH_LITERAL.fullmatch(literal) else "A-Za-z0-9_"
+    pattern = re.compile(rf"(?<![{boundary}]){re.escape(literal)}(?![{boundary}])")
+    return any(pattern.search(source) for source in sources)
 
 
 def _finding_prose(finding: SynthesisFinding) -> str:
@@ -142,9 +165,9 @@ def _without_literals(text: str, literals: Sequence[str]) -> str:
 
 
 def validate_synthesis(
-    value: object, merged: MergeResult, outcome: AdjudicationOutcome
+    value: object, merged: MergeResult, outcome: AdjudicationOutcome, *, locale: str = "en"
 ) -> SynthesisDocument:
-    """Validate schema, identity, reviewer vocabulary, and source-literal fidelity."""
+    """Validate schema, identity, reviewer vocabulary, literal fidelity and locale."""
 
     document = SynthesisDocument.model_validate(value)
     included = _included_groups(merged, outcome)
@@ -163,51 +186,49 @@ def validate_synthesis(
             details.append(f"unexpected keys={unexpected}")
         raise ValueError("synthesis finding identity mismatch: " + "; ".join(details))
 
-    by_key = {finding.key: finding for finding in document.findings}
-    protected_by_key: dict[str, tuple[str, ...]] = {}
-    for group in included:
-        finding = by_key[group.key]
-        source_literals = _source_literals(group, outcome.evidence.get(group.key, ""))
-        protected_by_key[group.key] = source_literals
-        prose = _finding_prose(finding)
-        # The renderer carries the authoritative path:line separately. Paths explicitly
-        # quoted by a finding body, like other code literals, still must survive in prose.
-        required_literals = tuple(
-            dict.fromkeys(
-                literal
-                for body in group.bodies
-                for literal in (*_BACKTICK_LITERAL.findall(body), *_QUOTED_LITERAL.findall(body))
-            )
-        )
-        missing_literals = [literal for literal in required_literals if literal not in prose]
-        if missing_literals:
-            raise ValueError(
-                f"synthesis finding {group.key!r} did not preserve source literals verbatim: "
-                f"{missing_literals}"
-            )
-
-    overview_and_action = "\n".join(
-        part for part in (document.overview, document.first_action) if part is not None
-    )
+    sources_by_key = {group.key: _source_texts(group, outcome) for group in included}
+    protected_by_key = {group.key: _source_literals(group, outcome) for group in included}
+    overview_sources = tuple(source for sources in sources_by_key.values() for source in sources)
     overview_literals = tuple(
-        dict.fromkeys(
-            literal
-            for group in included
-            for literal in _source_literals(group, outcome.evidence.get(group.key, ""))
+        dict.fromkeys(literal for literals in protected_by_key.values() for literal in literals)
+    )
+    prose_segments = [("overview", document.overview, overview_sources, overview_literals)]
+    if document.first_action is not None:
+        prose_segments.append(
+            ("first_action", document.first_action, overview_sources, overview_literals)
         )
-    )
-    prose_segments = [("overview", overview_and_action, overview_literals)]
     prose_segments.extend(
-        (finding.key, _finding_prose(finding), protected_by_key[finding.key])
-        for finding in document.findings
+        (
+            f"findings[{index}].{field}",
+            getattr(finding, field),
+            sources_by_key[finding.key],
+            protected_by_key[finding.key],
+        )
+        for index, finding in enumerate(document.findings)
+        for field in ("title", "what", "consequence", "fix")
     )
-    for label, prose, protected in prose_segments:
+    errors: list[str] = []
+    wrong_language: list[str] = []
+    for label, prose, sources, protected in prose_segments:
         unprotected = _without_literals(prose, protected)
         found = next(
             (label for label, pattern in _FORBIDDEN_PROSE if pattern.search(unprotected)), None
         )
         if found is not None:
             raise ValueError(f"forbidden vocabulary {found!r} in synthesis prose {label!r}")
+        invented = [
+            literal
+            for literal in _technical_literals(prose)
+            if not _literal_in_sources(literal, sources)
+        ]
+        if invented:
+            errors.append(f"synthesis prose {label!r} has literals absent from source: {invented}")
+        if not check_language(prose, locale, protected):
+            wrong_language.append(label)
+    if wrong_language:
+        errors.append(f"synthesis prose is not in locale {locale!r}: {', '.join(wrong_language)}")
+    if errors:
+        raise ValueError("\n".join(errors))
     return document
 
 
@@ -232,7 +253,7 @@ def synthesis_protected_literals(
     for finding in document.findings:
         group = included_by_key.get(finding.key)
         if group is not None:
-            literals.extend(_source_literals(group, outcome.evidence.get(group.key, "")))
+            literals.extend(_source_literals(group, outcome))
         literals.extend(_BACKTICK_LITERAL.findall(_finding_prose(finding)))
     return tuple(dict.fromkeys(literals))
 
@@ -269,6 +290,20 @@ def build_synthesis_prompt(
             "the persisted evidence below. Do not inspect files, discover findings, judge them "
             "again, or change their severity or status. Return only the requested JSON."
         ),
+        "# Language",
+        (
+            (
+                "Write every prose field in Korean, 합니다체. "
+                if presentation.locale == "ko"
+                else "Write every prose field in technical-neutral English in the configured register. "
+            )
+            + "Identifiers, paths, code and error strings stay in their original form, wrapped in backticks."
+        ),
+        (
+            "인벤토리 검증이 실패하면 `gmail_account_inventory_unavailable`과 함께 HTTP 503을 반환합니다."
+            if presentation.locale == "ko"
+            else "If inventory validation fails, return HTTP 503 with `gmail_account_inventory_unavailable`."
+        ),
         "# Runtime contract",
         (
             f"You have a wall-clock budget of {budget_seconds} seconds and zero tool calls. "
@@ -279,12 +314,6 @@ def build_synthesis_prompt(
         f"display_name: {presentation.display_name}",
         f"audience: {audience}",
         f"register: {register}",
-        (
-            "Use neutral, polite written Korean. With formal register, use 합니다체. Never use "
-            "casual speech or 해요체."
-            if presentation.locale == "ko"
-            else "Use technical-neutral English in the configured register."
-        ),
         (
             "When audience is mixed, define necessary technical terms in the same sentence. "
             "For engineers, still define jargon that the codebase itself does not use."
@@ -305,7 +334,9 @@ def build_synthesis_prompt(
         ),
         (
             "Keep every identifier, path, code fragment, and error string byte-for-byte verbatim. "
-            "Never translate or paraphrase them."
+            "Never translate or paraphrase them. "
+            "Wrap every identifier, path, code fragment, and error string in backticks in the output. "
+            "Omit source literals when they are not needed; never invent or mutate them."
         ),
         (
             "Use no jargon that the codebase itself does not use. If a term is necessary, define "
@@ -504,7 +535,9 @@ async def synthesize(
                 continue
             return None, facts(f"fallback:{reason}")
         try:
-            document = validate_synthesis(result.output, merged, outcome)
+            document = validate_synthesis(
+                result.output, merged, outcome, locale=presentation.locale
+            )
         except (ValidationError, ValueError) as exc:
             if attempt_number == 1:
                 retry_errors = [str(exc)]
