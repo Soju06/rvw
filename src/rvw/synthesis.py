@@ -452,14 +452,14 @@ async def synthesize(
     presentation: PresentationConfig,
     runtime: Runtime,
     out_root: Path,
-    deadline_seconds: int = 120,
+    deadline_seconds: int = 300,
     host_gate: HostSlotGate | None = None,
 ) -> tuple[SynthesisDocument | None, SynthesisFacts]:
     """Run one bounded synthesis pass with one content-validation retry."""
 
     if deadline_seconds < 1:
         raise ValueError("deadline_seconds must be at least 1")
-    budget = min(120, deadline_seconds)
+    budget = min(300, deadline_seconds)
     runtime = _tool_less(runtime)
     default_model, default_effort = _runtime_policy(runtime)
     attempts: list[RunResult[BaseModel]] = []

@@ -171,7 +171,7 @@ def test_prompt_prioritizes_locale_and_backtick_instructions(locale: Literal["ko
         coverage=[],
         status="complete",
         presentation=PresentationConfig(locale=locale),
-        budget_seconds=120,
+        budget_seconds=300,
     )
     language = (
         "Write every prose field in Korean, 합니다체."
@@ -220,7 +220,7 @@ async def test_language_retry_names_all_fields_and_keeps_one_retry(
         assert label in feedback
     assert result == (value if correct_retry else None)
     assert facts.status == ("ok" if correct_retry else "fallback:schema-invalid")
-    assert all(call["deadline_seconds"] == 120 for call in runtime.calls)
+    assert all(call["deadline_seconds"] == 300 for call in runtime.calls)
 
 
 def test_retained_synthesis_checks_the_saved_locale(tmp_path: Path) -> None:

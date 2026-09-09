@@ -52,7 +52,7 @@ Synthesis validation MUST call the existing language checker separately for over
 
 ### Requirement: Synthesis failures are bounded and nonfatal
 
-Synthesis MUST use the resolved Codex model/effort, tool-less execution, review-phase egress restrictions and existing no-output watchdog. Each attempt MUST state a budget of at most 120 seconds capped by the requested runtime deadline and zero tool calls. A second invalid output or runtime failure MUST continue without synthesis, retain diagnostics, and record `fallback:<reason>` without changing the review status. A validated output MUST record `ok`. Cancellation MUST remain cancellation.
+Synthesis MUST use the resolved Codex model/effort, tool-less execution, review-phase egress restrictions and existing no-output watchdog. Each attempt MUST state a budget of at most 300 seconds capped by the requested runtime deadline and zero tool calls. A second invalid output or runtime failure MUST continue without synthesis, retain diagnostics, and record `fallback:<reason>` without changing the review status. A validated output MUST record `ok`. Cancellation MUST remain cancellation.
 
 #### Scenario: Second malformed output
 

@@ -483,7 +483,7 @@ async def test_second_invalid_output_falls_back_with_aggregated_telemetry(
         tool_calls=0,
     )
     assert len(runtime.calls) == 2
-    assert all(call["deadline_seconds"] == 120 for call in runtime.calls)
+    assert all(call["deadline_seconds"] == 300 for call in runtime.calls)
 
 
 async def test_process_failure_and_exception_fall_back_without_retry(tmp_path: Path) -> None:
