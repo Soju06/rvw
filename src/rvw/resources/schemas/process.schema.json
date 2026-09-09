@@ -254,7 +254,7 @@
           "type": "string"
         },
         "model": {
-          "default": "gpt-5.6-sol",
+          "default": "gpt-6-astra",
           "minLength": 1,
           "title": "Model",
           "type": "string"

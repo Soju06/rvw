@@ -56,7 +56,7 @@ class CodexRuntimePolicy:
 
 
 DEFAULT_CODEX_RUNTIME_POLICY = CodexRuntimePolicy(
-    model="gpt-5.6-sol",
+    model="gpt-6-astra",
     reasoning_effort="high",
 )
 

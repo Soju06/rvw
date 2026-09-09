@@ -227,7 +227,7 @@ The App MUST invoke `rvw run` with the complete PR URL, captured webhook base an
 #### Scenario: Deployer overlays a reasoning effort
 
 - **WHEN** `RVW_CODEX_REASONING_EFFORT` is `medium` and `RVW_CODEX_MODEL` is unset when the App starts a review
-- **THEN** the review script executes `rvw run` with `--reasoning-effort 'medium'` after `--json` and no `--model` argument, and the resulting `process.json` records `runtime.model: gpt-5.6-sol` and `runtime.reasoning_effort: medium`
+- **THEN** the review script executes `rvw run` with `--reasoning-effort 'medium'` after `--json` and no `--model` argument, and the resulting `process.json` records `runtime.model: gpt-6-astra` and `runtime.reasoning_effort: medium`
 
 #### Scenario: Codex policy vars are unset
 

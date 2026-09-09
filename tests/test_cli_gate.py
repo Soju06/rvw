@@ -2648,12 +2648,12 @@ def test_gate_accepted_blocker_verifies_admin_actor(
         (
             [],
             {"RVW_CODEX_REASONING_EFFORT": "medium"},
-            CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="medium"),
+            CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="medium"),
         ),
         (
-            ["--model", "gpt-6-astra", "--reasoning-effort", "high"],
+            ["--model", "gpt-5.6-sol", "--reasoning-effort", "high"],
             {"RVW_CODEX_MODEL": "env-model", "RVW_CODEX_REASONING_EFFORT": "low"},
-            CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="high"),
+            CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="high"),
         ),
     ],
 )

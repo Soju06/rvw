@@ -20,7 +20,7 @@ EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", 
 def test_packaged_default_policy_is_high_effort() -> None:
     assert (
         CodexRuntimePolicy(
-            model="gpt-5.6-sol", reasoning_effort="high", reasoning_summary="detailed"
+            model="gpt-6-astra", reasoning_effort="high", reasoning_summary="detailed"
         )
         == DEFAULT_CODEX_RUNTIME_POLICY
     )
@@ -40,9 +40,9 @@ def test_resolver_returns_the_packaged_default_without_overrides() -> None:
 def test_explicit_values_beat_environment_values() -> None:
     environ = {CODEX_MODEL_ENV: "env-model", REASONING_EFFORT_ENV: "low"}
 
-    policy = resolve_codex_runtime_policy("gpt-6-astra", "high", environ)
+    policy = resolve_codex_runtime_policy("gpt-5.6-sol", "high", environ)
 
-    assert policy == CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="high")
+    assert policy == CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="high")
 
 
 def test_environment_values_beat_the_packaged_default() -> None:
@@ -54,9 +54,9 @@ def test_environment_values_beat_the_packaged_default() -> None:
 
 
 def test_explicit_model_combines_with_environment_effort() -> None:
-    policy = resolve_codex_runtime_policy("gpt-6-astra", None, {REASONING_EFFORT_ENV: "medium"})
+    policy = resolve_codex_runtime_policy("gpt-5.6-sol", None, {REASONING_EFFORT_ENV: "medium"})
 
-    assert policy.model == "gpt-6-astra"
+    assert policy.model == "gpt-5.6-sol"
     assert policy.reasoning_effort == "medium"
 
 
@@ -68,20 +68,20 @@ def test_environment_model_combines_with_explicit_effort() -> None:
 
 
 def test_each_field_falls_back_to_its_own_default() -> None:
-    assert resolve_codex_runtime_policy("gpt-6-astra", None, {}).reasoning_effort == "high"
-    assert resolve_codex_runtime_policy(None, "medium", {}).model == "gpt-5.6-sol"
+    assert resolve_codex_runtime_policy("gpt-5.6-sol", None, {}).reasoning_effort == "high"
+    assert resolve_codex_runtime_policy(None, "medium", {}).model == "gpt-6-astra"
     assert resolve_codex_runtime_policy(None, None, {CODEX_MODEL_ENV: "env-model"}) == (
         CodexRuntimePolicy(model="env-model", reasoning_effort="high")
     )
     assert resolve_codex_runtime_policy(None, None, {REASONING_EFFORT_ENV: "medium"}) == (
-        CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="medium")
+        CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="medium")
     )
 
 
 def test_resolved_policy_keeps_the_detailed_reasoning_summary() -> None:
     resolved = [
         resolve_codex_runtime_policy(None, None, {}),
-        resolve_codex_runtime_policy("gpt-6-astra", "high", {}),
+        resolve_codex_runtime_policy("gpt-5.6-sol", "high", {}),
         resolve_codex_runtime_policy(
             None, None, {CODEX_MODEL_ENV: "env-model", REASONING_EFFORT_ENV: "low"}
         ),
@@ -143,7 +143,7 @@ def test_blank_explicit_model_names_the_option(value: str) -> None:
 
 
 def test_model_values_are_trimmed() -> None:
-    assert resolve_codex_runtime_policy("  gpt-6-astra  ", None, {}).model == "gpt-6-astra"
+    assert resolve_codex_runtime_policy("  gpt-5.6-sol  ", None, {}).model == "gpt-5.6-sol"
     assert (
         resolve_codex_runtime_policy(None, None, {CODEX_MODEL_ENV: " env-model\n"}).model
         == "env-model"
@@ -163,14 +163,14 @@ def test_effort_values_are_trimmed_but_not_case_folded() -> None:
 def test_explicit_value_wins_even_when_the_environment_is_malformed() -> None:
     environ = {CODEX_MODEL_ENV: "   ", REASONING_EFFORT_ENV: "turbo"}
 
-    policy = resolve_codex_runtime_policy("gpt-6-astra", "high", environ)
+    policy = resolve_codex_runtime_policy("gpt-5.6-sol", "high", environ)
 
-    assert policy == CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="high")
+    assert policy == CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="high")
 
 
 def test_explicit_field_does_not_shield_the_other_malformed_environment_field() -> None:
     with pytest.raises(ValueError, match=REASONING_EFFORT_ENV):
-        resolve_codex_runtime_policy("gpt-6-astra", None, {REASONING_EFFORT_ENV: "turbo"})
+        resolve_codex_runtime_policy("gpt-5.6-sol", None, {REASONING_EFFORT_ENV: "turbo"})
     with pytest.raises(ValueError, match=CODEX_MODEL_ENV):
         resolve_codex_runtime_policy(None, "high", {CODEX_MODEL_ENV: " "})
 

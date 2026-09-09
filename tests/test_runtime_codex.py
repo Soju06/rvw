@@ -36,7 +36,7 @@ _TOOL_LESS_LOG = (
     "OpenAI Codex v0.152.0 (research preview)\n"
     "--------\n"
     "workdir: /work/checkout\n"
-    "model: gpt-5.6-sol\n"
+    "model: gpt-6-astra\n"
     "provider: openai\n"
     "approval: never\n"
     "sandbox: read-only\n"
@@ -269,7 +269,7 @@ async def test_valid_run_materializes_artifacts_and_command(
                 "codex",
                 "exec",
                 "--model",
-                "gpt-5.6-sol",
+                "gpt-6-astra",
                 "-c",
                 'model_reasoning_effort="high"',
                 "-c",
@@ -292,7 +292,7 @@ async def test_valid_run_materializes_artifacts_and_command(
         )
     ]
     usage = RunUsage.model_validate_json((run_dir / "usage.json").read_text(encoding="utf-8"))
-    assert usage.model == "gpt-5.6-sol"
+    assert usage.model == "gpt-6-astra"
     assert usage.reasoning_effort == "high"
     assert usage.status is RunUsageStatus.COMPLETED
     assert usage.cli_tokens_used == 42
@@ -1301,7 +1301,7 @@ def test_runtime_policy_renders_a_custom_reasoning_summary() -> None:
 def test_legacy_usage_without_reasoning_summary_loads() -> None:
     usage = RunUsage.model_validate(
         {
-            "model": "gpt-5.6-sol",
+            "model": "gpt-6-astra",
             "reasoning_effort": "high",
             "status": "completed",
             "wall_seconds": 1.5,
@@ -1504,7 +1504,7 @@ async def test_real_codex_returns_valid_result(tmp_path: Path) -> None:
 
 def test_runtime_defaults_to_the_packaged_policy() -> None:
     assert CodexRuntime().policy is DEFAULT_CODEX_RUNTIME_POLICY
-    assert CodexRuntime().policy == CodexRuntimePolicy(model="gpt-5.6-sol", reasoning_effort="high")
+    assert CodexRuntime().policy == CodexRuntimePolicy(model="gpt-6-astra", reasoning_effort="high")
 
 
 async def test_runtime_renders_an_overridden_policy_into_argv_and_usage(

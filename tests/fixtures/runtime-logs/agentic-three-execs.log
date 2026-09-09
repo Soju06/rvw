@@ -1,7 +1,7 @@
 OpenAI Codex v0.152.0 (research preview)
 --------
 workdir: /work/checkout
-model: gpt-5.6-sol
+model: gpt-6-astra
 provider: openai
 approval: never
 sandbox: danger-full-access

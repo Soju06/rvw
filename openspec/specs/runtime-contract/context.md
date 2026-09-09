@@ -18,7 +18,7 @@ This capability defines the machine boundary between rvw and a model runtime. It
 - OpenAI strict output rejects object schemas whose `required` array omits defaulted properties. The implementation rewrites both root and item schemas so every property is required.
 - The four-part validity contract prevents a zero exit or parseable partial artifact from being silently treated as PASS. On the PR #1119 smoke, all 39 discovery runs were valid; the complete discovery/adjudication walls were about 410s and 197s.
 - Output loss is normalized as `missing`, `empty`, `unparseable`, or `schema-invalid`, distinct from process exits, spawn failures, and missing completion markers. Invalid results retain exit/spawn detail and artifact paths and sizes for persisted coverage and adjudication diagnostics.
-- On 2026-08-27, RVW inherited `gpt-5.6-sol / max` from ambient Codex
+- On 2026-08-27, RVW inherited `gpt-6-astra / max` from ambient Codex
   configuration for every cancelled discovery session. The adapter now owns a
   typed policy and passes model plus `model_reasoning_effort` explicitly. The
   default preserves that profile while a later measured change evaluates
@@ -136,13 +136,13 @@ Precedence, per field and resolved once per command:
 | --- | --- | --- |
 | 1. explicit option | `--model <m>` | `--reasoning-effort <e>` |
 | 2. environment (only when the option is absent) | `RVW_CODEX_MODEL` | `RVW_CODEX_REASONING_EFFORT` |
-| 3. packaged default | `gpt-5.6-sol` | `high` |
+| 3. packaged default | `gpt-6-astra` | `high` |
 
 The effort vocabulary is the nine named variants of Codex 0.152.0 `ReasoningEffort` in `codex-rs/protocol/src/openai_models.rs` at tag `rust-v0.152.0`: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, `persistent`, as lowercase wire strings. The same enum also has a `Custom(String)` passthrough, which rvw deliberately does not accept: the point of the override is to run a named cell, and a typo that Codex would forward as a custom effort would silently produce an unlabelled measurement. Validation therefore happens in `resolve_codex_runtime_policy` at the command boundary, while the `CodexRuntimePolicy` value object stays permissive (any non-empty effort string) so the adapter itself is not narrower than Codex. The model has no allowlist by design; it is any non-empty string after trimming and the proxy decides whether it is served, which is what lets a `gpt-6` variant be tried without a release. A malformed option or a present but malformed variable fails closed before any runtime exists, with the message naming the source (`--model`, `--reasoning-effort`, `RVW_CODEX_MODEL`, or `RVW_CODEX_REASONING_EFFORT`) and, for the effort, the allowed values. `reasoning_summary` is not overridable and stays `detailed`.
 
 The resolved object is passed to every runtime the command constructs: discovery (whose retry and coverage redispatch reuse the same runtime object inside `rvw.discover`), tool-less initial adjudication and agentic expanded adjudication (which reuse the runtimes the pipeline passes), the stack presence pass, `sample`, and re-adjudication. The one runtime kept on the packaged default is the publication language rewriter in `publish.py`: its 60 s prose translation is not a review runtime and letting it follow the cell would add translation quality to a measurement about lane behaviour. `usage.json` already recorded `model` and `reasoning_effort` from the runtime's policy; `RuntimeSettings` now carries both as well, so `process.json runtime.model` / `runtime.reasoning_effort` and the `model=` / `reasoning_effort=` lines of `environment.txt` name the cell, and `run` / `auto` append `--model <m> --reasoning-effort <e>` to the canonical command after `--no-output-timeout <n>`. Both fields default to the packaged values with `min_length=1`, so a legacy `process.json` loads and an empty string is rejected, mirroring the 0.15.0 `reasoning_summary` field; the Worker parser follows the same rule.
 
-The planned A/B has four cells on the same consuming-repository pull requests: the default (`gpt-5.6-sol` / `max`), `medium`, `high`, and a `gpt-6` variant at its default effort. For each cell the comparison reads `summary.json failed_lanes` (dead-lane count and reasons), `usage.json tool_calls` per lane and attempt, and `summary.json wave_wall_seconds` per wave, plus the confirmed finding counts so a cheaper cell that stops exploring is not mistaken for a better one. The cell of every run is legible from its own artifacts, which is the reason the values are recorded in four places rather than only in the runtime log.
+The planned A/B has four cells on the same consuming-repository pull requests: the default (`gpt-6-astra` / `max`), `medium`, `high`, and a `gpt-6` variant at its default effort. For each cell the comparison reads `summary.json failed_lanes` (dead-lane count and reasons), `usage.json tool_calls` per lane and attempt, and `summary.json wave_wall_seconds` per wave, plus the confirmed finding counts so a cheaper cell that stops exploring is not mistaken for a better one. The cell of every run is legible from its own artifacts, which is the reason the values are recorded in four places rather than only in the runtime log.
 
 ## Default reasoning effort: `high` (2026-09-09)
 
@@ -157,3 +157,18 @@ The A/B the override was built for ran the same day on the same consuming-reposi
 At `max` two runs died on different lanes, which places the failure in the effort setting rather than in any one lane's rules; both waves ran to the 900 s cap. At `high` every lane finished inside one discovery wave (762 s), adjudication ran, and the four confirmed findings were substantive on inspection (a documentation/implementation scope mismatch, a stale reference to two deleted lane files, and two path-predicate edge cases the author can act on). `high` therefore stopped the "final evidence pass" exploration that the 0.15.0 budget contract could not, without trading away findings.
 
 The packaged default moves from `max` to `high` on that evidence. The override surface stays as it is, so `max` remains one flag away for a repository that wants it, and the `medium` and `gpt-6` cells remain to be measured; they are cost and model explorations now rather than the fix. A single `high` run is thin evidence on its own; the default change is also what produces the replication runs, since every review from this release on is a `high` cell whose `usage.json` and `wave_wall_seconds` can be compared with the two `max` runs above.
+
+
+## Default model: `gpt-6-astra` (2026-09-09)
+
+The override surface was then used to run two more cells on the same pull request head, each deployed through the reusable deploy workflow's `codex_model` / `codex_reasoning_effort` inputs and cleared by a plain redeploy afterwards.
+
+| Cell | Model | Effort | Wall | Valid lanes | Discovery wave | Adjudication | Findings |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B | `gpt-5.6-sol` | `high` | 23 min | 6/6 | 762 s | 196 s + 333 s | 4 |
+| C | `gpt-5.6-sol` | `medium` | 8 min | 6/6 | 363 s | 21 s | 2 |
+| D | `gpt-6-astra` | `high` | 3 min | 6/6 | 93 s | 16 s | 1 |
+
+`gpt-6-astra` at `high` completed the same six lanes in about an eighth of the wall time of the legacy model at the same effort, with no lane near the 900 s deadline. The head under test is documentation-only, so the finding counts (4 / 2 / 1) say little about depth on code; C and D also published no new comments because the same head already carried the B and A₂ reviews and their findings matched open threads (`publication_skipped: duplicate_review_same_head`, `reused_thread_ids` 2 and 1), which is the living-thread behaviour working as specified.
+
+The packaged default moves to `gpt-6-astra` with `high` unchanged. The legacy `gpt-5.6-sol` remains selectable through `--model`, `RVW_CODEX_MODEL`, or the deploy input, and the tests that demonstrate the override precedence name it for exactly that reason: an override in a test must differ from the packaged default or the assertion is vacuous. If review depth on code pull requests regresses, the first comparison is `gpt-5.6-sol` at `high` on the same head through the deploy input; the settings API must not be used for that (it detaches the container application).
