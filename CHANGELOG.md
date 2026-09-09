@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/Soju06/rvw/compare/v0.18.0...v0.19.0) (2026-09-09)
+
+
+### Features
+
+* **deploy:** expose optional codex_model and codex_reasoning_effort inputs on the reusable deploy workflow ([#91](https://github.com/Soju06/rvw/issues/91)) ([5dbec5a](https://github.com/Soju06/rvw/commit/5dbec5ad6daccaf7f29876b831677b3575c554b5))
+
 ## [0.18.0](https://github.com/Soju06/rvw/compare/v0.17.0...v0.18.0) (2026-09-09)
 
 
