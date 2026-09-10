@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/Soju06/rvw/compare/v0.20.0...v0.21.0) (2026-09-10)
+
+
+### Features
+
+* **reporting:** synthesize a reader-first review publication ([#95](https://github.com/Soju06/rvw/issues/95)) ([584a3cf](https://github.com/Soju06/rvw/commit/584a3cf132283f1f1df7dfe04fd984e289b0e401))
+
 ## [0.20.0](https://github.com/Soju06/rvw/compare/v0.19.0...v0.20.0) (2026-09-09)
 
 
