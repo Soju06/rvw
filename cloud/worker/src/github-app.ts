@@ -1,6 +1,7 @@
 import {defaultPresentation, parsePresentationYaml, type PresentationConfig} from "./presentation";
 import {t} from "./i18n";
 import type {CheckConclusion} from "./review-job-contract";
+import {defaultTriggersPolicy, parseTriggersYaml, type TriggerFacts, type TriggersPolicy} from "./triggers";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -246,6 +247,7 @@ export interface CreateCheckRunInput {
   jobId: string;
   detailsUrl?: string;
   presentation?: PresentationConfig;
+  trigger?: TriggerFacts;
 }
 
 export interface CreatedCheckRun {
@@ -283,7 +285,7 @@ export async function createCheckRun(
         ...(input.detailsUrl === undefined ? {} : {details_url: input.detailsUrl}),
         output: {title: t("check_started", presentation.locale, {display_name: presentation.display_name}),
           summary: t("bootstrap_summary", presentation.locale),
-          text: checkDetails({job_id: input.jobId}, presentation)},
+          text: checkDetails({job_id: input.jobId, ...(input.trigger === undefined ? {} : {trigger: input.trigger})}, presentation)},
       }),
     },
     fetcher,
@@ -365,18 +367,74 @@ export async function getPresentationConfig(
   input: {owner: string; repo: string; baseSha: string},
   fetcher: GitHubFetch = fetch,
 ): Promise<{presentation: PresentationConfig; failure?: "presentation_config_invalid"}> {
-  const path = `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/.rvw/config.yaml?ref=${encodeURIComponent(input.baseSha)}`;
-  const response = await fetcher(`${GITHUB_API}${path}`, {method: "GET", headers: githubHeaders(token)});
-  if (response.status === 404) return {presentation: defaultPresentation()};
-  if (!response.ok) throw new GitHubApiError("presentation config read", response.status);
   try {
-    const body = objectValue(await response.json(), "presentation config");
-    if (body.type !== "file" || body.target !== undefined || body.encoding !== "base64" ||
-        typeof body.content !== "string" || body.content.length > 32_768) throw new Error();
-    const bytes = Uint8Array.from(atob(body.content.replace(/\s/g, "")), (character) => character.charCodeAt(0));
-    const raw = new TextDecoder("utf-8", {fatal: true}).decode(bytes);
-    return {presentation: parsePresentationYaml(raw)};
-  } catch {
+    const raw = await getBaseRefFile(token, input, ".rvw/config.yaml", fetcher);
+    return {presentation: raw === null ? defaultPresentation() : parsePresentationYaml(raw)};
+  } catch (error) {
+    if (error instanceof GitHubApiError) throw error;
     return {presentation: defaultPresentation(), failure: "presentation_config_invalid"};
   }
+}
+
+async function getBaseRefFile(
+  token: string,
+  input: {owner: string; repo: string; baseSha: string},
+  file: ".rvw/config.yaml" | ".rvw/policies/auto.yaml",
+  fetcher: GitHubFetch,
+): Promise<string | null> {
+  const path = `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/${file}?ref=${encodeURIComponent(input.baseSha)}`;
+  let response: Response;
+  try { response = await fetcher(`${GITHUB_API}${path}`, {method: "GET", headers: githubHeaders(token)}); }
+  catch { throw new GitHubApiError(`${file} read`, 503); }
+  if (response.status === 404) return null;
+  if (!response.ok) throw new GitHubApiError(`${file} read`, response.status);
+  const body = objectValue(await response.json(), "base-ref file");
+  const maximum = file === ".rvw/config.yaml" ? 32_768 : 131_072;
+  if (body.type !== "file" || body.target !== undefined || body.encoding !== "base64" ||
+      typeof body.content !== "string" || body.content.length > maximum) throw new Error("invalid base-ref file");
+  const bytes = Uint8Array.from(atob(body.content.replace(/\s/g, "")), (character) => character.charCodeAt(0));
+  return new TextDecoder("utf-8", {fatal: true}).decode(bytes);
+}
+
+export async function getTriggerPolicy(
+  token: string,
+  input: {owner: string; repo: string; baseSha: string},
+  fetcher: GitHubFetch = fetch,
+): Promise<{policy: TriggersPolicy; failure?: "policy_invalid"}> {
+  try {
+    const raw = await getBaseRefFile(token, input, ".rvw/policies/auto.yaml", fetcher);
+    return {policy: raw === null ? defaultTriggersPolicy() : parseTriggersYaml(raw)};
+  } catch (error) {
+    if (error instanceof GitHubApiError) throw error;
+    return {policy: defaultTriggersPolicy(), failure: "policy_invalid"};
+  }
+}
+
+/** Idempotent neutral outcome for a skipped head; no review job or sandbox is created. */
+export async function upsertSkippedCheckRun(
+  token: string,
+  input: CreateCheckRunInput & {title: string; summary: string; trigger: TriggerFacts; appId: string},
+  fetcher: GitHubFetch = fetch,
+): Promise<void> {
+  const presentation = input.presentation ?? defaultPresentation();
+  const prefix = `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}`;
+  const existing = objectValue(await githubJson("Check Runs read",
+    `${prefix}/commits/${input.headSha}/check-runs?check_name=${encodeURIComponent(presentation.short_name)}&filter=latest&per_page=100`,
+    token, {method: "GET"}, fetcher), "Check Runs read");
+  if (!Array.isArray(existing.check_runs)) throw new Error("GitHub Check Runs response is missing check_runs");
+  const check = existing.check_runs.map((entry) => objectValue(entry, "Check Run")).find((entry) => {
+    const app = entry.app;
+    return entry.external_id === input.jobId && typeof app === "object" && app !== null &&
+      String((app as Record<string, unknown>).id) === input.appId;
+  });
+  const text = checkDetails({trigger: input.trigger}, presentation);
+  if (check !== undefined && typeof check.id === "number") {
+    await updateCheckRun(token, {...input, checkRunId: check.id, conclusion: "neutral", text}, fetcher);
+    return;
+  }
+  await githubJson("skipped Check Run creation", `${prefix}/check-runs`, token, {method: "POST", body: JSON.stringify({
+    name: presentation.short_name, head_sha: input.headSha, external_id: input.jobId,
+    status: "completed", conclusion: "neutral", completed_at: new Date().toISOString(),
+    output: {title: input.title, summary: input.summary, text},
+  })}, fetcher);
 }

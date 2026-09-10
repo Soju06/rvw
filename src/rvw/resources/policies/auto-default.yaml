@@ -12,6 +12,9 @@ block_when:
 
 publish_state: comment
 
+# An absent triggers block means {mode: denylist, drafts: skip, rules: []}.
+# Consumers name their own review exclusions in the repository policy.
+
 # Review event per verdict. Defaults reproduce COMMENT-only publication; a
 # consuming repository opts into stronger events in its own base-ref copy.
 publish:

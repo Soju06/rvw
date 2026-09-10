@@ -29,5 +29,6 @@ export function summaryFixture(overrides: Record<string, unknown> = {}) {
     synthesis: {status: "ok", model: "gpt-6-astra", reasoning_effort: "high", wall_seconds: 1, tool_calls: 0},
     findings: {blocker: 0, warning: 0, suggestion: 0},
     verdicts: {CONFIRMED: 0, REJECTED: 0, UNCERTAIN: 0}, blockers: [],
+    trigger: {skipped: false, rule: null, mode: "denylist", bypassed: null, policy_error: null},
     markdown: "Canonical Python counts.", ...overrides};
 }

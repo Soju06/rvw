@@ -1,0 +1,1906 @@
+{
+  "policies": [
+    {
+      "name": "defaults",
+      "input": {},
+      "valid": true
+    },
+    {
+      "name": "denylist",
+      "input": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "release",
+            "authors": [
+              "github-actions[bot]"
+            ]
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "allowlist",
+      "input": {
+        "mode": "allowlist",
+        "drafts": "review",
+        "rules": [
+          {
+            "name": "main",
+            "base_branches": [
+              "main"
+            ]
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "empty-allowlist",
+      "input": {
+        "mode": "allowlist"
+      },
+      "valid": false
+    },
+    {
+      "name": "empty-rule",
+      "input": {
+        "rules": [
+          {}
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "name-only",
+      "input": {
+        "rules": [
+          {
+            "name": "empty"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-root",
+      "input": {
+        "unknown": true
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-rule",
+      "input": {
+        "rules": [
+          {
+            "name": "x",
+            "wat": true
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-mode",
+      "input": {
+        "mode": "all"
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-drafts",
+      "input": {
+        "drafts": "true"
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate-name",
+      "input": {
+        "rules": [
+          {
+            "name": "x",
+            "authors": [
+              "a"
+            ]
+          },
+          {
+            "name": "x",
+            "labels": [
+              "x"
+            ]
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "bad-name",
+      "input": {
+        "rules": [
+          {
+            "name": "UPPER",
+            "title": "x"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "null-policy",
+      "input": null,
+      "valid": false
+    },
+    {
+      "name": "string-list",
+      "input": {
+        "rules": [
+          {
+            "name": "x",
+            "authors": "bot"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "non-string-author",
+      "input": {
+        "rules": [
+          {
+            "name": "x",
+            "authors": [
+              1
+            ]
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "regex-compile",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "("
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "lookbehind",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "(?<=chore)release"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "negative-lookbehind",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "(?<!chore)release"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "python-named",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "(?P<kind>chore)"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "js-named",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "(?<kind>chore)"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "inline-flags",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "(?i)chore"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "regex-comment",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "(?#comment)x"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "atomic-group",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "(?>x)"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "word-shorthand",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\w+"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "digit-shorthand",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\d+"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "space-shorthand",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\s+"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "boundary",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\bchore"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "backref",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "(x)\\1"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "python-anchor",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\Achore"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "python-end-anchor",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "chore\\Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unicode-property",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\p{L}+"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "identity-escape",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\q"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "possessive",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "x++"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "possessive-range",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "x{1,2}+"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unescaped-close",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "]"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "literal-brace",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "a{hello}"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "escaped-punctuation",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^chore\\(release\\)"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "unicode-literal",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^검토"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "lookahead",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^chore(?=release)"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "noncapturing",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^(?:fix|chore):"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "explicit-range",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^[a-z][0-9]+"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "control-escape",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\t"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "hex-escape",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\x41"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "unicode-escape",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\uAC00"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "hyphen-name",
+      "input": {
+        "rules": [
+          {
+            "name": "-",
+            "authors": []
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "surrogate-escape",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\uD800"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "engine-syntax-0",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "a{"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "engine-syntax-1",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "a}"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "engine-syntax-2",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "a]"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "engine-syntax-3",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "a{b}"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "engine-syntax-4",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "a{2"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "engine-syntax-5",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "a{,2}"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "engine-syntax-6",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "[]"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "engine-syntax-7",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "[^]"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "literal-open-class",
+      "input": {
+        "rules": [
+          {
+            "name": "regex",
+            "title": "[[]"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "newline-name",
+      "input": {
+        "rules": [
+          {
+            "name": "release\n",
+            "title": "x"
+          }
+        ]
+      },
+      "valid": false
+    }
+  ],
+  "matches": [
+    {
+      "name": "bori-1772",
+      "rule": {
+        "name": "changesets-release",
+        "authors": [
+          "github-actions[bot]"
+        ],
+        "head_branches": [
+          "changeset-release/*"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "unrelated",
+      "rule": {
+        "name": "other",
+        "authors": [
+          "release-bot[bot]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "author-case",
+      "rule": {
+        "name": "bot",
+        "authors": [
+          "GITHUB-ACTIONS[BOT]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "bot-suffix",
+      "rule": {
+        "name": "human",
+        "authors": [
+          "github-actions"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "label-case",
+      "rule": {
+        "name": "chore",
+        "labels": [
+          "🧹 CHORE"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "unicode-lowercase",
+      "rule": {
+        "name": "label",
+        "labels": [
+          "STRAẞE"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "Straße"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "unicode-no-casefold",
+      "rule": {
+        "name": "label",
+        "labels": [
+          "STRASSE"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "Straße"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "head-glob",
+      "rule": {
+        "name": "branch",
+        "head_branches": [
+          "changeset-release/?ain"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "base-glob",
+      "rule": {
+        "name": "base",
+        "base_branches": [
+          "m[ab]in"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "branch-case",
+      "rule": {
+        "name": "branch",
+        "base_branches": [
+          "MAIN"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "title",
+      "rule": {
+        "name": "title",
+        "title": "^chore\\(release\\)"
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "all-fields",
+      "rule": {
+        "name": "all",
+        "authors": [
+          "github-actions[bot]"
+        ],
+        "head_branches": [
+          "changeset-release/*"
+        ],
+        "base_branches": [
+          "main"
+        ],
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "^chore"
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "and-fail",
+      "rule": {
+        "name": "all",
+        "authors": [
+          "github-actions[bot]"
+        ],
+        "base_branches": [
+          "develop"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "glob-[z-a]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[z-a]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "a",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "glob-[z-aq]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[z-aq]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "q",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-[!z-a]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[!z-a]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "a",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-[]a]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[]a]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "]",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-[!a]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[!a]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "b",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-[[]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[[]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "[",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-feature/*",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "feature/*"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "feature/a/b",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-feature/?",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "feature/?"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "feature/🧹",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-[a-z]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[a-z]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "q",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "unicode-title",
+      "rule": {
+        "name": "title",
+        "title": "^검토"
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "검토합니다",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "dot-cr",
+      "rule": {
+        "name": "regex",
+        "title": "^a.b$"
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "a\rb",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "dot-unicode-line",
+      "rule": {
+        "name": "regex",
+        "title": "^a.b$"
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "a b",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "dot-lf",
+      "rule": {
+        "name": "regex",
+        "title": "^a.b$"
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "a\nb",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "end-final-cr",
+      "rule": {
+        "name": "regex",
+        "title": "x$"
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "x\r",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "end-final-lf",
+      "rule": {
+        "name": "regex",
+        "title": "x$"
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "x\n",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "end-final-unicode-line",
+      "rule": {
+        "name": "regex",
+        "title": "x$"
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "x ",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "glob-[]]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[]]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "]",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-[!]]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[!]]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "a",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-[!]]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[!]]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "]",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": false
+    },
+    {
+      "name": "glob-[a-]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[a-]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "-",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-[a-c-e]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[a-c-e]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "-",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    },
+    {
+      "name": "glob-[\\-a]",
+      "rule": {
+        "name": "glob",
+        "head_branches": [
+          "[\\-a]"
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "a",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "matches": true
+    }
+  ],
+  "auto_policies": [
+    {
+      "name": "default",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment"
+      },
+      "valid": true
+    },
+    {
+      "name": "triggers",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment",
+        "triggers": {
+          "rules": [
+            {
+              "name": "release",
+              "authors": [
+                "github-actions[bot]"
+              ]
+            }
+          ]
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "triggers-with-publication-controls",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment",
+        "publish": {
+          "channels": [
+            "checks"
+          ],
+          "checks": {
+            "on_block": "neutral",
+            "on_pass": "neutral"
+          },
+          "inline": {
+            "severity_at_least": "warning",
+            "max_comments": 2
+          }
+        },
+        "triggers": {
+          "rules": [
+            {
+              "name": "release",
+              "authors": [
+                "github-actions[bot]"
+              ]
+            }
+          ]
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "unknown-root",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment",
+        "unknown": true
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-publish",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment",
+        "publish": {
+          "on_block": "random"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-thread",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment",
+        "threads": {
+          "custom": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "approval-needs-opt-in",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment",
+        "publish": {
+          "on_pass": "approve"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "approval-opt-in",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment",
+        "publish": {
+          "on_pass": "approve",
+          "approve_requires_explicit_opt_in": false
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "strict-publication-bool",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment",
+        "publish": {
+          "dismiss_on_pass": "true"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "strict-fallback-bool",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment",
+        "allow_language_fallback": "true"
+      },
+      "valid": false
+    },
+    {
+      "name": "count-coercion",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": "2",
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment"
+      },
+      "valid": true
+    },
+    {
+      "name": "count-bool",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": true,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment"
+      },
+      "valid": true
+    },
+    {
+      "name": "invalid-count",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": -1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment"
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-count-field",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion",
+          "unknown": true
+        },
+        "block_when": {
+          "severity_at_least": "blocker"
+        },
+        "publish_state": "comment"
+      },
+      "valid": false
+    },
+    {
+      "name": "confirmed-coercion",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker",
+          "confirmed_only": "false"
+        },
+        "publish_state": "comment"
+      },
+      "valid": true
+    },
+    {
+      "name": "bad-confirmed",
+      "input": {
+        "promote_to_blocker": {
+          "agreement_at_least": 2,
+          "severity_at_least": "warning"
+        },
+        "drop": {
+          "agreement_at_most": 1,
+          "severity_at_most": "suggestion"
+        },
+        "block_when": {
+          "severity_at_least": "blocker",
+          "confirmed_only": "maybe"
+        },
+        "publish_state": "comment"
+      },
+      "valid": false
+    }
+  ],
+  "yaml_policies": [
+    {
+      "name": "plain-bool",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {rules: [{name: rule, authors: [yes]}]}\n",
+      "valid": false
+    },
+    {
+      "name": "quoted-bool",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {rules: [{name: rule, authors: [\"yes\"]}]}\n",
+      "valid": true
+    },
+    {
+      "name": "single-letter-string",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {rules: [{name: rule, authors: [y, n]}]}\n",
+      "valid": true
+    },
+    {
+      "name": "null-trigger",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: null\n",
+      "valid": false
+    },
+    {
+      "name": "duplicate-trigger-key",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers:\n  mode: denylist\n  mode: allowlist\n",
+      "valid": false
+    },
+    {
+      "name": "duplicate-other-key",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish_state: none\n",
+      "valid": false
+    },
+    {
+      "name": "triggers-with-publication-float-cap",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {channels: [checks], inline: {severity_at_least: warning, max_comments: 2.0}}\ntriggers: {rules: [{name: release, authors: [\"github-actions[bot]\"]}]}\n",
+      "valid": false
+    },
+    {
+      "name": "publication-single-letter-bool",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {dismiss_on_pass: y}\n",
+      "valid": false
+    },
+    {
+      "name": "quoted-regex",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers:\n  rules:\n    - name: release\n      title: \"^chore\\\\(release\\\\)\"\n",
+      "valid": true
+    },
+    {
+      "name": "single-quoted-regex",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers:\n  rules:\n    - name: release\n      title: '^chore\\(release\\)'\n",
+      "valid": true
+    },
+    {
+      "name": "underscore-string",
+      "input": "promote_to_blocker: {agreement_at_least: '1_0', severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\n",
+      "valid": true
+    },
+    {
+      "name": "scientific-int",
+      "input": "promote_to_blocker: {agreement_at_least: 1e3, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\n",
+      "valid": false
+    },
+    {
+      "name": "scientific-float-missing-sign",
+      "input": "promote_to_blocker: {agreement_at_least: 1.0e3, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\n",
+      "valid": false
+    },
+    {
+      "name": "scientific-float",
+      "input": "promote_to_blocker: {agreement_at_least: 1.0e+3, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\n",
+      "valid": true
+    },
+    {
+      "name": "large-int",
+      "input": "promote_to_blocker: {agreement_at_least: 9007199254740993, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\n",
+      "valid": true
+    },
+    {
+      "name": "confirmed-integer",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker, confirmed_only: 0}\npublish_state: comment\n",
+      "valid": true
+    }
+  ],
+  "evaluations": [
+    {
+      "name": "draft-match",
+      "policy": {
+        "rules": [
+          {
+            "name": "release",
+            "authors": [
+              "github-actions[bot]"
+            ]
+          }
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": true
+      },
+      "expected": {
+        "skipped": true,
+        "rule": null,
+        "mode": "denylist"
+      }
+    },
+    {
+      "name": "allow-match",
+      "policy": {
+        "mode": "allowlist",
+        "rules": [
+          {
+            "name": "release",
+            "authors": [
+              "github-actions[bot]"
+            ]
+          }
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "expected": {
+        "skipped": false,
+        "rule": "release",
+        "mode": "allowlist"
+      }
+    },
+    {
+      "name": "allow-miss",
+      "policy": {
+        "mode": "allowlist",
+        "rules": [
+          {
+            "name": "human",
+            "authors": [
+              "human"
+            ]
+          }
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "expected": {
+        "skipped": true,
+        "rule": null,
+        "mode": "allowlist"
+      }
+    },
+    {
+      "name": "or-second",
+      "policy": {
+        "rules": [
+          {
+            "name": "human",
+            "authors": [
+              "human"
+            ]
+          },
+          {
+            "name": "release",
+            "authors": [
+              "github-actions[bot]"
+            ]
+          }
+        ]
+      },
+      "metadata": {
+        "author": "github-actions[bot]",
+        "head_branch": "changeset-release/main",
+        "base_branch": "main",
+        "labels": [
+          "🧹 Chore"
+        ],
+        "title": "chore(release): version packages",
+        "draft": false
+      },
+      "expected": {
+        "skipped": true,
+        "rule": "release",
+        "mode": "denylist"
+      }
+    }
+  ]
+}

@@ -94,6 +94,38 @@ function startOptions(call: unknown[]): {env: Record<string, string>} {
   return (call as [string, {env: Record<string, string>}])[1];
 }
 beforeEach(() => { vi.clearAllMocks(); });
+it("keeps webhook trigger facts in terminal check diagnostics", async () => {
+  const test = setup("running");
+  const trigger = {skipped: false, rule: null, mode: "denylist", bypassed: "rerequested", policy_error: "policy_invalid"};
+  test.record().message = {...message, trigger};
+  await test.job.alarm();
+  const update = mocks.updateCheckRun.mock.calls.at(-1)?.[1];
+  expect(update?.text).toContain('"bypassed": "rerequested"');
+  expect(update?.text).toContain('"policy_error": "policy_invalid"');
+});
+it("keeps the webhook trigger snapshot over a completed summary default", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  const trigger = {skipped: false, rule: null, mode: "denylist", bypassed: "rerequested", policy_error: "policy_invalid"};
+  test.record().message = {...message, trigger};
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed",
+    startTime: new Date(), exitCode: 0} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture()));
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture()));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const facts = JSON.parse(mocks.updateCheckRun.mock.calls[0][1].text!.split("```json\n")[1].split("\n```")[0]);
+  expect(facts.trigger).toEqual(trigger);
+});
+it("includes webhook trigger facts in the bootstrap check", async () => {
+  const test = setup("provisioning");
+  delete test.record().checkRunId;
+  const trigger = {skipped: false, rule: null, mode: "denylist" as const, bypassed: null, policy_error: "policy_read_failed"};
+  const input = {...message, trigger};
+  test.record().message = input;
+  await expect(test.job.start(input)).rejects.toThrow("process failed to start");
+  expect(mocks.createCheckRun).toHaveBeenCalledWith("installation-placeholder", expect.objectContaining({trigger}));
+});
 describe("terminal diagnostic persistence", () => {
   it.each(["timeout", "start failure", "supersession"])(
     "persists all diagnostics before Sandbox destruction after %s", async (path) => {
@@ -323,6 +355,50 @@ it("carries the publication facts and skip reason verbatim into the check text",
   const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
   expect(facts.publish).toEqual(publish);
   expect(facts.publication_skipped).toBeNull();
+});
+
+it("terminalizes a skipped summary as a localized neutral Check", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed",
+    startTime: new Date(), exitCode: 0} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture()));
+  const trigger = {skipped: true, rule: "changesets-release", mode: "denylist",
+    bypassed: null, policy_error: null};
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture({trigger,
+    lanes: {dispatched: 0, valid: 0, uncovered: 0, uncovered_regions: 0},
+    markdown: "Review skipped by repository policy: changesets-release."})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  const update = mocks.updateCheckRun.mock.calls[0][1];
+  expect(update).toMatchObject({conclusion: "neutral", title: "rvw · Review skipped",
+    summary: "Review skipped by repository policy: changesets-release."});
+  const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
+  expect(facts.trigger).toEqual(trigger);
+});
+
+it.each(["block", "invalid-manifest"])("keeps %s failures when a summary claims a trigger skip", async (failure) => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  const exitCode = failure === "block" ? 1 : 0;
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed",
+    startTime: new Date("2026-09-05T00:00:00Z"), exitCode} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({
+    status: failure === "block" ? "block" : "pass", exit_code: exitCode,
+  })));
+  const summary = JSON.stringify(summaryFixture({
+    trigger: {skipped: true, rule: "release", mode: "denylist", bypassed: null, policy_error: null},
+    lanes: {dispatched: 0, valid: 0, uncovered: 0, uncovered_regions: 0},
+    markdown: "Review skipped by repository policy: release.",
+  }));
+  test.files.set("/workspace/result/summary.json", summary);
+  refreshManifest(test.files);
+  if (failure === "invalid-manifest") test.files.set("/workspace/result/summary.json", summary + "\n");
+  await test.job.alarm();
+  const update = mocks.updateCheckRun.mock.calls[0][1];
+  expect(update.conclusion).toBe("neutral");
+  expect(update.title).not.toContain("Review skipped");
+  expect(test.record().state).toBe("failed");
 });
 
 it("shows the publish policy reason when Python exits 2 on publish_policy_invalid", async () => {

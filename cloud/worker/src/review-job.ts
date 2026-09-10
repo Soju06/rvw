@@ -148,6 +148,9 @@ function statusView(record: JobRecord): JobStatus {
 }
 
 function titleFor(mapping: ReviewResultMapping, presentation: PresentationConfig): string {
+  if (mapping.reasonCode === "trigger_skipped") {
+    return t("check_skipped", presentation.locale, {short_name: presentation.short_name});
+  }
   const key = mapping.outcome === "pass" ? "check_passed" : mapping.outcome === "block" ? "check_blocked" :
     mapping.conclusion === "success" ? "check_passed" : mapping.conclusion === "failure" ? "check_blocked" : "check_incomplete";
   return t(key, presentation.locale, {display_name: presentation.display_name});
@@ -166,6 +169,7 @@ function humanReason(code: string | undefined, presentation: PresentationConfig)
 function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSummary | null,
   presentation: PresentationConfig, mapping?: ReviewResultMapping): string {
   return checkDetails({job_id: record.jobId, reason,
+    trigger: record.message?.trigger ?? summary?.trigger ?? null,
     presentation_config_failure: record.presentationConfigFailure ?? null,
     publish_policy_failure: record.publishPolicyFailure ?? null,
     publication_failure: summary?.publication_failure ?? mapping?.publication_failure ?? null,
@@ -342,6 +346,7 @@ export class RvwReviewJob extends DurableObject<Env> {
         headSha: message.headSha,
         jobId: message.jobId,
         presentation: record.presentation,
+        trigger: message.trigger,
       });
       record = {
         ...record,
@@ -812,6 +817,9 @@ export class RvwReviewJob extends DurableObject<Env> {
     try {
       if (summaryJson === null) throw new Error("summary.json is missing");
       summary = parseArtifactSummary(summaryJson);
+      if (summary.trigger?.skipped && mapping.outcome === "block") {
+        throw new Error("trigger skip disagrees with BLOCK process status");
+      }
     } catch (error) {
       if (mapping.terminalState === "completed") {
         mapping = {...mapping, terminalState: "failed", conclusion: "neutral",
@@ -819,6 +827,10 @@ export class RvwReviewJob extends DurableObject<Env> {
       }
     }
     const presentation = summary?.presentation ?? mapping.presentation ?? record.presentation ?? defaultPresentation();
+    if (mapping.terminalState === "completed" && mapping.outcome === "pass" && summary?.trigger?.skipped) {
+      mapping = {...mapping, conclusion: "neutral", outcome: undefined, reasonCode: "trigger_skipped",
+        reason: summary.markdown};
+    }
     record = {...record, presentation};
     const token = await this.token(record, config.githubAppId);
     await updateCheckRun(token, {

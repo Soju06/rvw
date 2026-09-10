@@ -48,6 +48,33 @@ line can escalate past that policy. Set `RVW_GITHUB_LOGIN` to the publishing log
 (`<app-slug>[bot]` for an App) so rvw can reuse and resolve its own review threads; with a
 personal token the login is read from the token itself.
 
+The same policy file can select which pull requests are eligible for review. This example
+skips generated Changesets release pull requests while retaining the default draft behavior:
+
+```yaml
+triggers:
+  mode: denylist
+  drafts: skip
+  rules:
+    - name: changesets-release
+      authors: ["github-actions[bot]"]
+      head_branches: ["changeset-release/*"]
+```
+
+Trigger rules use only pull-request metadata. Fields in a rule are ANDed, values in a
+list and separate rules are ORed. Optional `base_branches`, `labels`, and `title` can
+narrow the rule; see [the App policy reference](../cloud/README.md#publication-identity-and-permissions)
+for matching and validation details. `mode: allowlist` reviews only matching PRs and
+requires at least one rule. The base-ref policy is authoritative, and a malformed CLI
+policy exits 2. A matching skip exits 0, prints `review skipped by repository policy:
+changesets-release`, writes trigger facts to `summary.json`, and runs no discovery.
+`rvw run --json` and `rvw auto --json` retain the machine-readable process contract.
+
+`rvw run`, `rvw auto`, and `rvw review` accept `--force-review` to bypass matching and
+record `trigger.bypassed: force`. GitHub's Check Run **Re-run** action likewise bypasses
+the filter with `trigger.bypassed: rerequested`. SHA and uncommitted targets have no PR
+metadata and record `trigger.not_applicable: true`.
+
 `CODEX_API_KEY` is read only by the provider declared in the generated Codex config.
 `CODEX_BASE_URL` is optional and selects the endpoint at startup; the image has no
 personal proxy URL or credential baked into it. `GH_TOKEN` (or `GITHUB_TOKEN`) is needed

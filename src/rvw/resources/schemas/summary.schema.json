@@ -455,6 +455,73 @@
       "title": "SynthesisFacts",
       "type": "object"
     },
+    "TriggerFacts": {
+      "additionalProperties": false,
+      "description": "Repository trigger evaluation recorded in summary artifacts.",
+      "properties": {
+        "skipped": {
+          "default": false,
+          "title": "Skipped",
+          "type": "boolean"
+        },
+        "rule": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule"
+        },
+        "mode": {
+          "default": "denylist",
+          "enum": [
+            "denylist",
+            "allowlist"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "bypassed": {
+          "anyOf": [
+            {
+              "enum": [
+                "rerequested",
+                "force"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bypassed"
+        },
+        "policy_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Error"
+        },
+        "not_applicable": {
+          "default": false,
+          "title": "Not Applicable",
+          "type": "boolean"
+        }
+      },
+      "title": "TriggerFacts",
+      "type": "object"
+    },
     "VerdictCounts": {
       "additionalProperties": false,
       "properties": {
@@ -718,6 +785,9 @@
     },
     "synthesis": {
       "$ref": "#/$defs/SynthesisFacts"
+    },
+    "trigger": {
+      "$ref": "#/$defs/TriggerFacts"
     }
   },
   "title": "ExecutionSummary",
