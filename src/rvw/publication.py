@@ -16,6 +16,7 @@ from rvw.schema import Severity, Verdict
 
 if TYPE_CHECKING:
     from rvw.summary import RunSummary
+    from rvw.synthesis import SynthesisDocument, SynthesisFinding
 
 
 def plain_text(text: str) -> str:
@@ -26,6 +27,22 @@ def plain_text(text: str) -> str:
 def evidence_fence(evidence: str) -> str:
     fence = "`" * max(3, max((len(s) + 1 for s in re.findall(r"`+", evidence)), default=0))
     return f"{fence}\n{evidence}\n{fence}"
+
+
+def _evidence_details(evidence: str, locale: str) -> str:
+    return "\n".join(
+        [
+            "<details>",
+            f"<summary>{t('pub.evidence', locale)}</summary>",
+            "",
+            evidence_fence(evidence),
+            "</details>",
+        ]
+    )
+
+
+def _synthesis_by_key(synthesis: SynthesisDocument | None) -> dict[str, SynthesisFinding]:
+    return {} if synthesis is None else {finding.key: finding for finding in synthesis.findings}
 
 
 def publication_counts(merged: MergeResult, outcome: AdjudicationOutcome | None) -> tuple[int, int]:
@@ -73,14 +90,32 @@ def render_publication_item(
     outcome: AdjudicationOutcome | None,
     *,
     presentation: PresentationConfig,
+    synthesis: SynthesisDocument | None = None,
     inline: bool = False,
+    synopsis: bool = False,
 ) -> str:
     locale = presentation.locale
     tag = f"`{group.rule_id}`"
-    label = f"**{t('severity.' + group.severity.value, locale)} · {tag}**"
+    severity = t("severity." + group.severity.value, locale)
+    label = f"**{severity} · {tag}**"
     location = (
         f"{group.file}:{group.line if group.line is not None else t('common.unknown', locale)}"
     )
+    synthesized = _synthesis_by_key(synthesis).get(group.key)
+    if synthesized is not None:
+        parts = [
+            f"### {synthesized.title}",
+            f"`{location}` · **{severity}** · {tag}",
+            synthesized.consequence,
+        ]
+        if synopsis:
+            return "\n\n".join(parts)
+        parts[2:2] = [synthesized.what]
+        parts.append(synthesized.fix)
+        if outcome is not None and (evidence := outcome.evidence.get(group.key, "")):
+            parts.append(_evidence_details(evidence, locale))
+        return "\n\n".join(parts)
+
     parts = [label] if inline else [f"### `{location}`", label]
     # Runtime findings have one body field. Its first paragraph is the human title;
     # subsequent paragraphs and the adjudication reason retain impact/correction.
@@ -105,7 +140,8 @@ def render_publication(
     outcome: AdjudicationOutcome | None,
     coverage: Sequence[LaneCoverage] = (),
     presentation: PresentationConfig | None = None,
-    excluded_keys: frozenset[str] = frozenset(),
+    synthesis: SynthesisDocument | None = None,
+    inline_keys: frozenset[str] = frozenset(),
     summary: RunSummary | None = None,
 ) -> str:
     presentation = presentation or PresentationConfig()
@@ -113,7 +149,7 @@ def render_publication(
     groups: dict[str, list[CollapseGroup]] = {"blockers": [], "warnings": [], "uncertain": []}
     for group in merged.groups:
         verdict = outcome.verdicts.get(group.key) if outcome is not None else None
-        if verdict is Verdict.REJECTED or group.key in excluded_keys:
+        if verdict is Verdict.REJECTED:
             continue
         section = (
             "uncertain"
@@ -123,7 +159,20 @@ def render_publication(
             else "warnings"
         )
         groups[section].append(group)
-    parts = [t("pub.overall", locale), publication_summary(merged, outcome, coverage, presentation)]
+    if synthesis is not None:
+        order = {finding.key: index for index, finding in enumerate(synthesis.findings)}
+        for selected in groups.values():
+            selected.sort(key=lambda group: order.get(group.key, len(order)))
+    if synthesis is None:
+        parts = [
+            t("pub.overall", locale),
+            publication_summary(merged, outcome, coverage, presentation),
+        ]
+    else:
+        opening = synthesis.overview
+        if synthesis.first_action is not None:
+            opening = f"{opening} {synthesis.first_action}"
+        parts = [opening, publication_summary(merged, outcome, coverage, presentation)]
     if summary is not None and summary.status.value in {"failed", "degraded"}:
         parts.append(t("pub.incomplete", locale))
     for section, selected in groups.items():
@@ -133,6 +182,14 @@ def render_publication(
         parts.append(
             "\n\n".join(
                 render_publication_item(group, outcome, presentation=presentation)
+                if synthesis is None
+                else render_publication_item(
+                    group,
+                    outcome,
+                    presentation=presentation,
+                    synthesis=synthesis,
+                    synopsis=group.key in inline_keys,
+                )
                 for group in selected
             )
             if selected

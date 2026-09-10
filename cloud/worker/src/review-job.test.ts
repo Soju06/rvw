@@ -7,7 +7,8 @@ import {beforeEach, describe, expect, it, vi} from "vitest";
 const mocks = vi.hoisted(() => ({
   sandboxFor: vi.fn(), configureOutbound: vi.fn(),
   getInstallationToken: vi.fn(async () => "installation-placeholder"),
-  getPresentationConfig: vi.fn(async (): Promise<{presentation: PresentationConfig; failure?: string}> => ({presentation: {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko" as const, footer: null}, failure: undefined as string | undefined})),
+  getPresentationConfig: vi.fn(async (): Promise<{presentation: PresentationConfig; failure?: string}> => ({presentation: {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko" as const, footer: null,
+    voice: {audience: "engineers", register: "formal", guidance: null}}, failure: undefined as string | undefined})),
   createCheckRun: vi.fn(async () => ({id: 42, appSlug: "review-app"})),
   getCheckRunAppSlug: vi.fn(async () => "review-app"),
   clearInstallationToken: vi.fn(), updateCheckRun: vi.fn(async (_token: string, _request: UpdateCheckRunInput) => {}),
@@ -225,7 +226,7 @@ it.each([
   expect(test.record().conclusion).toBe(conclusion);
 });
 
-it("puts failed lanes, per-wave walls, receipts, and distinct regions into the check text", async () => {
+it("puts synthesis, failed lanes, per-wave walls, receipts, and distinct regions into the check text", async () => {
   const test = setup("publishing");
   test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
   test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "/workspace/run-review.sh", status: "completed",
@@ -238,6 +239,8 @@ it("puts failed lanes, per-wave walls, receipts, and distinct regions into the c
     lanes: {dispatched: 6, valid: 4, uncovered: 26, uncovered_regions: 13},
     failed_lanes: [{lane_id: "correctness", reason: "exit_nonzero:124"}, {lane_id: "hygiene", reason: "exit_nonzero:124"}],
     wave_wall_seconds: waveWallFixture({discovery_initial: 600.134, discovery_retry: 600.085, adjudication_initial: 600.144}),
+    synthesis: {status: "fallback:schema-invalid", model: "gpt-6-astra", reasoning_effort: "high",
+      wall_seconds: 9.5, tool_calls: 0},
     markdown: "검토를 마쳤습니다. 수정이 필요한 문제 0건, 확인이 필요한 항목 0건. 검토되지 않은 변경 구간이 13곳 있습니다. 검토를 완료하지 못한 규칙 묶음 2개: correctness, hygiene.",
   })));
   refreshManifest(test.files);
@@ -250,6 +253,8 @@ it("puts failed lanes, per-wave walls, receipts, and distinct regions into the c
   expect(facts.failed_lanes).toEqual([{lane_id: "correctness", reason: "exit_nonzero:124"}, {lane_id: "hygiene", reason: "exit_nonzero:124"}]);
   expect(facts.wave_wall_seconds).toMatchObject({discovery_initial: 600.134, discovery_retry: 600.085,
     discovery_redispatch: null, adjudication_initial: 600.144, adjudication_expanded: null});
+  expect(facts.synthesis).toEqual({status: "fallback:schema-invalid", model: "gpt-6-astra",
+    reasoning_effort: "high", wall_seconds: 9.5, tool_calls: 0});
   expect(facts).not.toHaveProperty("uncovered");
 });
 
@@ -415,7 +420,8 @@ it("keeps Python branding when a missing summary makes the check neutral", async
 it("persists a malformed bootstrap diagnostic before creating the default check", async () => {
   const test = setup("provisioning");
   delete test.record().checkRunId;
-  mocks.getPresentationConfig.mockResolvedValueOnce({presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null}, failure: "presentation_config_invalid"});
+  mocks.getPresentationConfig.mockResolvedValueOnce({presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null,
+    voice: {audience: "engineers", register: "formal", guidance: null}}, failure: "presentation_config_invalid"});
   await expect(test.job.start(message)).rejects.toThrow("process failed to start");
   expect(test.record().presentationConfigFailure).toBe("presentation_config_invalid");
   expect(test.storage.put.mock.invocationCallOrder[0]).toBeLessThan(mocks.createCheckRun.mock.invocationCallOrder[0]);

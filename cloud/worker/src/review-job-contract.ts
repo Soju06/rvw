@@ -223,6 +223,14 @@ export interface SummaryFailedLane {
   reason: string;
 }
 
+export interface SynthesisFacts {
+  status: "ok" | `fallback:${string}`;
+  model: string | null;
+  reasoning_effort: string | null;
+  wall_seconds: number | null;
+  tool_calls: number | null;
+}
+
 export interface SummaryLanes {
   dispatched: number;
   valid: number;
@@ -256,6 +264,7 @@ export interface ArtifactSummary extends PublicationFacts {
   lanes: SummaryLanes;
   failed_lanes: SummaryFailedLane[];
   wave_wall_seconds: WaveWallSeconds | null;
+  synthesis: SynthesisFacts;
   findings: Record<"blocker" | "warning" | "suggestion", number>;
   verdicts: Record<"CONFIRMED" | "REJECTED" | "UNCERTAIN", number>;
   blockers: string[];
@@ -265,6 +274,25 @@ export interface ArtifactSummary extends PublicationFacts {
   publication_skipped: string | null;
   /** null for legacy summaries written before publication facts existed. */
   publish: PublishFacts | null;
+}
+
+const LEGACY_SYNTHESIS: SynthesisFacts = {
+  status: "fallback:not-run", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: null,
+};
+
+function synthesisFacts(value: unknown): SynthesisFacts {
+  if (value === undefined) return {...LEGACY_SYNTHESIS};
+  const record = recordValue(value, "summary synthesis");
+  fields(record, ["status", "model", "reasoning_effort", "wall_seconds", "tool_calls"], "summary synthesis");
+  const statusValid = typeof record.status === "string" && /^(?:ok|fallback:[^\s]+)$/.test(record.status);
+  const nullableNonempty = (entry: unknown) => entry === null || (typeof entry === "string" && entry.length > 0);
+  if (!statusValid || !nullableNonempty(record.model) || !nullableNonempty(record.reasoning_effort) ||
+      !(record.wall_seconds === null || (typeof record.wall_seconds === "number" &&
+        Number.isFinite(record.wall_seconds) && record.wall_seconds >= 0)) ||
+      !(record.tool_calls === null || integer(record.tool_calls))) {
+    throw new Error("summary synthesis facts are invalid");
+  }
+  return record as unknown as SynthesisFacts;
 }
 
 function publishFacts(value: unknown): PublishFacts | null {
@@ -330,7 +358,7 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
   fields(value, ["schema_version", "lanes", "findings", "verdicts", "blockers", "markdown",
     ...(value.presentation === undefined ? [] : ["presentation"]),
     ...["publication_failure", "language_fallback_used", "failed_lanes", "wave_wall_seconds",
-      "publication_skipped", "publish"].filter(key => key in value)], "summary");
+      "publication_skipped", "publish", "synthesis"].filter(key => key in value)], "summary");
   const publication = publicationFacts(value);
   const presentation = parsePresentation(value.presentation === undefined ? {} : value.presentation);
   for (const [key, names] of [["findings", ["blocker", "warning", "suggestion"]],
@@ -364,6 +392,7 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
   return {schema_version: 1, lanes: {dispatched, valid, uncovered, uncovered_regions: uncoveredRegions},
     markdown: value.markdown, presentation, ...publication,
     failed_lanes: failedLanes(value.failed_lanes), wave_wall_seconds: waveWallSeconds(value.wave_wall_seconds),
+    synthesis: synthesisFacts(value.synthesis),
     publication_skipped: publicationSkipped(value.publication_skipped), publish: publishFacts(value.publish),
     findings: value.findings as ArtifactSummary["findings"],
     verdicts: value.verdicts as ArtifactSummary["verdicts"], blockers: value.blockers as string[]};

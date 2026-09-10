@@ -35,6 +35,7 @@ from rvw.summary import (
     SDKObservations,
     running_summary,
 )
+from rvw.synthesis import SynthesisDocument, validate_synthesis
 from rvw.target import ResolvedTarget
 
 if TYPE_CHECKING:
@@ -309,6 +310,30 @@ class RunHandle:
     def load_outcome(self) -> AdjudicationOutcome:
         raw = _load_json(self.dir / "outcome.json", "outcome")
         return AdjudicationOutcome.model_validate(raw)
+
+    def save_synthesis(self, synthesis: SynthesisDocument | None) -> None:
+        if synthesis is None:
+            (self.dir / "synthesis.json").unlink(missing_ok=True)
+        else:
+            _write_json(self.dir / "synthesis.json", synthesis.model_dump(mode="json"))
+
+    def load_synthesis(self) -> SynthesisDocument | None:
+        """Legacy or unusable synthesis cannot prevent diagnostic/report replay."""
+        try:
+            raw = self._load_contained_json("synthesis.json", "synthesis")
+            try:
+                target = self.load_target()
+            except StageMissing:
+                target = None
+            return validate_synthesis(
+                raw,
+                self.load_merge(),
+                self.load_outcome(),
+                locale=self.load_presentation().locale,
+                target=target,
+            )
+        except (OSError, ValueError, KeyError):
+            return None
 
     def save_report(self, report: str) -> None:
         path = self.dir / "report.md"

@@ -64,6 +64,9 @@
           ],
           "default": null,
           "title": "Footer"
+        },
+        "voice": {
+          "$ref": "#/$defs/VoiceConfig"
         }
       },
       "title": "PresentationConfig",
@@ -316,6 +319,71 @@
       "title": "SummaryLanes",
       "type": "object"
     },
+    "SynthesisFacts": {
+      "additionalProperties": false,
+      "description": "Non-judgmental health and runtime facts for the synthesis pass.",
+      "properties": {
+        "status": {
+          "default": "fallback:not-run",
+          "title": "Status",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Effort"
+        },
+        "wall_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wall Seconds"
+        },
+        "tool_calls": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Calls"
+        }
+      },
+      "title": "SynthesisFacts",
+      "type": "object"
+    },
     "VerdictCounts": {
       "additionalProperties": false,
       "properties": {
@@ -339,6 +407,45 @@
         }
       },
       "title": "VerdictCounts",
+      "type": "object"
+    },
+    "VoiceConfig": {
+      "additionalProperties": false,
+      "description": "Repository-selected reviewer voice used only for presentation.",
+      "properties": {
+        "audience": {
+          "default": "engineers",
+          "enum": [
+            "engineers",
+            "mixed"
+          ],
+          "title": "Audience",
+          "type": "string"
+        },
+        "register": {
+          "default": "formal",
+          "enum": [
+            "formal",
+            "neutral"
+          ],
+          "title": "Register",
+          "type": "string"
+        },
+        "guidance": {
+          "anyOf": [
+            {
+              "maxLength": 800,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guidance"
+        }
+      },
+      "title": "VoiceConfig",
       "type": "object"
     },
     "WaveWallSeconds": {
@@ -520,6 +627,9 @@
     },
     "publish": {
       "$ref": "#/$defs/PublishFacts"
+    },
+    "synthesis": {
+      "$ref": "#/$defs/SynthesisFacts"
     }
   },
   "title": "ExecutionSummary",

@@ -818,12 +818,14 @@ def publish_review(
     )
     posted_groups = [group for group in inline_groups if group.key not in gathered.suppressed]
     posted_keys = frozenset(group.key for group in posted_groups)
+    synthesis = run.load_synthesis() if gate_verdict is None else None
     body = render_publication(
         merged=merged,
         outcome=outcome,
         coverage=coverage,
         presentation=presentation,
-        excluded_keys=posted_keys,
+        synthesis=synthesis,
+        inline_keys=posted_keys,
         summary=summary,
     )
     if gate_verdict is not None:
@@ -833,7 +835,13 @@ def publish_review(
     markers = {candidate.key: _marker_for(candidate) for candidate in candidates}
     comments: list[dict[str, object]] = []
     for group in posted_groups:
-        text = render_publication_item(group, outcome, presentation=presentation, inline=True)
+        text = render_publication_item(
+            group,
+            outcome,
+            presentation=presentation,
+            synthesis=synthesis,
+            inline=True,
+        )
         marker = markers.get(group.key)
         if marker is not None:
             text = f"{text}\n\n{marker}"
@@ -846,6 +854,11 @@ def publish_review(
     }
     reply_ids = list(replies)
     dismiss_message = t("publish.dismissed", locale)
+    protected_literals = list(failed_lane_ids(coverage))
+    if synthesis is not None and outcome is not None:
+        from rvw.synthesis import synthesis_protected_literals
+
+        protected_literals.extend(synthesis_protected_literals(synthesis, merged, outcome))
     documents, fallback_used = _check_publication(
         [
             body,
@@ -858,8 +871,8 @@ def publish_review(
         locale=locale,
         rewriter=rewriter,
         allow_language_fallback=allow_language_fallback,
-        # Lane identifiers named by the failed-lanes sentence are data, not prose.
-        protected_literals=failed_lane_ids(coverage),
+        # Lane and source identifiers are verbatim data, not publication prose.
+        protected_literals=list(dict.fromkeys(protected_literals)),
     )
     body = documents[0]
     fallback_body = documents[1 + len(comments)]

@@ -23,6 +23,26 @@ class PresentationConfigInvalid(ValueError):
         super().__init__(f"{self.reason}: {detail}")
 
 
+class VoiceConfig(BaseModel):
+    """Repository-selected reviewer voice used only for presentation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True, serialize_by_alias=True)
+
+    audience: Literal["engineers", "mixed"] = "engineers"
+    register_: Literal["formal", "neutral"] = Field(default="formal", alias="register")
+    guidance: str | None = Field(default=None, max_length=800)
+
+    @field_validator("guidance")
+    @classmethod
+    def _plain_multiline_guidance(cls, value: str | None) -> str | None:
+        if value is not None and any(
+            char != "\n" and unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+            for char in value
+        ):
+            raise ValueError("voice guidance must contain plain text")
+        return value
+
+
 class PresentationConfig(BaseModel):
     """Base-ref presentation snapshot, safe to retain in strict run contracts."""
 
@@ -32,6 +52,7 @@ class PresentationConfig(BaseModel):
     short_name: str = Field(default="rvw", min_length=1, max_length=40)
     locale: Literal["ko", "en"] = "en"
     footer: str | None = Field(default=None, max_length=240)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
 
     @field_validator("display_name", "short_name")
     @classmethod

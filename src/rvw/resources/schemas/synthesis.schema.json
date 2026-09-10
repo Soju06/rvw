@@ -1,0 +1,79 @@
+{
+  "$defs": {
+    "SynthesisFinding": {
+      "additionalProperties": false,
+      "description": "One human explanation keyed to an authoritative merged finding.",
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "what": {
+          "minLength": 1,
+          "title": "What",
+          "type": "string"
+        },
+        "consequence": {
+          "minLength": 1,
+          "title": "Consequence",
+          "type": "string"
+        },
+        "fix": {
+          "minLength": 1,
+          "title": "Fix",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "what",
+        "consequence",
+        "fix"
+      ],
+      "title": "SynthesisFinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Strict persisted and runtime-facing synthesis artifact.",
+  "properties": {
+    "overview": {
+      "minLength": 1,
+      "title": "Overview",
+      "type": "string"
+    },
+    "first_action": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "First Action"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/SynthesisFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "overview",
+    "first_action",
+    "findings"
+  ],
+  "title": "SynthesisDocument",
+  "type": "object"
+}

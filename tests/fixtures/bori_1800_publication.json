@@ -1,0 +1,24 @@
+{
+  "finding": {
+    "rule_id": "test-ci/critical-flaw",
+    "file": "apps/api/src/user.test.ts",
+    "hunk_id": "apps/api/src/user.test.ts@@-60,8+60,12@@",
+    "line": 67,
+    "severity": "blocker",
+    "body": "The database double returns the same fixture for every `findUnique` call and the test never asserts the query arguments. A broken implementation can query the wrong user and still pass. Make the mock honor the requested ID or assert `findUnique` was called with `where: { id: \"usr_1\" }` and add a mismatch case.",
+    "original_body_ko": "데이터베이스 대역은 모든 `findUnique` 호출에 같은 fixture를 반환하고 테스트는 조회 인자를 확인하지 않습니다. 잘못된 구현이 다른 사용자를 조회해도 테스트가 통과합니다. 대역이 요청받은 ID에 맞게 응답하도록 만들고 `findUnique`가 `where: { id: \"usr_1\" }`로 호출되었는지 확인하는 불일치 사례를 추가해야 합니다."
+  },
+  "adjudication": {
+    "reason": "Confirmed: the mock does not honor lookup arguments, and the background-task failure test contains no assertion that would detect incorrect rejection handling.",
+    "reason_ko": "Confirmed: 데이터베이스 대역은 조회 인자를 반영하지 않으며 백그라운드 작업 실패 테스트에는 잘못된 거부 처리를 감지할 검증문이 없습니다.",
+    "evidence": "findUnique: vi.fn().mockResolvedValue(userFixture)"
+  },
+  "synthesis": {
+    "overview": "이 변경은 사용자 조회 동작을 검증하는 테스트를 보강합니다. 방향은 적절하지만 잘못된 사용자를 조회해도 테스트가 통과하는 문제를 머지 전에 고쳐야 합니다.",
+    "first_action": "먼저 `findUnique`가 요청받은 ID에 맞는 결과를 반환하도록 테스트 대역을 수정해야 합니다.",
+    "title": "잘못된 사용자를 조회해도 테스트가 통과합니다",
+    "what": "`apps/api/src/user.test.ts`의 데이터베이스 테스트 대역은 모든 `findUnique` 호출에 같은 `userFixture`를 반환하며 `where: { id: \"usr_1\" }` 인자를 확인하지 않습니다.",
+    "consequence": "구현이 다른 사용자 ID를 조회해도 이 테스트는 실패하지 않습니다.",
+    "fix": "`findUnique`가 요청받은 ID에 맞는 결과를 반환하게 만들고 ID가 다를 때 실패하는 사례를 추가해야 합니다."
+  }
+}

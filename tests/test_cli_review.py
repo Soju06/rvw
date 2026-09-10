@@ -624,6 +624,7 @@ def test_review_end_to_end_writes_all_stages_and_json_shape(
         "coverage_totals",
         "error",
         "build",
+        "synthesis",
     }
     run_dir = out_root / str(payload["run_id"])
     assert {path.name for path in run_dir.iterdir()} >= {
@@ -653,6 +654,7 @@ def test_review_end_to_end_writes_all_stages_and_json_shape(
         "coverage_totals",
         "error",
         "build",
+        "synthesis",
     }
     assert payload["build"] == summary["build"]
     assert str(summary["build"]["build_id"]) in (run_dir / "report.md").read_text()

@@ -97,6 +97,9 @@
           ],
           "default": null,
           "title": "Footer"
+        },
+        "voice": {
+          "$ref": "#/$defs/VoiceConfig"
         }
       },
       "title": "PresentationConfig",
@@ -323,6 +326,45 @@
         }
       },
       "title": "SDKObservations",
+      "type": "object"
+    },
+    "VoiceConfig": {
+      "additionalProperties": false,
+      "description": "Repository-selected reviewer voice used only for presentation.",
+      "properties": {
+        "audience": {
+          "default": "engineers",
+          "enum": [
+            "engineers",
+            "mixed"
+          ],
+          "title": "Audience",
+          "type": "string"
+        },
+        "register": {
+          "default": "formal",
+          "enum": [
+            "formal",
+            "neutral"
+          ],
+          "title": "Register",
+          "type": "string"
+        },
+        "guidance": {
+          "anyOf": [
+            {
+              "maxLength": 800,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guidance"
+        }
+      },
+      "title": "VoiceConfig",
       "type": "object"
     }
   },

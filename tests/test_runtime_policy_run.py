@@ -25,7 +25,7 @@ from rvw.lane import Lane
 from rvw.presentation import PresentationConfig
 from rvw.registry import EffectiveRegistry, LaneSource
 from rvw.runtimes import RunDiagnostic, RunResult, RunStatus, RunUsage, RunUsageStatus
-from rvw.runtimes.codex import CodexRuntime
+from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
 from rvw.schema import RuntimeFinding, RuntimeLaneOutput, Severity, Tier
 from rvw.target import ResolvedTarget
 
@@ -51,6 +51,7 @@ EXPECTED_USAGE_DIRS = frozenset(
         "adjudicate-runtime/initial/r1",
         "adjudicate-runtime/initial/r2",
         "adjudicate-runtime/initial/r3",
+        "synthesis-runtime/initial/r1",
     }
 )
 
@@ -165,20 +166,42 @@ def recording_runtime_class(record: OfflineRun) -> type[CodexRuntime]:
             started = time.perf_counter()
             run_dir.mkdir(parents=True, exist_ok=True)
             record.raw_executions.append(run_dir)
-            group_keys = schema["properties"]["items"]["items"]["properties"]["group_key"]["enum"]
-            output = validate(
-                {
-                    "items": [
-                        {
-                            "group_key": key,
-                            "verdict": "CONFIRMED",
-                            "reason": "verified",
-                            "evidence": "source quote",
-                        }
-                        for key in group_keys
-                    ]
-                }
-            )
+            if "overview" in schema["properties"]:
+                assert self.mode is CodexRuntimeMode.TOOL_LESS
+                retained = json.loads((run_dir.parents[2] / "merge.json").read_text())
+                output = validate(
+                    {
+                        "overview": "This change adjusts the configured value. The check needs attention.",
+                        "first_action": "Address the reported check before merging.",
+                        "findings": [
+                            {
+                                "key": group["key"],
+                                "title": "The changed value needs a check.",
+                                "what": "The check in `a.py` reports a fixture finding.",
+                                "consequence": "The affected check remains unresolved.",
+                                "fix": "Update the affected check.",
+                            }
+                            for group in retained["groups"]
+                        ],
+                    }
+                )
+            else:
+                group_keys = schema["properties"]["items"]["items"]["properties"]["group_key"][
+                    "enum"
+                ]
+                output = validate(
+                    {
+                        "items": [
+                            {
+                                "group_key": key,
+                                "verdict": "CONFIRMED",
+                                "reason": "verified",
+                                "evidence": "source quote",
+                            }
+                            for key in group_keys
+                        ]
+                    }
+                )
             usage = self._usage(
                 status=RunUsageStatus.COMPLETED, started=started, log_path=run_dir / "run.log"
             )
@@ -298,7 +321,13 @@ def test_resolved_policy_reaches_every_usage_artifact_of_a_full_run(
         "retry",
     ]
     assert [attempt["wave"] for attempt in lane_coverage["redispatch"]] == ["coverage_redispatch"]
-    assert len(offline_run.raw_executions) == 3
+    assert len(offline_run.raw_executions) == 4
+    synthesis = json.loads((out / "synthesis.json").read_text(encoding="utf-8"))
+    assert synthesis["overview"].startswith("This change")
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert summary["synthesis"]["status"] == "ok"
+    assert summary["synthesis"]["model"] == expected_model
+    assert summary["synthesis"]["reasoning_effort"] == expected_effort
 
     for path in usage_paths:
         usage = RunUsage.model_validate_json(path.read_text(encoding="utf-8"))

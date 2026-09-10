@@ -141,9 +141,9 @@ def test_one_rewrite_covers_body_inline_and_422_fallback_without_changing_eviden
     assert len(payloads) == 2
     assert result.body_fallback_count == 1
     assert not result.language_fallback_used
-    # The non-inline and inline explanations each occur once in their initial
-    # document and once in the prevalidated bulk-fallback document.
-    assert fake.calls[0].count(ENGLISH) == 4
+    # Every finding remains in both body variants, and the inline finding also
+    # appears in the inline comment and appended 422 fallback section.
+    assert fake.calls[0].count(ENGLISH) == 6
     supplied = "".join(fake.calls[0])
     for protected in [SOURCE, "bori/inline", "bori/body", "src/inline.py:12", "차단"]:
         assert protected not in supplied
@@ -156,8 +156,8 @@ def test_one_rewrite_covers_body_inline_and_422_fallback_without_changing_eviden
         assert check_language(body, "ko")
         assert ENGLISH not in body
         assert evidence_fence(SOURCE) in body
-    assert fallback["body"].count(evidence_fence(SOURCE)) == 2
-    assert fallback["body"].count("`bori/inline`") == 1
+    assert fallback["body"].count(evidence_fence(SOURCE)) == 3
+    assert fallback["body"].count("`bori/inline`") == 2
     assert fallback["body"].count("`bori/body`") == 1
     assert run.load_merge().model_dump_json() == before_merge
     assert run.load_outcome().model_dump_json() == before_outcome
