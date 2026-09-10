@@ -23,7 +23,7 @@ from rvw.runtimes import Runtime
 from rvw.schema import Verdict
 from rvw.store import RunHandle, RunStore, StageMissing, _write_json
 from rvw.summary import RunError, RunSummary, execution_summary, summarize_run
-from rvw.synthesis import SynthesisDocument, report_synthesis, synthesize
+from rvw.synthesis import SynthesisDocument, SynthesisFacts, report_synthesis, synthesize
 from rvw.target import ResolvedTarget
 
 Adjudicator = Callable[
@@ -297,18 +297,21 @@ async def synthesize_run(
     summary = run.load_summary()
     # Invalidate the previous explanation before a fresh attempt, including cancellation.
     run.save_synthesis(None)
-    synthesis, facts = await synthesize(
-        target=target,
-        merged=merged,
-        outcome=outcome,
-        coverage=discovered.coverage,
-        status=summary.status.value,
-        presentation=presentation,
-        runtime=runtime,
-        out_root=out_root or run.dir / "synthesis-runtime",
-        deadline_seconds=deadline_seconds,
-        host_gate=host_gate,
-    )
+    if presentation.synthesis.enabled:
+        synthesis, facts = await synthesize(
+            target=target,
+            merged=merged,
+            outcome=outcome,
+            coverage=discovered.coverage,
+            status=summary.status.value,
+            presentation=presentation,
+            runtime=runtime,
+            out_root=out_root or run.dir / "synthesis-runtime",
+            deadline_seconds=deadline_seconds,
+            host_gate=host_gate,
+        )
+    else:
+        synthesis, facts = None, SynthesisFacts(status="disabled")
     run.save_synthesis(synthesis)
     summary = summary.model_copy(update={"synthesis": facts})
     run.save_summary(summary)

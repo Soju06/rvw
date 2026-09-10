@@ -27,6 +27,7 @@ import {
   type JobState,
   type ReviewResultMapping,
 } from "./review-job-contract";
+import {defaultPublicationPolicy, getPublicationPolicy, type PublicationPolicy} from "./publication-policy";
 import {botLoginForAppSlug, buildReviewProcessEnv, buildRvwRunInvocation, shellQuote} from "./sandbox-auth";
 import {configureOutbound, optionalFile, readTextFile, sandboxFor} from "./sandbox";
 import {validateReviewJobMessage, type ReviewJobMessage} from "./webhook";
@@ -66,6 +67,8 @@ interface JobRecord {
   artifactContractInvalid?: boolean;
   presentation?: PresentationConfig;
   presentationConfigFailure?: "presentation_config_invalid";
+  publicationPolicy?: PublicationPolicy;
+  publishPolicyFailure?: "publish_policy_invalid";
   artifacts: ArtifactMetadata[];
 }
 
@@ -101,6 +104,7 @@ function initializeInvocation(message: ReviewJobMessage): string {
 export interface ReviewRuntimePolicy {
   model?: string;
   reasoningEffort?: string;
+  publication?: PublicationPolicy;
 }
 
 export function reviewScript(message: ReviewJobMessage, deadlineSeconds: number, policy: ReviewRuntimePolicy = {}): string {
@@ -116,7 +120,8 @@ github.com:
 RVW_GH_CONFIG
 chmod 0600 /root/.config/gh/hosts.yml
 unset GH_TOKEN GITHUB_TOKEN RVW_CODEX_DEFAULT_BASE_URL RVW_CODEX_SANDBOX
-exec ${buildRvwRunInvocation({...message, deadlineSeconds, ...policy})}
+exec ${buildRvwRunInvocation({...message, deadlineSeconds, ...policy,
+  publish: policy.publication?.channels.includes("review") === false ? null : undefined})}
 `;
 }
 
@@ -143,7 +148,8 @@ function statusView(record: JobRecord): JobStatus {
 }
 
 function titleFor(mapping: ReviewResultMapping, presentation: PresentationConfig): string {
-  const key = mapping.conclusion === "success" ? "check_passed" : mapping.conclusion === "failure" ? "check_blocked" : "check_incomplete";
+  const key = mapping.outcome === "pass" ? "check_passed" : mapping.outcome === "block" ? "check_blocked" :
+    mapping.conclusion === "success" ? "check_passed" : mapping.conclusion === "failure" ? "check_blocked" : "check_incomplete";
   return t(key, presentation.locale, {display_name: presentation.display_name});
 }
 
@@ -161,6 +167,7 @@ function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSumm
   presentation: PresentationConfig, mapping?: ReviewResultMapping): string {
   return checkDetails({job_id: record.jobId, reason,
     presentation_config_failure: record.presentationConfigFailure ?? null,
+    publish_policy_failure: record.publishPolicyFailure ?? null,
     publication_failure: summary?.publication_failure ?? mapping?.publication_failure ?? null,
     language_fallback_used: summary?.language_fallback_used ?? mapping?.language_fallback_used ?? false,
     // lane_hunk_receipts counts each (lane, hunk) pair; uncovered_regions is the distinct
@@ -313,6 +320,14 @@ export class RvwReviewJob extends DurableObject<Env> {
     if (record.state === "queued") record = await this.transition(record, "provisioning");
 
     const token = await this.token(record, config.githubAppId);
+    if (record.publicationPolicy === undefined) {
+      const bootstrap = await getPublicationPolicy(token, {
+        owner: message.owner, repo: message.repo, baseSha: message.baseSha,
+      });
+      record = {...record, publicationPolicy: bootstrap.policy,
+        ...(bootstrap.failure === undefined ? {} : {publishPolicyFailure: bootstrap.failure})};
+      await this.save(record);
+    }
     let check: CreatedCheckRun | undefined;
     if (record.checkRunId === undefined) {
       const bootstrap = await getPresentationConfig(token, {
@@ -352,6 +367,12 @@ export class RvwReviewJob extends DurableObject<Env> {
       }
     }
 
+    // The Python reader is authoritative for the full policy, but a Worker parse
+    // failure must still fail closed before a Sandbox review can be dispatched.
+    if (record.publishPolicyFailure !== undefined) {
+      throw new Error(record.publishPolicyFailure);
+    }
+
     const sandboxId = record.sandboxId ?? `rvw-review-${crypto.randomUUID()}`;
     const sandbox = sandboxFor(this.env, sandboxId);
     if (record.sandboxId === undefined) {
@@ -361,7 +382,8 @@ export class RvwReviewJob extends DurableObject<Env> {
     await sandbox.exec(initializeInvocation(message));
     await configureOutbound(sandbox, config.codexProxyHost, token);
     await sandbox.writeFile("/workspace/run-review.sh", reviewScript(message, config.reviewDeadlineSeconds,
-      {model: config.codexModel, reasoningEffort: config.codexReasoningEffort}));
+      {model: config.codexModel, reasoningEffort: config.codexReasoningEffort,
+        publication: record.publicationPolicy}));
     await sandbox.exec("chmod 0755 /workspace/run-review.sh");
     const process = await sandbox.startProcess("/workspace/run-review.sh", {
       autoCleanup: false,
@@ -481,7 +503,9 @@ export class RvwReviewJob extends DurableObject<Env> {
     try {
       const token = await this.token(record, appId);
       const presentation = record.presentation ?? defaultPresentation();
-      const code = record.presentationConfigFailure ?? (record.state === "failed" ? "start_failed" : record.state);
+      const code = record.presentationConfigFailure ?? record.publishPolicyFailure ??
+        (record.state === "failed" ? "start_failed" : record.state);
+      const checksEnabled = (record.publicationPolicy ?? defaultPublicationPolicy()).channels.includes("checks");
       await updateCheckRun(token, {
         owner: record.message.owner,
         repo: record.message.repo,
@@ -489,8 +513,8 @@ export class RvwReviewJob extends DurableObject<Env> {
         conclusion: "neutral",
         name: presentation.short_name,
         title: t("check_incomplete", presentation.locale, {display_name: presentation.display_name}),
-        summary: humanReason(code, presentation),
-        text: diagnosticText(record, reason, null, presentation),
+        summary: checksEnabled ? humanReason(code, presentation) : t("review_without_check_details", presentation.locale),
+        ...(checksEnabled ? {text: diagnosticText(record, reason, null, presentation)} : {}),
       });
       return true;
     } catch (error) {
@@ -775,7 +799,9 @@ export class RvwReviewJob extends DurableObject<Env> {
       optionalFile(sandbox, artifactPath("process.json")),
       optionalFile(sandbox, artifactPath("summary.json")),
     ]);
-    let mapping = checkConclusionForResult(exitCode, processJson ?? "");
+    const publicationPolicy = record.publicationPolicy ?? defaultPublicationPolicy();
+    const checksEnabled = publicationPolicy.channels.includes("checks");
+    let mapping = checkConclusionForResult(exitCode, processJson ?? "", publicationPolicy.checks);
     if (record.artifactContractInvalid) {
       mapping = {...mapping, terminalState: "failed", conclusion: "neutral", reason: t("manifest_invalid"), reasonCode: "artifacts_invalid"};
     }
@@ -799,18 +825,20 @@ export class RvwReviewJob extends DurableObject<Env> {
       owner: message.owner,
       repo: message.repo,
       checkRunId,
-      conclusion: mapping.conclusion,
+      conclusion: checksEnabled ? mapping.conclusion : "neutral",
       name: presentation.short_name,
       title: titleFor(mapping, presentation),
-      summary: (mapping.terminalState === "completed" || mapping.reasonCode === "publication_language_mismatch") && summary !== null
-        ? summary.markdown + (record.presentationConfigFailure === undefined ? ""
-          : `\n\n${humanReason(record.presentationConfigFailure, presentation)}`)
-        : humanReason(record.presentationConfigFailure ?? mapping.reasonCode, presentation),
-      text: diagnosticText(record, mapping.reason, summary, presentation, mapping),
+      summary: checksEnabled
+        ? ((mapping.terminalState === "completed" || mapping.reasonCode === "publication_language_mismatch") && summary !== null
+          ? summary.markdown + (record.presentationConfigFailure === undefined ? ""
+            : `\n\n${humanReason(record.presentationConfigFailure, presentation)}`)
+          : humanReason(record.presentationConfigFailure ?? mapping.reasonCode, presentation))
+        : t("review_without_check_details", presentation.locale),
+      ...(checksEnabled ? {text: diagnosticText(record, mapping.reason, summary, presentation, mapping)} : {}),
     });
     record = {
       ...record,
-      conclusion: mapping.conclusion,
+      conclusion: checksEnabled ? mapping.conclusion : "neutral",
       cleanupPending: record.sandboxId !== undefined,
       updatedAt: new Date().toISOString(),
     };

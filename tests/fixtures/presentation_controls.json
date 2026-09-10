@@ -1,0 +1,45 @@
+{
+  "accepted": [
+    {
+      "yaml": "voice:\n  examples: [\"설정 파일이 없으면 `load_config`는 오류를 반환합니다.\", \"\"]\n  allowed_terms: [discovery, \"\"]\nsynthesis:\n  enabled: false\n",
+      "expected": {
+        "display_name": "rvw",
+        "short_name": "rvw",
+        "locale": "en",
+        "footer": null,
+        "voice": {
+          "audience": "engineers",
+          "register": "formal",
+          "guidance": null,
+          "examples": ["설정 파일이 없으면 `load_config`는 오류를 반환합니다.", ""],
+          "allowed_terms": ["discovery", ""]
+        },
+        "synthesis": {"enabled": false}
+      }
+    },
+    {
+      "yaml": "synthesis:\n  enabled: yes\n",
+      "expected": {
+        "display_name": "rvw",
+        "short_name": "rvw",
+        "locale": "en",
+        "footer": null,
+        "voice": {
+          "audience": "engineers",
+          "register": "formal",
+          "guidance": null,
+          "examples": [],
+          "allowed_terms": []
+        },
+        "synthesis": {"enabled": true}
+      }
+    }
+  ],
+  "rejected": [
+    "voice:\n  examples: [a, b, c, d]\n",
+    "voice:\n  examples: [42]\n",
+    "voice:\n  allowed_terms: [42]\n",
+    "synthesis:\n  enabled: maybe\n",
+    "synthesis:\n  unknown: false\n"
+  ]
+}

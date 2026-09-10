@@ -15,6 +15,13 @@ publish_state: comment
 # Review event per verdict. Defaults reproduce COMMENT-only publication; a
 # consuming repository opts into stronger events in its own base-ref copy.
 publish:
+  channels: [checks, review]
+  checks:
+    on_block: failure
+    on_pass: success
+  inline:
+    severity_at_least: suggestion
+    max_comments: null
   on_block: comment
   on_pass: comment
   dismiss_on_pass: false

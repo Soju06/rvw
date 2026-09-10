@@ -1,6 +1,7 @@
+import {artifactManifest} from "./artifacts";
 import {t} from "./i18n";
 import {parsePresentation, type PresentationConfig} from "./presentation";
-import {artifactManifest} from "./artifacts";
+import type {CheckPublicationPolicy, PublishChannel} from "./publication-policy";
 
 export type JobState =
   | "queued"
@@ -68,6 +69,7 @@ export interface RuntimePolicyFacts {
 export interface ReviewResultMapping extends Partial<PublicationFacts> {
   terminalState: "completed" | "failed";
   conclusion: CheckConclusion;
+  outcome?: "pass" | "block";
   reason: string;
   reasonCode?: string;
   presentation?: PresentationConfig;
@@ -189,6 +191,7 @@ export function parseProcessResult(output: string): ProcessResult {
 export function checkConclusionForResult(
   exitCode: number | null,
   output: string,
+  checks: CheckPublicationPolicy = {on_block: "failure", on_pass: "success"},
 ): ReviewResultMapping {
   try {
     const payload = parseProcessResult(output);
@@ -198,10 +201,10 @@ export function checkConclusionForResult(
       throw new Error(`SDK exit ${exitCode} disagrees with process exit ${payload.exit_code}`);
     }
     if (payload.status === "pass") {
-      return {terminalState: "completed", conclusion: "success", reason: t("process_passed", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation, ...publication};
+      return {terminalState: "completed", conclusion: checks.on_pass, outcome: "pass", reason: t("process_passed", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation, ...publication};
     }
     if (payload.status === "block") {
-      return {terminalState: "completed", conclusion: "failure", reason: t("process_blocked", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation, ...publication};
+      return {terminalState: "completed", conclusion: checks.on_block, outcome: "block", reason: t("process_blocked", payload.presentation.locale, {display_name: payload.presentation.display_name}), presentation: payload.presentation, ...publication};
     }
     return {terminalState: "failed", conclusion: "neutral", presentation: payload.presentation, ...publication, reasonCode: payload.failure?.code, reason: payload.failure === null
       ? t("process_status", "en", {display_name: "rvw", status: payload.status}) : `${payload.failure.code}: ${payload.failure.detail}`};
@@ -224,7 +227,7 @@ export interface SummaryFailedLane {
 }
 
 export interface SynthesisFacts {
-  status: "ok" | `fallback:${string}`;
+  status: "ok" | "disabled" | `fallback:${string}`;
   model: string | null;
   reasoning_effort: string | null;
   wall_seconds: number | null;
@@ -252,6 +255,12 @@ export const PUBLISH_THREAD_LISTS = [
 /** Python publication facts (summary.publish); carried verbatim into the check text. */
 export interface PublishFacts extends Record<(typeof PUBLISH_THREAD_LISTS)[number], string[]>,
   Record<(typeof PUBLISH_ID_LISTS)[number], number[]> {
+  channels: PublishChannel[];
+  inline_policy: {
+    severity_at_least: "suggestion" | "warning" | "blocker";
+    max_comments: number | null;
+    body_only_count: number;
+  };
   event: ReviewEvent | null;
   policy_source: "default" | "repository" | "explicit" | null;
   actor: string | null;
@@ -271,7 +280,7 @@ export interface ArtifactSummary extends PublicationFacts {
   markdown: string;
   presentation: PresentationConfig;
   /** Why no review was posted although the run completed; null for legacy summaries. */
-  publication_skipped: string | null;
+  publication_skipped: PublicationSkipped | null;
   /** null for legacy summaries written before publication facts existed. */
   publish: PublishFacts | null;
 }
@@ -284,7 +293,7 @@ function synthesisFacts(value: unknown): SynthesisFacts {
   if (value === undefined) return {...LEGACY_SYNTHESIS};
   const record = recordValue(value, "summary synthesis");
   fields(record, ["status", "model", "reasoning_effort", "wall_seconds", "tool_calls"], "summary synthesis");
-  const statusValid = typeof record.status === "string" && /^(?:ok|fallback:[^\s]+)$/.test(record.status);
+  const statusValid = typeof record.status === "string" && /^(?:ok|disabled|fallback:[^\s]+)$/.test(record.status);
   const nullableNonempty = (entry: unknown) => entry === null || (typeof entry === "string" && entry.length > 0);
   if (!statusValid || !nullableNonempty(record.model) || !nullableNonempty(record.reasoning_effort) ||
       !(record.wall_seconds === null || (typeof record.wall_seconds === "number" &&
@@ -299,7 +308,8 @@ function publishFacts(value: unknown): PublishFacts | null {
   if (value === undefined) return null;
   const record = recordValue(value, "summary publish");
   fields(record, ["event", "policy_source", "actor", "event_clamped_reason", "threads_skipped_reason",
-    ...PUBLISH_ID_LISTS, ...PUBLISH_THREAD_LISTS], "summary publish");
+    ...PUBLISH_ID_LISTS, ...PUBLISH_THREAD_LISTS,
+    ...["channels", "inline_policy"].filter((key) => key in record)], "summary publish");
   if (!(record.event === null || REVIEW_EVENTS.includes(record.event as ReviewEvent)) ||
       !(record.policy_source === null || ["default", "repository", "explicit"].includes(record.policy_source as string)) ||
       ![record.actor, record.event_clamped_reason, record.threads_skipped_reason].every(nullableString)) {
@@ -315,13 +325,31 @@ function publishFacts(value: unknown): PublishFacts | null {
       throw new Error(`summary publish ${key} must be a list of non-empty strings`);
     }
   }
-  return record as unknown as PublishFacts;
+  const channels = record.channels === undefined ? ["checks", "review"] : record.channels;
+  if (!Array.isArray(channels) || channels.length === 0 ||
+      channels.some((item) => item !== "checks" && item !== "review")) {
+    throw new Error("summary publish channels are invalid");
+  }
+  const inline = record.inline_policy === undefined
+    ? {severity_at_least: "suggestion", max_comments: null, body_only_count: 0}
+    : recordValue(record.inline_policy, "summary publish inline_policy");
+  fields(inline, ["severity_at_least", "max_comments", "body_only_count"], "summary publish inline_policy");
+  if (!["suggestion", "warning", "blocker"].includes(inline.severity_at_least as string) ||
+      !(inline.max_comments === null || integer(inline.max_comments)) || !integer(inline.body_only_count)) {
+    throw new Error("summary publish inline_policy is invalid");
+  }
+  return {...record, channels, inline_policy: inline} as unknown as PublishFacts;
 }
 
-function publicationSkipped(value: unknown): string | null {
+export type PublicationSkipped = "duplicate_review_same_head" | "on_pass_none" | "head_moved" |
+  "review_channel_disabled";
+
+function publicationSkipped(value: unknown): PublicationSkipped | null {
   if (value === undefined || value === null) return null;
-  if (typeof value !== "string" || value.length === 0) throw new Error("summary publication_skipped is invalid");
-  return value;
+  if (!["duplicate_review_same_head", "on_pass_none", "head_moved", "review_channel_disabled"].includes(value as string)) {
+    throw new Error("summary publication_skipped is invalid");
+  }
+  return value as PublicationSkipped;
 }
 
 function failedLanes(value: unknown): SummaryFailedLane[] {

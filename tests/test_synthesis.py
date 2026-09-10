@@ -14,7 +14,7 @@ import rvw.synthesis as synthesis_module
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import LaneCoverage, RunCoverage
 from rvw.merge import CollapseGroup, MergeResult
-from rvw.presentation import PresentationConfig
+from rvw.presentation import PresentationConfig, VoiceConfig
 from rvw.runtimes import RunResult, RunStatus, RunUsage, RunUsageStatus
 from rvw.schema import Severity, Verdict
 from rvw.synthesis import (
@@ -269,7 +269,6 @@ def test_validate_requires_every_non_rejected_key_exactly_once_and_no_extras() -
         "Confirmed:",
         "replica",
         "adjudication",
-        "lane",
         "orchestrator",
         "5살",
         "five-year",
@@ -285,7 +284,7 @@ def test_validate_rejects_internal_or_audience_vocabulary(forbidden: str) -> Non
         validate_synthesis(invalid, merged(candidate), outcome_for([candidate]), locale="ko")
 
 
-@pytest.mark.parametrize("forbidden", ["`Confirmed:`", "replicas", "lanes"])
+@pytest.mark.parametrize("forbidden", ["`Confirmed:`", "replicas"])
 @pytest.mark.parametrize("field", ["overview", "first_action"])
 def test_overview_and_action_cannot_hide_internal_vocabulary(forbidden: str, field: str) -> None:
     candidate = group()
@@ -316,6 +315,70 @@ def test_source_literal_may_contain_forbidden_substring_and_literals_survive() -
             "RECIPIENT_NOT_FOUND",
         )
     )
+
+
+def test_domain_discovery_is_allowed_when_source_uses_the_term() -> None:
+    candidate = group(body="The discovery reconciliation path reports a missing account.")
+    value = document(candidate)
+    value.findings[0].consequence = "discovery 재조정이 실패하면 계정 동기화가 중단됩니다."
+    assert (
+        validate_synthesis(value, merged(candidate), outcome_for([candidate]), locale="ko") == value
+    )
+
+
+def test_process_lane_is_rejected_without_source_occurrence() -> None:
+    candidate = group(body="The recipient lookup ignores the requested ID.").model_copy(
+        update={"file": "src/review/lookup.py", "hunk_id": "src/review/lookup.py:67"}
+    )
+    adjudicated = outcome_for([candidate])
+    adjudicated.evidence[candidate.key] = "lookupRecipient('usr_2')"
+    value = SynthesisDocument(
+        overview="This change scopes recipient lookup to the requested user.",
+        first_action="First, add a test for the lookup arguments.",
+        findings=[
+            SynthesisFinding(
+                key=candidate.key,
+                title="The lookup can return another user's recipient.",
+                what="The query ignores the requested identifier.",
+                consequence="the lane found a problem.",
+                fix="Validate the lookup arguments before returning a record.",
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="forbidden vocabulary"):
+        validate_synthesis(value, merged(candidate), adjudicated, locale="en")
+
+
+def test_allowed_terms_exempt_process_vocabulary() -> None:
+    candidate = group()
+    value = document(candidate)
+    value.findings[0].consequence = "discovery 재조정이 실패하면 계정 동기화가 중단됩니다."
+    presentation = PresentationConfig(locale="ko", voice=VoiceConfig(allowed_terms=["discovery"]))
+    assert (
+        validate_synthesis(
+            value,
+            merged(candidate),
+            outcome_for([candidate]),
+            locale="ko",
+            presentation=presentation,
+        )
+        == value
+    )
+
+
+def test_sourced_process_word_in_backticks_is_protected_but_invention_still_fails() -> None:
+    candidate = group(body="The replica can return the wrong recipient.")
+    value = document(candidate)
+    value.findings[0].consequence = "`replica` 때문에 다른 수신자를 반환할 수 있습니다."
+    assert (
+        validate_synthesis(value, merged(candidate), outcome_for([candidate]), locale="ko") == value
+    )
+
+    unsupported = group(body="The lookup can return the wrong recipient.")
+    invalid = document(unsupported)
+    invalid.findings[0].consequence = "`replica` 때문에 다른 수신자를 반환할 수 있습니다."
+    with pytest.raises(ValueError, match=r"forbidden vocabulary|literals absent from source"):
+        validate_synthesis(invalid, merged(unsupported), outcome_for([unsupported]), locale="ko")
 
 
 def test_validate_rejects_changed_code_and_error_literals() -> None:
@@ -391,6 +454,24 @@ def test_prompt_contains_inputs_budget_voice_and_reader_rules() -> None:
         "합니다체",
     ):
         assert text is not None and text in prompt
+
+
+def test_prompt_uses_generic_example_and_appends_repository_examples() -> None:
+    candidate = group()
+    examples = ["Repository example one.", "Repository example two."]
+    presentation = PresentationConfig(locale="en", voice=VoiceConfig(examples=examples))
+    prompt = build_synthesis_prompt(
+        target=target(),
+        merged=merged(candidate),
+        outcome=outcome_for([candidate]),
+        coverage=[],
+        status="complete",
+        presentation=presentation,
+        budget_seconds=300,
+    )
+    assert "gmail" not in prompt.casefold()
+    generic = "If the configuration file is missing, `load_config` returns a `ConfigMissing` error."
+    assert prompt.index(generic) < prompt.index(examples[0]) < prompt.index(examples[1])
 
 
 async def test_invalid_content_retries_once_with_validation_diagnostics(

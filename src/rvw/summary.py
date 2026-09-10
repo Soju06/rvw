@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rvw.adjudicate import AdjudicationAttempt, AdjudicationOutcome
 from rvw.discover import DiscoverResult, LaneCoverage
 from rvw.merge import MergeResult
+from rvw.policy import InlinePolicy, PublishChannel
 from rvw.presentation import PresentationConfig
 from rvw.provenance import BuildProvenance, current_build_provenance
 from rvw.publication import publication_summary, uncovered_regions
@@ -312,12 +313,20 @@ ThreadsSkippedReason = Literal[
     "disabled_by_policy",
     "not_planned",
 ]
-PublicationSkipped = Literal["duplicate_review_same_head", "on_pass_none", "head_moved"]
+PublicationSkipped = Literal[
+    "duplicate_review_same_head", "on_pass_none", "head_moved", "review_channel_disabled"
+]
+
+
+class InlinePolicyFacts(InlinePolicy):
+    body_only_count: int = Field(default=0, ge=0)
 
 
 class PublishFacts(ContractModel):
     """What publication did on GitHub: the event, and every thread and review it touched."""
 
+    channels: list[PublishChannel] = Field(default=["checks", "review"], min_length=1)
+    inline_policy: InlinePolicyFacts = Field(default_factory=InlinePolicyFacts)
     event: ReviewEventName | None = None
     policy_source: PublishPolicySourceName | None = None
     actor: str | None = None
@@ -410,6 +419,7 @@ def execution_summary(
     blockers: list[str],
     presentation: PresentationConfig | None = None,
     synthesis: SynthesisFacts | None = None,
+    publish: PublishFacts | None = None,
 ) -> ExecutionSummary:
     """Compute presentation facts once for every review adapter."""
     lanes = SummaryLanes(
@@ -434,4 +444,5 @@ def execution_summary(
         blockers=blockers,
         markdown=markdown,
         synthesis=synthesis or SynthesisFacts(),
+        publish=publish or PublishFacts(),
     )

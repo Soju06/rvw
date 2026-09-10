@@ -14,7 +14,7 @@ import rvw.pipeline as pipeline
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import DiscoverResult, DiscoveryMode
 from rvw.merge import merge
-from rvw.presentation import PresentationConfig
+from rvw.presentation import PresentationConfig, SynthesisConfig
 from rvw.store import RunStore
 from rvw.summary import ExecutionSummary, execution_summary, summarize_run
 from rvw.synthesis import SynthesisDocument, SynthesisFacts
@@ -224,3 +224,45 @@ async def test_skipped_adjudication_records_unavailable_synthesis_without_runtim
     )
     assert retained.synthesis.status == "fallback:not-run"
     assert artifacts.synthesis is None
+
+
+async def test_disabled_synthesis_skips_runtime_records_status_and_uses_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    discovered = DiscoverResult(lane_results={}, findings=[], coverage=[])
+
+    async def discover(**_: object) -> DiscoverResult:
+        return discovered
+
+    async def adjudicate(*_: object, **__: object) -> AdjudicationOutcome:
+        return outcome()
+
+    async def forbidden(**_: object):
+        pytest.fail("disabled synthesis invoked runtime")
+
+    monkeypatch.setattr(pipeline, "discover", discover)
+    monkeypatch.setattr(pipeline, "synthesize", forbidden)
+    presentation = PresentationConfig(synthesis=SynthesisConfig(enabled=False))
+    unused: Any = None
+    artifacts = await pipeline.execute_pipeline(
+        registry=unused,
+        lanes_root=tmp_path,
+        target=target(),
+        active_lanes=[],
+        runtime=unused,
+        adjudicator=adjudicate,
+        repo_dir=tmp_path,
+        discover_replicas=1,
+        adjudicate_replicas=1,
+        concurrency=1,
+        out_root=tmp_path,
+        pause=False,
+        dynamic_brief=None,
+        presentation=presentation,
+        discovery_mode=DiscoveryMode.INLINE,
+    )
+    assert artifacts is not None
+    assert artifacts.synthesis is None
+    assert artifacts.summary is not None
+    assert artifacts.summary.synthesis.status == "disabled"

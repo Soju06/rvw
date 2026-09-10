@@ -21,9 +21,10 @@ Policy files use this YAML shape::
       resolve_on_fix: true
       reuse_open_thread: true
 
-``publish_state`` accepts only ``comment`` or ``none`` and decides whether the
-policy-gated commands publish at all. The ``publish`` block selects the GitHub
-review event per verdict and the ``threads`` block governs rvw's own inline
+``publish_state`` accepts only ``comment`` or ``none`` and supplies the legacy
+channel default: ``none`` means checks-only unless explicit channels override it.
+The ``publish`` block selects the GitHub review event per verdict and the
+``threads`` block governs rvw's own inline
 threads; both default to the historical COMMENT-only behaviour. ``approve`` is
 double-gated: it requires ``approve_requires_explicit_opt_in: false`` in the same
 file. Any invalid value in either block fails closed as ``publish_policy_invalid``.
@@ -75,6 +76,21 @@ class PublishPolicyInvalid(ValueError):
 ReviewEventOnBlock = Literal["comment", "request_changes"]
 ReviewEventOnPass = Literal["comment", "approve", "none"]
 PublishPolicySource = Literal["default", "repository", "explicit"]
+PublishChannel = Literal["checks", "review"]
+
+
+class CheckPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    on_block: Literal["failure", "neutral"] = "failure"
+    on_pass: Literal["success", "neutral"] = "success"
+
+
+class InlinePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    severity_at_least: Literal["suggestion", "warning", "blocker"] = "suggestion"
+    max_comments: int | None = Field(default=None, ge=0)
 
 
 class PublishPolicy(BaseModel):
@@ -82,6 +98,9 @@ class PublishPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
+    channels: list[PublishChannel] = Field(default=["checks", "review"], min_length=1)
+    checks: CheckPolicy = Field(default_factory=CheckPolicy)
+    inline: InlinePolicy = Field(default_factory=InlinePolicy)
     on_block: ReviewEventOnBlock = "comment"
     on_pass: ReviewEventOnPass = "comment"
     dismiss_on_pass: bool = False
@@ -134,6 +153,12 @@ class AutoPolicy(BaseModel):
     allow_language_fallback: bool = Field(default=False, strict=True)
     publish: PublishPolicy = Field(default_factory=PublishPolicy)
     threads: ThreadPolicy = Field(default_factory=ThreadPolicy)
+
+    @model_validator(mode="after")
+    def _legacy_publication_channels(self) -> AutoPolicy:
+        if "channels" not in self.publish.model_fields_set and self.publish_state == "none":
+            self.publish = self.publish.model_copy(update={"channels": ["checks"]})
+        return self
 
 
 class AutoDecision(BaseModel):

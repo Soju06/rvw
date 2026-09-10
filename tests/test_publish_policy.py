@@ -52,6 +52,9 @@ def test_publish_and_thread_blocks_default_to_todays_behaviour() -> None:
     assert loaded.publish == PublishPolicy()
     assert loaded.threads == ThreadPolicy()
     assert loaded.publish.model_dump() == {
+        "channels": ["checks", "review"],
+        "checks": {"on_block": "failure", "on_pass": "success"},
+        "inline": {"severity_at_least": "suggestion", "max_comments": None},
         "on_block": "comment",
         "on_pass": "comment",
         "dismiss_on_pass": False,
@@ -201,6 +204,9 @@ def test_packaged_default_policy_spells_out_the_publish_and_thread_blocks() -> N
         files("rvw").joinpath("resources/policies/auto-default.yaml").read_text(encoding="utf-8")
     )
     assert raw["publish"] == {
+        "channels": ["checks", "review"],
+        "checks": {"on_block": "failure", "on_pass": "success"},
+        "inline": {"severity_at_least": "suggestion", "max_comments": None},
         "on_block": "comment",
         "on_pass": "comment",
         "dismiss_on_pass": False,

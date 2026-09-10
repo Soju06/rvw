@@ -175,6 +175,38 @@ def test_auto_policy_none_skips_publish(tmp_path: Path, monkeypatch: pytest.Monk
     assert result.exit_code == 0, result.stdout
 
 
+def test_auto_human_result_uses_resolved_presentation_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = fixture_artifacts(tmp_path, adjudicated=False)
+    patch_pipeline(monkeypatch, artifacts)
+    monkeypatch.setattr(
+        cli_module,
+        "load_repo_presentation",
+        lambda *_, **__: PresentationConfig(locale="ko"),
+    )
+
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "auto",
+            "--target",
+            "42",
+            "--policy",
+            str(policy_file(tmp_path, "none")),
+            "--no-publish",
+            "--out",
+            str(tmp_path / "runs"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "실행 ID:" in result.stdout
+    assert "상태: pass" in result.stdout
+    assert "아티팩트:" in result.stdout
+    assert "run id:" not in result.stdout
+
+
 def test_auto_forwards_split_replica_defaults_overrides_and_concurrency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

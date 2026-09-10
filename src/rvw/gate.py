@@ -225,12 +225,12 @@ class GateVerdict(BaseModel):
         return inferred
 
 
-def load_dispositions(path: Path) -> DispositionDocument:
+def load_dispositions(path: Path, *, locale: Locale = "en") -> DispositionDocument:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         raise ValueError(
-            t("gate.error.could_not_load_dispositions_from", "en", p0=path, p1=exc)
+            t("gate.error.could_not_load_dispositions_from", locale, p0=path, p1=exc)
         ) from exc
     return DispositionDocument.model_validate(raw)
 
@@ -255,19 +255,20 @@ def validate_coverage(
     *,
     replicas: int,
     chunk_count: int,
+    locale: Locale = "en",
 ) -> list[LaneCoverage]:
     if replicas < 1:
-        raise GateInvariantError(t("gate.error.expected_replicas_must_be_positive", "en"))
+        raise GateInvariantError(t("gate.error.expected_replicas_must_be_positive", locale))
     if chunk_count < 1:
-        raise GateInvariantError(t("gate.error.expected_chunk_count_must_be_positive", "en"))
+        raise GateInvariantError(t("gate.error.expected_chunk_count_must_be_positive", locale))
     if not coverage:
-        raise GateInvariantError(t("gate.error.coverage_must_be_nonempty", "en"))
+        raise GateInvariantError(t("gate.error.coverage_must_be_nonempty", locale))
 
     coverage_ids = [item.lane_id for item in coverage]
     duplicates = sorted(lane_id for lane_id, count in Counter(coverage_ids).items() if count > 1)
     if duplicates:
         raise GateInvariantError(
-            t("gate.error.duplicate_coverage_lanes", "en", p0=", ".join(duplicates))
+            t("gate.error.duplicate_coverage_lanes", locale, p0=", ".join(duplicates))
         )
 
     planned = set(planned_lane_ids)
@@ -276,18 +277,18 @@ def validate_coverage(
     unexpected = sorted(actual - planned)
     if not planned:
         detail = (
-            t("gate.error.unexpected_coverage_lanes", "en", p0=", ".join(unexpected))
+            t("gate.error.unexpected_coverage_lanes", locale, p0=", ".join(unexpected))
             if unexpected
             else ""
         )
-        raise GateInvariantError(t("gate.error.planned_lane_set_must_be", "en", p0=detail))
+        raise GateInvariantError(t("gate.error.planned_lane_set_must_be", locale, p0=detail))
     if missing:
         raise GateInvariantError(
-            t("gate.error.missing_planned_coverage_lanes", "en", p0=", ".join(missing))
+            t("gate.error.missing_planned_coverage_lanes", locale, p0=", ".join(missing))
         )
     if unexpected:
         raise GateInvariantError(
-            t("gate.error.unexpected_coverage_lanes_10", "en", p0=", ".join(unexpected))
+            t("gate.error.unexpected_coverage_lanes_10", locale, p0=", ".join(unexpected))
         )
 
     by_lane = {item.lane_id: item for item in coverage}
@@ -300,7 +301,7 @@ def validate_coverage(
     for lane_id in planned_lane_ids:
         item = by_lane[lane_id]
         if item.dispatched <= 0:
-            raise GateInvariantError(t("gate.error.lane", "en", p0=lane_id, p1=item.dispatched))
+            raise GateInvariantError(t("gate.error.lane", locale, p0=lane_id, p1=item.dispatched))
         actual_runs = {(run.replica, run.chunk) for run in item.runs}
         missing_runs = sorted(expected_runs - actual_runs, key=lambda value: (value[1], value[0]))
         unexpected_runs = sorted(
@@ -308,20 +309,20 @@ def validate_coverage(
         )
         if missing_runs:
             detail = ", ".join(
-                t("gate.error.replica", "en", p0=replica, p1=chunk)
+                t("gate.error.replica", locale, p0=replica, p1=chunk)
                 for replica, chunk in missing_runs
             )
-            raise GateInvariantError(t("gate.error.lane_13", "en", p0=lane_id, p1=detail))
+            raise GateInvariantError(t("gate.error.lane_13", locale, p0=lane_id, p1=detail))
         if unexpected_runs:
             detail = ", ".join(
-                t("gate.error.replica", "en", p0=replica, p1=chunk)
+                t("gate.error.replica", locale, p0=replica, p1=chunk)
                 for replica, chunk in unexpected_runs
             )
-            raise GateInvariantError(t("gate.error.lane_14", "en", p0=lane_id, p1=detail))
+            raise GateInvariantError(t("gate.error.lane_14", locale, p0=lane_id, p1=detail))
         expected_count = replicas * chunk_count
         if item.dispatched != expected_count:
             raise GateInvariantError(
-                t("gate.error.lane_15", "en", p0=lane_id, p1=item.dispatched, p2=expected_count)
+                t("gate.error.lane_15", locale, p0=lane_id, p1=item.dispatched, p2=expected_count)
             )
         invalid_runs = [run for run in item.runs if not run.valid]
         if invalid_runs:
@@ -329,7 +330,7 @@ def validate_coverage(
             raise GateInvariantError(
                 t(
                     "gate.error.lane_16",
-                    "en",
+                    locale,
                     p0=lane_id,
                     p1=run.replica,
                     p2=run.chunk,
@@ -341,7 +342,7 @@ def validate_coverage(
 
 
 def _actionable(
-    merged: MergeResult, outcome: AdjudicationOutcome
+    merged: MergeResult, outcome: AdjudicationOutcome, *, locale: Locale = "en"
 ) -> list[tuple[CollapseGroup, Verdict]]:
     merged_keys = {group.key for group in merged.groups}
     outcome_keys = set(outcome.verdicts)
@@ -354,14 +355,14 @@ def _actionable(
         if orphan:
             details.append(f"orphan={','.join(orphan)}")
         raise GateInvariantError(
-            t("gate.error.adjudication_outcome_keys_must_exactly", "en") + "; ".join(details)
+            t("gate.error.adjudication_outcome_keys_must_exactly", locale) + "; ".join(details)
         )
     actionable: list[tuple[CollapseGroup, Verdict]] = []
     for group in merged.groups:
         verdict = outcome.verdicts.get(group.key)
         if verdict is None:
             raise GateInvariantError(
-                t("gate.error.missing_adjudication_verdict_for_finding", "en", p0=group.key)
+                t("gate.error.missing_adjudication_verdict_for_finding", locale, p0=group.key)
             )
         if verdict in {Verdict.CONFIRMED, Verdict.UNCERTAIN}:
             actionable.append((group, verdict))
@@ -369,33 +370,33 @@ def _actionable(
 
 
 def _dispositions_by_id(
-    document: DispositionDocument, expected_ids: set[str]
+    document: DispositionDocument, expected_ids: set[str], *, locale: Locale = "en"
 ) -> dict[str, DispositionRecord]:
     ids = [record.finding_id for record in document.dispositions]
     duplicates = sorted(finding_id for finding_id, count in Counter(ids).items() if count > 1)
     if duplicates:
         raise GateInvariantError(
-            t("gate.error.duplicate_disposition_finding_IDs", "en", p0=", ".join(duplicates))
+            t("gate.error.duplicate_disposition_finding_IDs", locale, p0=", ".join(duplicates))
         )
     actual_ids = set(ids)
     unknown = sorted(actual_ids - expected_ids)
     if unknown:
         raise GateInvariantError(
-            t("gate.error.unknown_disposition_finding_IDs", "en", p0=", ".join(unknown))
+            t("gate.error.unknown_disposition_finding_IDs", locale, p0=", ".join(unknown))
         )
     missing = sorted(expected_ids - actual_ids)
     if missing:
         raise GateInvariantError(
-            t("gate.error.missing_disposition_finding_IDs", "en", p0=", ".join(missing))
+            t("gate.error.missing_disposition_finding_IDs", locale, p0=", ".join(missing))
         )
     return {record.finding_id: record for record in document.dispositions}
 
 
-def _body_sha256(group: CollapseGroup) -> str:
+def _body_sha256(group: CollapseGroup, *, locale: Locale = "en") -> str:
     """Digest the complete order-insensitive body set for a collapsed finding."""
 
     if not group.bodies:
-        raise GateInvariantError(t("gate.error.collapsed_finding", "en", p0=group.key))
+        raise GateInvariantError(t("gate.error.collapsed_finding", locale, p0=group.key))
     body_digests = (hashlib.sha256(body.encode()).digest() for body in sorted(group.bodies))
     return hashlib.sha256(b"".join(body_digests)).hexdigest()
 
@@ -407,10 +408,11 @@ def match_inherited_dispositions(
     *,
     inherited_run_id: str,
     current_hunk_sha256: Mapping[str, str | None] | None = None,
+    locale: Locale = "en",
 ) -> dict[str, DispositionInheritance]:
     """Match validated prior findings to the current actionable finding set."""
 
-    actionable = [group for group, _ in _actionable(merged, outcome)]
+    actionable = [group for group, _ in _actionable(merged, outcome, locale=locale)]
     current_digests = current_hunk_sha256 or {}
     results: dict[str, DispositionInheritance] = {}
     accepted_by_id = {
@@ -429,7 +431,7 @@ def match_inherited_dispositions(
     }
 
     for group in actionable:
-        current_body_digest = _body_sha256(group)
+        current_body_digest = _body_sha256(group, locale=locale)
         pair = (group.file, group.rule_id)
         if inherited_pair_counts[pair] > 1:
             results[group.key] = DispositionInheritance(
@@ -545,6 +547,7 @@ def _validate_inherited_from(
     *,
     inherited_run_id: str | None,
     inheritance: Mapping[str, DispositionInheritance] | None,
+    locale: Locale = "en",
 ) -> None:
     for finding_id, record in dispositions.items():
         if record.inherited_from is None:
@@ -560,7 +563,7 @@ def _validate_inherited_from(
             raise GateInvariantError(
                 t(
                     "gate.error.inherited_from_unbound",
-                    "en",
+                    locale,
                     p0=finding_id,
                     p1=record.inherited_from,
                 )
@@ -580,17 +583,19 @@ def build_gate_verdict(
     inherited_run_id: str | None = None,
     inheritance: Mapping[str, DispositionInheritance] | None = None,
     inheritance_summary: InheritanceSummary | None = None,
+    locale: Locale = "en",
 ) -> GateVerdict:
     if target.kind != "pr" or target.pr_number is None or target.base_sha is None:
-        raise GateInvariantError(t("gate.error.gate_verdict_requires_a_PR", "en"))
+        raise GateInvariantError(t("gate.error.gate_verdict_requires_a_PR", locale))
 
-    actionable = _actionable(merged, outcome)
+    actionable = _actionable(merged, outcome, locale=locale)
     expected_ids = {group.key for group, _ in actionable}
-    by_id = _dispositions_by_id(dispositions, expected_ids)
+    by_id = _dispositions_by_id(dispositions, expected_ids, locale=locale)
     _validate_inherited_from(
         by_id,
         inherited_run_id=inherited_run_id,
         inheritance=inheritance,
+        locale=locale,
     )
     hunk_digests = hunk_sha256_by_id(target.diff)
     findings: list[GateFinding] = []
@@ -607,7 +612,7 @@ def build_gate_verdict(
                 raise GateInvariantError(
                     t(
                         "gate.error.accepted_blocker_owner_unverified",
-                        "en",
+                        locale,
                         p0=group.key,
                         p1=actor or "<none>",
                         p2=actor_permission or "<none>",
@@ -625,7 +630,7 @@ def build_gate_verdict(
                 reason=record.reason,
                 inherited_from=record.inherited_from,
                 hunk_sha256=hunk_digests.get(group.hunk_id),
-                body_sha256=_body_sha256(group),
+                body_sha256=_body_sha256(group, locale=locale),
                 inheritance_tier=matched.tier if matched is not None else None,
                 inheritance_blank_reason=(matched.blank_reason if matched is not None else None),
             )
@@ -654,13 +659,15 @@ def requires_owner_authorization(
     *,
     inherited_run_id: str | None = None,
     inheritance: Mapping[str, DispositionInheritance] | None = None,
+    locale: Locale = "en",
 ) -> bool:
-    actionable = _actionable(merged, outcome)
-    by_id = _dispositions_by_id(dispositions, {group.key for group, _ in actionable})
+    actionable = _actionable(merged, outcome, locale=locale)
+    by_id = _dispositions_by_id(dispositions, {group.key for group, _ in actionable}, locale=locale)
     _validate_inherited_from(
         by_id,
         inherited_run_id=inherited_run_id,
         inheritance=inheritance,
+        locale=locale,
     )
     return any(
         group.severity is Severity.BLOCKER
@@ -675,9 +682,10 @@ def write_disposition_template(
     outcome: AdjudicationOutcome,
     *,
     inheritance: Mapping[str, DispositionInheritance] | None = None,
+    locale: Locale = "en",
 ) -> Path:
     records: list[tuple[dict[str, str], InheritanceTier | None, InheritanceBlankReason | None]] = []
-    for group, _ in _actionable(merged, outcome):
+    for group, _ in _actionable(merged, outcome, locale=locale):
         matched = inheritance.get(group.key) if inheritance is not None else None
         record = {
             "finding_id": group.key,

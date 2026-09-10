@@ -121,6 +121,9 @@ describe("review process environment", () => {
     expect(command).toContain(`--base-ref '${options.baseSha}' --head-ref '${options.headSha}'`);
     expect(command).toContain("--out '/workspace/result' --deadline 900 --policy auto --publish github-review --json");
     expect(buildRvwRunInvocation({...options, publish: "github-comment"})).toContain("--publish github-comment --json");
+    const checksOnly = buildRvwRunInvocation({...options, publish: null});
+    expect(checksOnly).toContain("--deadline 900 --policy auto --json");
+    expect(checksOnly).not.toContain("--publish");
     expect(command).not.toContain("GH_REPO");
     expect(command).not.toContain("--repo-dir");
     expect(() => buildRvwRunInvocation({...options, prNumber: 0})).toThrow(/positive integer/);

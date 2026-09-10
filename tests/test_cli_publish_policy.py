@@ -16,6 +16,7 @@ import rvw.publish as publish_module
 from rvw.policy import EffectivePolicy, PublishPolicy, validate_policy
 from rvw.presentation import PresentationConfig
 from rvw.publish import PublishError, PublishResult
+from rvw.summary import PublishFacts
 
 runner = CliRunner()
 
@@ -134,6 +135,47 @@ def test_publish_event_override_is_rejected_when_it_exceeds_the_policy(
     payload = json.loads((artifacts.run.dir / "publish-payload.json").read_text())
     assert payload["event"] == "COMMENT" and payload["commit_id"] == "b" * 40
     assert "event: COMMENT (policy default" in downgrade.stdout
+
+
+def test_publish_result_and_thread_summary_use_persisted_presentation_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = saved_run(tmp_path, monkeypatch)
+    artifacts.run.save_presentation(PresentationConfig(locale="ko"))
+    monkeypatch.setattr(cli_module, "GhCliClient", lambda: FakeGitHub([]))
+    monkeypatch.setattr(
+        cli_module,
+        "publish_review",
+        lambda **_kwargs: PublishResult(
+            review_url=None,
+            inline_count=0,
+            body_fallback_count=0,
+            state="commented",
+            event="COMMENT",
+            facts=PublishFacts(
+                event="COMMENT",
+                policy_source="default",
+                reused_thread_ids=["T-reused"],
+                resolved_thread_ids=["T-resolved"],
+                superseded_thread_ids=["T-superseded"],
+                threads_ambiguous=["T-ambiguous"],
+                threads_skipped_reason="degraded",
+                dismissed_review_ids=[17],
+            ),
+        ),
+    )
+
+    result = runner.invoke(
+        cli_module.app,
+        ["publish", "--run", artifacts.run.run_id, "--out", str(tmp_path / "runs")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "이벤트: COMMENT (정책 default)" in result.stdout
+    assert "스레드: 재사용 1, 해결 1, 교체 1, 모호 1" in result.stdout
+    assert "degraded" in result.stdout
+    assert "event:" not in result.stdout
+    assert "threads:" not in result.stdout
 
 
 def test_publish_uses_the_repository_policy_when_the_snapshot_is_the_only_source(
@@ -332,3 +374,96 @@ def test_review_dry_run_tolerates_a_malformed_base_policy_but_publish_fails_befo
     )
     assert result.exit_code == 2, result.output
     assert "invalid_policy:" in result.stderr and dispatched == []
+
+
+@pytest.mark.parametrize("publish_block", ["", "publish:\n  channels: [checks]\n"])
+def test_run_publication_request_honors_channels_and_retains_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publish_block: str
+) -> None:
+    artifacts = fixture_artifacts(tmp_path, adjudicated=True)
+    patch_pipeline(monkeypatch, artifacts)
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _: artifacts.target)
+    monkeypatch.setattr(
+        cli_module, "publish_review", lambda **_: pytest.fail("review must be disabled")
+    )
+    policy = policy_file(tmp_path, "none" if not publish_block else "comment")
+    policy.write_text(policy.read_text() + publish_block)
+    out = tmp_path / "channels-result"
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "run",
+            "--target",
+            "42",
+            "--policy",
+            str(policy),
+            "--out",
+            str(out),
+            "--publish",
+            "github-review",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["publish"]["channels"] == ["checks"]
+    assert summary["publish"]["inline_policy"]["body_only_count"] == len(artifacts.merged.groups)
+    assert "Review complete." in summary["markdown"]
+    process = json.loads((out / "process.json").read_text())
+    assert process["runtime"]["publish"] == "none"
+
+
+def test_interactive_review_passes_channel_and_inline_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = fixture_artifacts(tmp_path, adjudicated=True)
+    patch_pipeline(monkeypatch, artifacts)
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _: artifacts.target)
+    from test_publish_policy import strict_policy
+
+    policy = strict_policy(publish={"channels": ["checks"], "inline": {"max_comments": 0}})
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_auto_policy",
+        lambda *_, **__: EffectivePolicy(policy, "repository", "base"),
+    )
+    calls: list[dict[str, object]] = []
+
+    def publish(**kwargs: object) -> PublishResult:
+        calls.append(kwargs)
+        return PublishResult(
+            review_url=None, inline_count=0, body_fallback_count=0, state="skipped"
+        )
+
+    monkeypatch.setattr(cli_module, "publish_review", publish)
+    result = runner.invoke(
+        cli_module.app, ["review", "--target", "42", "--publish", "--out", str(tmp_path / "runs")]
+    )
+    assert result.exit_code == 0, result.output
+    assert calls[0]["publish_policy"] == policy.publish
+
+
+def test_external_snapshot_keeps_legacy_switch_but_ignores_new_controls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_publish_policy import strict_policy
+
+    artifacts = saved_run(tmp_path, monkeypatch)
+    artifacts.run.save_policy(
+        EffectivePolicy(
+            strict_policy(
+                publish={
+                    "channels": ["checks"],
+                    "inline": {"max_comments": 0},
+                },
+                threads={"resolve_on_fix": False},
+            ),
+            "external",
+            "external.yaml",
+        )
+    )
+    monkeypatch.setattr(cli_module, "_commit_available", lambda *_: False)
+    selected = cli_module._publication_policy(artifacts.run, artifacts.target, cwd=tmp_path)
+    assert selected.policy.publish == PublishPolicy()
+    assert selected.policy.threads.resolve_on_fix is True
+    assert selected.source == "default" and selected.verified is False

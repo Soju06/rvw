@@ -43,10 +43,14 @@ def test_a1_script_delegates_execution_and_diagnostics_to_run() -> None:
     invocation = (ROOT / "cloud/worker/src/sandbox-auth.ts").read_text(encoding="utf-8")
 
     assert "autoCleanup: false" in source
-    assert "exec ${buildRvwRunInvocation({...message, deadlineSeconds, ...policy})}" in source
+    assert (
+        "exec ${buildRvwRunInvocation({...message, deadlineSeconds, ...policy,\n"
+        '  publish: policy.publication?.channels.includes("review") === false ? null : undefined})}'
+    ) in source
     assert (
         "reviewScript(message, config.reviewDeadlineSeconds,\n"
-        "      {model: config.codexModel, reasoningEffort: config.codexReasoningEffort})"
+        "      {model: config.codexModel, reasoningEffort: config.codexReasoningEffort,\n"
+        "        publication: record.publicationPolicy})"
     ) in source
     assert "rvw.container_entrypoint run" in invocation
     assert "--deadline ${deadlineSeconds}" in invocation

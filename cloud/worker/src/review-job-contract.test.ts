@@ -105,6 +105,17 @@ describe("check-run conclusion mapping", () => {
       status: "infra_failed", exit_code: 3, failure: {code: "review_failed", detail: "all invalid"},
     }))).reason).toBe("review_failed: all invalid");
   });
+  it("honours advisory PASS and BLOCK mappings while failures stay neutral", () => {
+    expect(checkConclusionForResult(0, JSON.stringify(processFixture()), {
+      on_block: "failure", on_pass: "neutral",
+    }).conclusion).toBe("neutral");
+    expect(checkConclusionForResult(1, JSON.stringify(processFixture({status: "block", exit_code: 1})), {
+      on_block: "neutral", on_pass: "success",
+    }).conclusion).toBe("neutral");
+    expect(checkConclusionForResult(3, JSON.stringify(processFixture({
+      status: "infra_failed", exit_code: 3, failure: {code: "infra", detail: "offline"},
+    })), {on_block: "failure", on_pass: "success"}).conclusion).toBe("neutral");
+  });
 });
 
 describe("Python artifact summary", () => {
@@ -153,6 +164,24 @@ describe("Python artifact summary", () => {
     expect(parsed.publish).toEqual(publish);
     expect(parsed.publication_skipped).toBe("duplicate_review_same_head");
     expect(parseArtifactSummary(JSON.stringify(summaryFixture({publish, publication_skipped: null}))).publication_skipped).toBeNull();
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture({publish,
+      publication_skipped: "review_channel_disabled"}))).publication_skipped).toBe("review_channel_disabled");
+  });
+  it("preserves publication controls and defaults their legacy absence", () => {
+    const publish = publishFactsFixture({channels: ["review"], inline_policy: {
+      severity_at_least: "warning", max_comments: 2, body_only_count: 3,
+    }});
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture({publish}))).publish).toMatchObject({
+      channels: ["review"],
+      inline_policy: {severity_at_least: "warning", max_comments: 2, body_only_count: 3},
+    });
+    const legacy: Record<string, unknown> = publishFactsFixture();
+    delete legacy.channels;
+    delete legacy.inline_policy;
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture({publish: legacy}))).publish).toMatchObject({
+      channels: ["checks", "review"],
+      inline_policy: {severity_at_least: "suggestion", max_comments: null, body_only_count: 0},
+    });
   });
   it("defaults legacy summaries without publication facts", () => {
     expect(parseArtifactSummary(JSON.stringify(summaryFixture()))).toMatchObject({publish: null, publication_skipped: null});
@@ -166,6 +195,11 @@ describe("Python artifact summary", () => {
     expect(parseArtifactSummary(JSON.stringify(legacy)).synthesis).toEqual({
       status: "fallback:not-run", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: null,
     });
+  });
+  it("accepts disabled synthesis facts", () => {
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture({synthesis: {
+      status: "disabled", model: null, reasoning_effort: null, wall_seconds: null, tool_calls: null,
+    }}))).synthesis.status).toBe("disabled");
   });
   it.each([
     {synthesis: null},
@@ -190,6 +224,11 @@ describe("Python artifact summary", () => {
     {publish: publishFactsFixture({resolved_thread_ids: [1]})},
     {publish: publishFactsFixture({resolved_thread_ids: [""]})},
     {publish: publishFactsFixture({extra: true})},
+    {publish: publishFactsFixture({channels: []})},
+    {publish: publishFactsFixture({channels: ["email"]})},
+    {publish: publishFactsFixture({inline_policy: {severity_at_least: "info", max_comments: null, body_only_count: 0}})},
+    {publish: publishFactsFixture({inline_policy: {severity_at_least: "warning", max_comments: -1, body_only_count: 0}})},
+    {publish: publishFactsFixture({inline_policy: {severity_at_least: "warning", max_comments: null, body_only_count: 1.5}})},
     {publish: {event: "COMMENT"}},
     {publish: "COMMENT"},
     {publication_skipped: ""},
@@ -271,7 +310,8 @@ it("defaults legacy process and summary contracts without presentation", () => {
   expect(checkConclusionForResult(0, JSON.stringify(process)).conclusion).toBe("success");
   expect(parseArtifactSummary(JSON.stringify(summary)).presentation).toEqual({
     display_name: "rvw", short_name: "rvw", locale: "en", footer: null,
-    voice: {audience: "engineers", register: "formal", guidance: null},
+    voice: {audience: "engineers", register: "formal", guidance: null,
+      examples: [], allowed_terms: []}, synthesis: {enabled: true},
   });
 });
 

@@ -25,11 +25,11 @@ _FORBIDDEN_PROSE = (
     ("Confirmed:", re.compile(r"confirmed:", re.IGNORECASE)),
     ("replica", re.compile(r"\breplicas?\b", re.IGNORECASE)),
     ("adjudicat", re.compile(r"\badjudicat", re.IGNORECASE)),
-    ("lane", re.compile(r"\blanes?\b", re.IGNORECASE)),
+    ("lane", re.compile(r"\b(?:the|this)\s+lanes?\b|\blane\s+[A-Za-z0-9_-]+\b", re.IGNORECASE)),
     ("orchestrator", re.compile(r"\borchestrator\b", re.IGNORECASE)),
-    ("controller", re.compile(r"\bcontroller\b", re.IGNORECASE)),
+    ("controller", re.compile(r"\bthe\s+controller\b", re.IGNORECASE)),
     ("verdict", re.compile(r"\bverdict\b", re.IGNORECASE)),
-    ("discovery", re.compile(r"\bdiscovery\b", re.IGNORECASE)),
+    ("discovery", re.compile(r"\bdiscovery\s+lane\b", re.IGNORECASE)),
     ("5살", re.compile("5살")),
     ("five-year", re.compile(r"\bfive-year", re.IGNORECASE)),
     ("다섯 살", re.compile("다섯 살")),
@@ -103,8 +103,8 @@ class SynthesisFacts(BaseModel):
     @field_validator("status")
     @classmethod
     def _valid_status(cls, value: str) -> str:
-        if value != "ok" and re.fullmatch(r"fallback:[^\s]+", value) is None:
-            raise ValueError("synthesis status must be ok or fallback:<reason>")
+        if value not in {"ok", "disabled"} and re.fullmatch(r"fallback:[^\s]+", value) is None:
+            raise ValueError("synthesis status must be ok, disabled, or fallback:<reason>")
         return value
 
 
@@ -216,6 +216,7 @@ def validate_synthesis(
     *,
     locale: str = "en",
     target: ResolvedTarget | None = None,
+    presentation: PresentationConfig | None = None,
 ) -> SynthesisDocument:
     """Validate schema, identity, reviewer vocabulary, literal fidelity and locale."""
 
@@ -238,6 +239,14 @@ def validate_synthesis(
 
     sources_by_key = {
         group.key: (*_source_texts(group, outcome), *_pr_texts(target)) for group in included
+    }
+    review_sources = (
+        *(source for group in merged.groups for source in _source_texts(group, outcome)),
+        *_pr_texts(target),
+        *(target.changed_paths if target is not None else ()),
+    )
+    allowed_terms = {
+        term.casefold() for term in (presentation.voice.allowed_terms if presentation else [])
     }
     protected_by_key = {group.key: _source_literals(group, outcome) for group in included}
     overview_sources = tuple(source for sources in sources_by_key.values() for source in sources)
@@ -265,10 +274,31 @@ def validate_synthesis(
     wrong_language: list[str] = []
     for label, prose, sources, protected in prose_segments:
         language_protected = tuple(dict.fromkeys((*protected, *_technical_literals(prose))))
-        unprotected = _without_literals(prose, protected)
-        found = next(
-            (label for label, pattern in _FORBIDDEN_PROSE if pattern.search(unprotected)), None
+        output_literals = _BACKTICK_LITERAL.findall(prose)
+        sourced_output_literals = tuple(
+            literal for literal in output_literals if _literal_in_sources(literal, sources)
         )
+        unprotected = _without_literals(prose, (*protected, *sourced_output_literals))
+        process_unprotected = _without_literals(unprotected, output_literals)
+        found = None
+        for forbidden_term, pattern in _FORBIDDEN_PROSE:
+            if forbidden_term.casefold() in allowed_terms:
+                continue
+            if forbidden_term in {"lane", "verdict", "discovery", "controller"}:
+                source_pattern = re.compile(
+                    rf"(?<![A-Za-z0-9]){re.escape(forbidden_term)}(?![A-Za-z0-9])",
+                    re.IGNORECASE,
+                )
+                if any(source_pattern.search(source) for source in review_sources):
+                    continue
+            vocabulary_prose = (
+                process_unprotected
+                if forbidden_term in {"lane", "verdict", "discovery", "controller"}
+                else unprotected
+            )
+            if pattern.search(vocabulary_prose):
+                found = forbidden_term
+                break
         if found is not None:
             raise ValueError(f"forbidden vocabulary {found!r} in synthesis prose {label!r}")
         invented = [
@@ -358,10 +388,11 @@ def build_synthesis_prompt(
             + "Identifiers, paths, code and error strings stay in their original form, wrapped in backticks."
         ),
         (
-            "인벤토리 검증이 실패하면 `gmail_account_inventory_unavailable`과 함께 HTTP 503을 반환합니다."
+            "설정 파일이 없으면 `load_config`는 `ConfigMissing` 오류를 반환합니다."
             if presentation.locale == "ko"
-            else "If inventory validation fails, return HTTP 503 with `gmail_account_inventory_unavailable`."
+            else "If the configuration file is missing, `load_config` returns a `ConfigMissing` error."
         ),
+        *voice.examples,
         "# Runtime contract",
         (
             f"You have a wall-clock budget of {budget_seconds} seconds and zero tool calls. "
@@ -372,6 +403,7 @@ def build_synthesis_prompt(
         f"display_name: {presentation.display_name}",
         f"audience: {audience}",
         f"register: {register}",
+        f"allowed_terms: {json.dumps(voice.allowed_terms, ensure_ascii=False)}",
         (
             "When audience is mixed, define necessary technical terms in the same sentence. "
             "For engineers, still define jargon that the codebase itself does not use."
@@ -406,7 +438,10 @@ def build_synthesis_prompt(
         ),
         (
             "Do not use internal process vocabulary in output, including Confirmed:, replica, "
-            "adjudicat, lane, orchestrator, verdict, discovery, 5살, five-year, or 다섯 살. "
+            "adjudicat, orchestrator, 5살, five-year, or 다섯 살, except repository allowed_terms. "
+            "Avoid the process phrases "
+            "the lane, this lane, lane <id>, verdict, discovery lane, and the controller unless "
+            "that term occurs in the supplied review sources or repository allowed_terms. "
             "Do not give instructions to the controller. Do not state counts."
         ),
         (
@@ -594,7 +629,12 @@ async def synthesize(
             return None, facts(f"fallback:{reason}")
         try:
             document = validate_synthesis(
-                result.output, merged, outcome, locale=presentation.locale, target=target
+                result.output,
+                merged,
+                outcome,
+                locale=presentation.locale,
+                target=target,
+                presentation=presentation,
             )
         except (ValidationError, ValueError) as exc:
             if attempt_number == 1:

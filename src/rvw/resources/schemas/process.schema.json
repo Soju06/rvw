@@ -100,6 +100,9 @@
         },
         "voice": {
           "$ref": "#/$defs/VoiceConfig"
+        },
+        "synthesis": {
+          "$ref": "#/$defs/SynthesisConfig"
         }
       },
       "title": "PresentationConfig",
@@ -328,6 +331,19 @@
       "title": "SDKObservations",
       "type": "object"
     },
+    "SynthesisConfig": {
+      "additionalProperties": false,
+      "description": "Repository-selected synthesis execution setting.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "SynthesisConfig",
+      "type": "object"
+    },
     "VoiceConfig": {
       "additionalProperties": false,
       "description": "Repository-selected reviewer voice used only for presentation.",
@@ -362,6 +378,22 @@
           ],
           "default": null,
           "title": "Guidance"
+        },
+        "examples": {
+          "items": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Examples",
+          "type": "array"
+        },
+        "allowed_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Terms",
+          "type": "array"
         }
       },
       "title": "VoiceConfig",

@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from rvw.presentation import (
     PresentationConfig,
     PresentationConfigInvalid,
+    SynthesisConfig,
     parse_presentation_config,
 )
 from rvw.registry import load_repo_presentation
@@ -74,6 +75,9 @@ def anchored(tmp_path: Path) -> tuple[Path, ResolvedTarget]:
         {"voice": {"guidance": 42}},
         {"voice": {"guidance": "x" * 801}},
         {"voice": {"guidance": "unsafe\x00text"}},
+        {"voice": {"examples": ["x" * 201]}},
+        {"voice": {"examples": ["a", "b", "c", "d"]}},
+        {"synthesis": {"enabled": "false"}},
         {"voice": {"unknown": True}},
     ],
 )
@@ -88,7 +92,14 @@ def test_presentation_defaults_and_unicode_names() -> None:
         "short_name": "rvw",
         "locale": "en",
         "footer": None,
-        "voice": {"audience": "engineers", "register": "formal", "guidance": None},
+        "voice": {
+            "audience": "engineers",
+            "register": "formal",
+            "guidance": None,
+            "examples": [],
+            "allowed_terms": [],
+        },
+        "synthesis": {"enabled": True},
     }
     assert (
         PresentationConfig(
@@ -114,6 +125,8 @@ voice:
         "audience": "mixed",
         "register": "neutral",
         "guidance": "API 소비자에게 미치는 영향을 먼저 설명합니다.\n`retry_after`는 그대로 씁니다.\n",
+        "examples": [],
+        "allowed_terms": [],
     }
 
 
@@ -124,6 +137,48 @@ def test_voice_guidance_limit_counts_unicode_characters() -> None:
     )
     with pytest.raises(PresentationConfigInvalid, match="presentation_config_invalid"):
         parse_presentation_config(f"voice:\n  guidance: {'한' * 801}\n")
+
+
+def test_voice_examples_allowed_terms_and_synthesis_defaults_are_strict() -> None:
+    config = parse_presentation_config(
+        """voice:
+  examples: [\"설정 파일이 없으면 `load_config`는 오류를 반환합니다.\", \"두 번째 예\"]
+  allowed_terms: [discovery]
+synthesis:
+  enabled: false
+"""
+    )
+    assert config.voice.examples == [
+        "설정 파일이 없으면 `load_config`는 오류를 반환합니다.",
+        "두 번째 예",
+    ]
+    assert config.voice.allowed_terms == ["discovery"]
+    assert config.synthesis == SynthesisConfig(enabled=False)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "voice:\n  examples: [a, b, c, d]\n",
+        "voice:\n  examples: [42]\n",
+        "voice:\n  allowed_terms: [42]\n",
+        "synthesis:\n  unknown: false\n",
+    ],
+)
+def test_new_presentation_controls_fail_closed(raw: str) -> None:
+    with pytest.raises(PresentationConfigInvalid, match="presentation_config_invalid"):
+        parse_presentation_config(raw)
+
+
+def test_shared_presentation_control_fixtures_match_python() -> None:
+    fixtures = json.loads(
+        (Path(__file__).parent / "fixtures/presentation_controls.json").read_text()
+    )
+    for case in fixtures["accepted"]:
+        assert parse_presentation_config(case["yaml"]).model_dump(mode="json") == case["expected"]
+    for raw in fixtures["rejected"]:
+        with pytest.raises(PresentationConfigInvalid):
+            parse_presentation_config(raw)
 
 
 @pytest.mark.parametrize(
