@@ -1,9 +1,17 @@
+import {isAlias, parseDocument, visit} from "yaml";
+
 export type Locale = "ko" | "en";
 
 export interface VoiceConfig {
   audience: "engineers" | "mixed";
   register: "formal" | "neutral";
   guidance: string | null;
+  examples: string[];
+  allowed_terms: string[];
+}
+
+export interface SynthesisConfig {
+  enabled: boolean;
 }
 
 export interface PresentationConfig {
@@ -12,11 +20,13 @@ export interface PresentationConfig {
   locale: Locale;
   footer: string | null;
   voice: VoiceConfig;
+  synthesis: SynthesisConfig;
 }
 
 export function defaultPresentation(): PresentationConfig {
   return {display_name: "rvw", short_name: "rvw", locale: "en", footer: null,
-    voice: {audience: "engineers", register: "formal", guidance: null}};
+    voice: {audience: "engineers", register: "formal", guidance: null, examples: [], allowed_terms: []},
+    synthesis: {enabled: true}};
 }
 
 function containsDisallowedText(value: string, multiline = false): boolean {
@@ -30,7 +40,7 @@ function parseVoice(value: unknown): VoiceConfig {
     throw new Error("presentation_config_invalid");
   }
   const fields = value as Record<string, unknown>;
-  if (Object.keys(fields).some((key) => !["audience", "register", "guidance"].includes(key))) {
+  if (Object.keys(fields).some((key) => !["audience", "register", "guidance", "examples", "allowed_terms"].includes(key))) {
     throw new Error("presentation_config_invalid");
   }
   const result = {...defaultPresentation().voice, ...fields};
@@ -44,7 +54,24 @@ function parseVoice(value: unknown): VoiceConfig {
       [...result.guidance].length <= 800 && !containsDisallowedText(result.guidance, true)))) {
     throw new Error("presentation_config_invalid");
   }
+  if (!Array.isArray(result.examples) || result.examples.length > 3 || result.examples.some(
+    (example) => typeof example !== "string" || [...example].length > 200 || containsDisallowedText(example, true),
+  )) throw new Error("presentation_config_invalid");
+  if (!Array.isArray(result.allowed_terms) || result.allowed_terms.some(
+    (term) => typeof term !== "string" || containsDisallowedText(term, true),
+  )) throw new Error("presentation_config_invalid");
   return result as VoiceConfig;
+}
+
+function parseSynthesis(value: unknown): SynthesisConfig {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("presentation_config_invalid");
+  }
+  const fields = value as Record<string, unknown>;
+  if (Object.keys(fields).some((key) => key !== "enabled")) throw new Error("presentation_config_invalid");
+  const result = {enabled: true, ...fields};
+  if (typeof result.enabled !== "boolean") throw new Error("presentation_config_invalid");
+  return result;
 }
 
 /** Strict scalar contract shared with Python; optional fields use identical defaults. */
@@ -53,7 +80,7 @@ export function parsePresentation(value: unknown): PresentationConfig {
     throw new Error("presentation_config_invalid");
   }
   const fields = value as Record<string, unknown>;
-  if (Object.keys(fields).some((key) => !["display_name", "short_name", "locale", "footer", "voice"].includes(key))) {
+  if (Object.keys(fields).some((key) => !["display_name", "short_name", "locale", "footer", "voice", "synthesis"].includes(key))) {
     throw new Error("presentation_config_invalid");
   }
   const result = {...defaultPresentation(), ...fields};
@@ -66,108 +93,32 @@ export function parsePresentation(value: unknown): PresentationConfig {
     }
   }
   if (result.locale !== "en" && result.locale !== "ko") throw new Error("presentation_config_invalid");
-  return {...result, voice: parseVoice(result.voice)} as PresentationConfig;
+  return {...result, voice: parseVoice(result.voice), synthesis: parseSynthesis(result.synthesis)} as PresentationConfig;
 }
 
-function parseScalar(scalar: string): unknown {
-  if (scalar.startsWith('"')) {
-    const quoted = /^("(?:[^"\\]|\\.)*")(?:\s+#.*)?$/.exec(scalar);
-    if (quoted === null) throw new Error();
-    return JSON.parse(quoted[1]);
-  }
-  if (scalar.startsWith("'")) {
-    const quoted = /^'((?:[^']|'')*)'(?:\s+#.*)?$/.exec(scalar);
-    if (quoted === null) throw new Error();
-    return quoted[1].replace(/''/g, "'");
-  }
-  const plain = scalar.replace(/(?:^|\s+)#.*$/, "").trim();
-  if (/^(?:null|~)?$/i.test(plain)) return null;
-  // Reject YAML type coercions and structural/tag/anchor syntax.
-  if (/^(?:true|false|yes|no|on|off|[-+]?(?:\d.*|\.\d.*|\.inf|\.nan))$/i.test(plain) ||
-      /^[\[\]{}&*!|>@`%]/.test(plain) || /:\s/.test(plain)) throw new Error();
-  return plain;
-}
-
-function indentation(line: string): number {
-  const match = /^( *)/.exec(line);
-  if (match === null || line.startsWith("\t") || /^ *\t/.test(line)) throw new Error();
-  return match[1].length;
-}
-
-function literalBlock(
-  lines: string[], start: number, parentIndent: number, rawEndsWithNewline: boolean,
-): {value: string; last: number} {
-  let blockIndent: number | null = null;
-  let cursor = start;
-  const content: string[] = [];
-  while (cursor + 1 < lines.length) {
-    const line = lines[cursor + 1];
-    if (/^\s*$/.test(line)) {
-      content.push("");
-      cursor += 1;
-      continue;
-    }
-    const currentIndent = indentation(line);
-    if (currentIndent <= parentIndent) break;
-    if (blockIndent === null) blockIndent = currentIndent;
-    if (currentIndent < blockIndent) throw new Error();
-    content.push(line.slice(blockIndent));
-    cursor += 1;
-  }
-  while (content.at(-1) === "") content.pop();
-  const lineBreakAfterContent = cursor < lines.length - 1 || rawEndsWithNewline;
-  return {value: content.length === 0 ? "" : content.join("\n") + (lineBreakAfterContent ? "\n" : ""),
-    last: cursor};
-}
-
-/** Deliberately bounded YAML subset for presentation scalars and the nested voice mapping. */
+/** Strict YAML presentation parser shared with Python's base-ref configuration contract. */
 export function parsePresentationYaml(raw: string): PresentationConfig {
   try {
     if (raw.length > 16_384) throw new Error();
-    if (raw.trim() === "{}") return defaultPresentation();
-    const fields: Record<string, unknown> = {};
-    const lines = raw.split(/\r?\n/);
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index];
-      if (/^\s*(?:#.*)?$/.test(line)) continue;
-      const match = /^([a-z_]+):(?:\s+(.*))?$/.exec(line);
-      if (match === null || Object.hasOwn(fields, match[1])) throw new Error();
-      const scalar = (match[2] ?? "").trim();
-      const commentlessScalar = scalar.replace(/(?:^|\s+)#.*$/, "").trim();
-      if (match[1] === "voice" && commentlessScalar === "") {
-        const voice: Record<string, unknown> = {};
-        let voiceIndent: number | null = null;
-        while (index + 1 < lines.length) {
-          const nestedLine = lines[index + 1];
-          if (/^\s*(?:#.*)?$/.test(nestedLine)) {
-            index += 1;
-            continue;
-          }
-          const nestedIndent = indentation(nestedLine);
-          if (nestedIndent === 0) break;
-          if (voiceIndent === null) voiceIndent = nestedIndent;
-          if (nestedIndent !== voiceIndent) throw new Error();
-          const nested = /^ +([a-z_]+):(?:\s+(.*))?$/.exec(nestedLine);
-          if (nested === null || Object.hasOwn(voice, nested[1])) throw new Error();
-          index += 1;
-          const nestedScalar = (nested[2] ?? "").trim();
-          if (nested[1] === "guidance" && /^\|(?:\s+#.*)?$/.test(nestedScalar)) {
-            const block = literalBlock(lines, index, voiceIndent, /(?:\r?\n)$/.test(raw));
-            voice.guidance = block.value;
-            index = block.last;
-          } else {
-            voice[nested[1]] = parseScalar(nestedScalar);
-          }
-        }
-        fields.voice = voiceIndent === null ? null : voice;
-      } else if (match[1] === "voice" && commentlessScalar === "{}") {
-        fields.voice = {};
-      } else {
-        fields[match[1]] = parseScalar(scalar);
+    const document = parseDocument(raw, {schema: "yaml-1.1", uniqueKeys: true});
+    if (document.errors.length > 0 || document.warnings.length > 0) throw new Error();
+    let unsafeNode = false;
+    visit(document, (_key, node) => {
+      const candidate = typeof node === "object" && node !== null
+        ? node as {anchor?: unknown; tag?: unknown}
+        : {};
+      if (isAlias(node) || candidate.anchor || candidate.tag) {
+        unsafeNode = true;
       }
+    });
+    if (unsafeNode) throw new Error();
+    const value = document.toJS({maxAliasCount: 0}) as Record<string, unknown>;
+    const voice = value.voice as Record<string, unknown> | undefined;
+    if (!/(?:\r?\n)$/.test(raw) && typeof voice?.guidance === "string" &&
+        /(?:^|\n) +guidance:\s*\|[^\n]*(?:\n +.*)*$/.test(raw) && voice.guidance.endsWith("\n")) {
+      voice.guidance = voice.guidance.slice(0, -1);
     }
-    if (Object.keys(fields).length === 0) throw new Error();
-    return parsePresentation(fields);
+    return parsePresentation(value);
   } catch {
     throw new Error("presentation_config_invalid");
   }

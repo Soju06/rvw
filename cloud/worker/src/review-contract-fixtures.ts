@@ -14,7 +14,9 @@ export function processFixture(overrides: Record<string, unknown> = {}) {
     failure: null, artifacts: [], sdk_observations: null, ...overrides};
 }
 export function publishFactsFixture(overrides: Record<string, unknown> = {}) {
-  return {event: "COMMENT", policy_source: "default", actor: null, event_clamped_reason: null,
+  return {channels: ["checks", "review"],
+    inline_policy: {severity_at_least: "suggestion", max_comments: null, body_only_count: 0},
+    event: "COMMENT", policy_source: "default", actor: null, event_clamped_reason: null,
     dismissed_review_ids: [], dismiss_failed_review_ids: [], resolved_thread_ids: [], reused_thread_ids: [],
     superseded_thread_ids: [], threads_ambiguous: [], threads_skipped_lane_invalid: [], threads_skipped_resolved: [],
     threads_skipped_same_head: [], threads_skipped_human_reply: [], threads_skipped_unverified: [],

@@ -331,6 +331,7 @@ class RunHandle:
                 self.load_outcome(),
                 locale=self.load_presentation().locale,
                 target=target,
+                presentation=self.load_presentation(),
             )
         except (OSError, ValueError, KeyError):
             return None

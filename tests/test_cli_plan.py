@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 import rvw.cli as cli_module
 from rvw.cli import EXIT_NOT_FOUND, app
+from rvw.presentation import PresentationConfig
 from rvw.target import ResolvedTarget, TargetResolutionError
 
 runner = CliRunner()
@@ -177,6 +178,28 @@ def test_plan_preserves_split_replica_overrides(
     assert payload["adjudicate_replicas"] == 1
     assert payload["total_runs"] == 6
     assert {lane["replicas"] for lane in payload["lanes"]} == {2}
+
+
+def test_plan_human_output_uses_resolved_presentation_locale(
+    monkeypatch: pytest.MonkeyPatch, registry_root: Path
+) -> None:
+    monkeypatch.setattr(cli_module, "_resolve_cli_target", lambda _spec: canned_target())
+    monkeypatch.setattr(
+        cli_module,
+        "load_repo_presentation",
+        lambda *_args, **_kwargs: PresentationConfig(locale="ko"),
+    )
+
+    result = runner.invoke(
+        app,
+        ["plan", "--target", "HEAD", "--registry", str(registry_root)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "활성화된 계층" in result.stdout
+    assert "검토 계획" in result.stdout
+    assert "판정 복제 수: 3" in result.stdout
+    assert "Review plan" not in result.stdout
 
 
 def test_plan_reports_chunk_expanded_total_runs(

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -26,6 +27,7 @@ from rvw.gate import (
     save_gate_verdict,
 )
 from rvw.merge import merge
+from rvw.presentation import PresentationConfig
 from rvw.publish import PublishResult
 from rvw.runtime_policy import DEFAULT_CODEX_RUNTIME_POLICY, CodexRuntimePolicy
 from rvw.schema import Severity, Tier, Verdict
@@ -644,6 +646,45 @@ def test_gate_target_executes_review_once_and_writes_dry_run_artifacts(
     )
     assert publish_payload["event"] == "COMMENT"
     assert "Gate — PASS" in publish_payload["body"]
+
+
+def test_gate_result_summary_uses_persisted_presentation_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out_root = tmp_path / "runs"
+    artifacts = prepared_artifacts(out_root)
+    artifacts = replace(artifacts, presentation=PresentationConfig(locale="ko"))
+    patch_target_dependencies(monkeypatch, artifacts)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["gate", "--target", "42", "--out", str(out_root), "--no-inherit"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"실행 ID: {artifacts.run.run_id}" in result.stdout
+    assert "판정: PASS" in result.stdout
+    assert "게이트 아티팩트:" in result.stdout
+    assert "run id:" not in result.stdout
+
+
+def test_gate_invalid_coverage_error_uses_persisted_locale_and_keeps_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out_root = tmp_path / "runs"
+    artifacts = prepared_artifacts(out_root, valid=0)
+    artifacts = replace(artifacts, presentation=PresentationConfig(locale="ko"))
+    patch_target_dependencies(monkeypatch, artifacts)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["gate", "--target", "42", "--out", str(out_root), "--no-inherit"],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "레인 lane-a 복제 1 청크 1이 유효하지 않습니다" in result.stderr
+    assert "scripted_invalid" in result.stderr
+    assert "lane lane-a replica" not in result.stderr
 
 
 def test_gate_preserves_explicit_split_replica_overrides(

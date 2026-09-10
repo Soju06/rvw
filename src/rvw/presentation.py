@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unicodedata
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -31,6 +31,10 @@ class VoiceConfig(BaseModel):
     audience: Literal["engineers", "mixed"] = "engineers"
     register_: Literal["formal", "neutral"] = Field(default="formal", alias="register")
     guidance: str | None = Field(default=None, max_length=800)
+    examples: list[Annotated[str, Field(max_length=200)]] = Field(
+        default_factory=list, max_length=3
+    )
+    allowed_terms: list[str] = Field(default_factory=list)
 
     @field_validator("guidance")
     @classmethod
@@ -41,6 +45,38 @@ class VoiceConfig(BaseModel):
         ):
             raise ValueError("voice guidance must contain plain text")
         return value
+
+    @field_validator("examples")
+    @classmethod
+    def _bounded_examples(cls, value: list[str]) -> list[str]:
+        for example in value:
+            if any(
+                char != "\n" and unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+                for char in example
+            ):
+                raise ValueError("voice examples must contain plain text")
+            if len(example) > 200:
+                raise ValueError("voice examples must be at most 200 characters")
+        return value
+
+    @field_validator("allowed_terms")
+    @classmethod
+    def _plain_allowed_terms(cls, value: list[str]) -> list[str]:
+        for term in value:
+            if any(
+                char != "\n" and unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+                for char in term
+            ):
+                raise ValueError("voice allowed terms must contain plain text")
+        return value
+
+
+class SynthesisConfig(BaseModel):
+    """Repository-selected synthesis execution setting."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    enabled: bool = True
 
 
 class PresentationConfig(BaseModel):
@@ -53,6 +89,7 @@ class PresentationConfig(BaseModel):
     locale: Literal["ko", "en"] = "en"
     footer: str | None = Field(default=None, max_length=240)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    synthesis: SynthesisConfig = Field(default_factory=SynthesisConfig)
 
     @field_validator("display_name", "short_name")
     @classmethod

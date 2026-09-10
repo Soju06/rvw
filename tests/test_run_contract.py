@@ -186,6 +186,7 @@ def test_publication_exception_is_infrastructure_failure(
         raise RuntimeError("publication broke")
 
     monkeypatch.setattr(cli, "publish_review", fail)
+    policy.write_text(policy.read_text() + "publish:\n  channels: [checks, review]\n")
     result = runner.invoke(
         cli.app, ["auto", "--target", "42", "--policy", str(policy), "--publish", "--json"]
     )
@@ -548,6 +549,7 @@ def test_run_auto_exit_matrix(
     selected = policy if case != "policy" else tmp_path / "missing.yaml"
     args = [command, "--target", "42", "--policy", str(selected), "--out", str(out), "--json"]
     if case == "publication":
+        policy.write_text(policy.read_text() + "publish:\n  channels: [checks, review]\n")
         args.extend(["--publish"] if command == "auto" else ["--publish", "github-review"])
     result = runner.invoke(cli.app, args)
     assert result.exit_code == exit_code, result.output

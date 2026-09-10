@@ -249,10 +249,26 @@ earlier REQUEST_CHANGES reviews. Reading and resolving review threads and dismis
 reviews use the `pull_requests: write` permission the App manifest already declares; no
 new permission is needed. The Worker never chooses the review event: the consuming
 repository's `.rvw/policies/auto.yaml` at the base ref does, and the check `text` carries
-the resulting `publish` facts and any `publication_skipped` reason verbatim. The App argv
-uses `--publish github-review`; the earlier `github-comment` spelling remains accepted by
+the resulting `publish` facts and any `publication_skipped` reason verbatim. The App reads
+publication controls from that same base ref. It passes `--publish github-review` only
+when the resolved channels include `review`; the earlier `github-comment` spelling remains accepted by
 the container for one release. Because a container rollout is asynchronous, a sandbox can
 briefly run the previous image after a Worker deploy; such a job ends as a neutral check.
+
+`publish.channels` defaults to `[checks, review]`; legacy `publish_state: none` maps
+to `[checks]` when channels are absent. Checks-only runs retain the human summary
+and produce no review/comments/threads. Review-only runs suppress detailed check
+updates and finish the mandatory bootstrap check as neutral. Empty channels fail
+closed. `publish.checks.on_block: neutral` makes findings advisory; `on_pass` accepts
+`success` or `neutral`. Invalid/infrastructure/deadline outcomes stay neutral.
+
+`publish.inline` selects a severity floor and optional comment cap; body-only
+findings retain full explanations and create no threads. `.rvw/config.yaml`
+accepts bounded `voice.examples`, `voice.allowed_terms`, and `synthesis.enabled`
+(default true). Disabled synthesis uses the fallback view and records `disabled`.
+Check facts retain synthesis status, publication channels and inline policy/counts.
+See [the auto policy operator guide](../docs/auto-policy.md) for defaults and the
+interaction with living threads.
 
 ### Observe and operate jobs
 

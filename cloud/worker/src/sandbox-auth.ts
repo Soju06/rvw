@@ -154,7 +154,8 @@ export interface ReviewInvocation {
    * `github-review` is canonical: the Python side selects the review event from the
    * repository policy. `github-comment` is the deprecated alias accepted for one release.
    */
-  publish?: "none" | "github-review" | "github-comment";
+  /** null omits `--publish`, as required when the repository disables the review channel. */
+  publish?: "none" | "github-review" | "github-comment" | null;
   /** Explicit runtime deadline in seconds; the CLI default is never relied upon. */
   deadlineSeconds: number;
   /** Codex model override (`--model`); absent keeps the packaged CLI default. */
@@ -201,13 +202,16 @@ export function buildRvwRunInvocation(options: ReviewInvocation): string {
     throw new Error(`review deadline must be an integer between 1 and ${MAX_REVIEW_DEADLINE_SECONDS} seconds`);
   }
   const policyArguments = codexPolicyArguments(options.model, options.reasoningEffort);
+  const publicationArguments = options.publish === null
+    ? ""
+    : ` --publish ${options.publish ?? "github-review"}`;
   return (
     "env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint run " +
     `--target ${shellQuote(`https://github.com/${owner}/${repo}/pull/${prNumber}`)} ` +
     `--base-ref ${shellQuote(baseSha)} --head-ref ${shellQuote(headSha)} ` +
     `--out ${shellQuote(options.out ?? "/workspace/result")} ` +
     (options.repoDir === undefined ? "" : `--repo-dir ${shellQuote(options.repoDir)} `) +
-    `--deadline ${deadlineSeconds} --policy auto --publish ${options.publish ?? "github-review"} --json` +
+    `--deadline ${deadlineSeconds} --policy auto${publicationArguments} --json` +
     policyArguments
   );
 }

@@ -1,5 +1,6 @@
 import {processFixture, publishFactsFixture, summaryFixture, waveWallFixture} from "./review-contract-fixtures";
 import type {PresentationConfig} from "./presentation";
+import type {PublicationPolicy} from "./publication-policy";
 import type {UpdateCheckRunInput} from "./github-app";
 import type {Process} from "@cloudflare/sandbox";
 import {beforeEach, describe, expect, it, vi} from "vitest";
@@ -8,7 +9,12 @@ const mocks = vi.hoisted(() => ({
   sandboxFor: vi.fn(), configureOutbound: vi.fn(),
   getInstallationToken: vi.fn(async () => "installation-placeholder"),
   getPresentationConfig: vi.fn(async (): Promise<{presentation: PresentationConfig; failure?: string}> => ({presentation: {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko" as const, footer: null,
-    voice: {audience: "engineers", register: "formal", guidance: null}}, failure: undefined as string | undefined})),
+    voice: {audience: "engineers", register: "formal", guidance: null,
+      examples: [], allowed_terms: []}, synthesis: {enabled: true}}, failure: undefined as string | undefined})),
+  getPublicationPolicy: vi.fn(async (): Promise<{policy: PublicationPolicy; failure?: string}> => ({policy: {
+    channels: ["checks", "review"], checks: {on_block: "failure", on_pass: "success"},
+    inline: {severity_at_least: "suggestion", max_comments: null},
+  }})),
   createCheckRun: vi.fn(async () => ({id: 42, appSlug: "review-app"})),
   getCheckRunAppSlug: vi.fn(async () => "review-app"),
   clearInstallationToken: vi.fn(), updateCheckRun: vi.fn(async (_token: string, _request: UpdateCheckRunInput) => {}),
@@ -25,6 +31,9 @@ vi.mock("./sandbox", () => ({
     (await sandbox.readFile(path)).content,
 }));
 vi.mock("./github-app", async (importOriginal) => ({...await importOriginal<typeof import("./github-app")>(), ...mocks}));
+vi.mock("./publication-policy", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./publication-policy")>(), getPublicationPolicy: mocks.getPublicationPolicy,
+}));
 
 import {RvwReviewJob, reviewScript} from "./review-job";
 import {idempotencyKey, type ReviewJobMessage} from "./webhook";
@@ -123,6 +132,43 @@ it("writes the review script with the explicit configured deadline and a matchin
   expect(script).toContain("--deadline 900 --policy auto --publish github-review --json");
   expect(script).toBe(reviewScript(message, 900));
   expect(reviewScript(message, 1200)).toContain("--deadline 1200 ");
+});
+
+it.each([
+  ["legacy none", {channels: ["checks"]}],
+  ["explicit checks", {channels: ["checks"]}],
+])("omits --publish for %s while retaining the human Check path", async (_label, overrides) => {
+  const policy: PublicationPolicy = {
+    channels: overrides.channels as PublicationPolicy["channels"],
+    checks: {on_block: "failure", on_pass: "success"},
+    inline: {severity_at_least: "suggestion", max_comments: null},
+  };
+  mocks.getPublicationPolicy.mockResolvedValueOnce({policy});
+  const test = setup("provisioning");
+  delete test.record().processId;
+  await expect(test.job.start(message)).rejects.toThrow("process failed to start");
+  const script = test.sandbox.writeFile.mock.calls.find(([path]) => path === "/workspace/run-review.sh")?.[1] as string;
+  expect(script).not.toContain("--publish");
+  expect(script).toContain("--policy auto --json");
+  expect(test.record().publicationPolicy).toEqual(policy);
+});
+
+it("fails closed before Sandbox dispatch when the base publication policy is invalid", async () => {
+  mocks.getPublicationPolicy.mockResolvedValueOnce({
+    policy: {channels: ["checks"], checks: {on_block: "failure", on_pass: "success"},
+      inline: {severity_at_least: "suggestion", max_comments: null}},
+    failure: "publish_policy_invalid",
+  });
+  const test = setup("provisioning");
+  delete test.record().processId;
+  await expect(test.job.start(message)).rejects.toThrow("publish_policy_invalid");
+  expect(mocks.sandboxFor).not.toHaveBeenCalled();
+  expect(test.record().publishPolicyFailure).toBe("publish_policy_invalid");
+  await test.job.failStart(message, "publish_policy_invalid");
+  expect(mocks.updateCheckRun).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    conclusion: "neutral", summary: "The repository publish policy is invalid.",
+  }));
+  expect(mocks.updateCheckRun.mock.calls[0][1].text).toContain('"publish_policy_failure": "publish_policy_invalid"');
 });
 
 it("fails closed before provisioning when the job cap cannot cover the review budget", async () => {
@@ -363,9 +409,52 @@ it("resolves bootstrap config before creating a check and allocating a sandbox",
   expect(mocks.getPresentationConfig).toHaveBeenCalledWith("installation-placeholder", {
     owner: message.owner, repo: message.repo, baseSha: message.baseSha,
   });
+  expect(mocks.getPublicationPolicy).toHaveBeenCalledWith("installation-placeholder", {
+    owner: message.owner, repo: message.repo, baseSha: message.baseSha,
+  });
   expect(mocks.getPresentationConfig.mock.invocationCallOrder[0]).toBeLessThan(mocks.createCheckRun.mock.invocationCallOrder[0]);
   expect(mocks.createCheckRun.mock.invocationCallOrder[0]).toBeLessThan(mocks.sandboxFor.mock.invocationCallOrder[0]);
   expect(mocks.createCheckRun).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({presentation: expect.objectContaining({short_name: "VOOY Review"})}));
+});
+
+it("terminalizes a review-only run as neutral without detailed Check output", async () => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.record().publicationPolicy = {
+    channels: ["review"], checks: {on_block: "failure", on_pass: "success"},
+    inline: {severity_at_least: "suggestion", max_comments: null},
+  };
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed",
+    startTime: new Date(), exitCode: 0} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture()));
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture({markdown: "Human summary."})));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  expect(mocks.updateCheckRun).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    conclusion: "neutral", summary: "Review published without Check details.",
+  }));
+  expect(mocks.updateCheckRun.mock.calls[0][1]).not.toHaveProperty("text");
+});
+
+it.each([
+  ["pass", 0, {on_block: "failure", on_pass: "neutral"}],
+  ["block", 1, {on_block: "neutral", on_pass: "success"}],
+])("applies repository Check conclusions for %s", async (status, exitCode, checks) => {
+  const test = setup("publishing");
+  test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+  test.record().publicationPolicy = {channels: ["checks", "review"], checks,
+    inline: {severity_at_least: "suggestion", max_comments: null}};
+  test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed",
+    startTime: new Date(), exitCode} as Process);
+  test.files.set("/workspace/result/process.json", JSON.stringify(processFixture({status, exit_code: exitCode})));
+  test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture()));
+  refreshManifest(test.files);
+  await test.job.alarm();
+  expect(mocks.updateCheckRun.mock.calls[0][1].conclusion).toBe("neutral");
+  expect(mocks.updateCheckRun.mock.calls[0][1].summary).toBe("Canonical Python counts.");
+  expect(mocks.updateCheckRun.mock.calls[0][1].title).toBe(
+    status === "pass" ? "rvw · Review complete" : "rvw · Changes needed",
+  );
 });
 it.each(["timeout", "superseded", "queue"])("uses localized human-only summary for %s", async (path) => {
   const test = setup(path === "queue" ? "provisioning" : "running");
@@ -421,7 +510,8 @@ it("persists a malformed bootstrap diagnostic before creating the default check"
   const test = setup("provisioning");
   delete test.record().checkRunId;
   mocks.getPresentationConfig.mockResolvedValueOnce({presentation: {display_name: "rvw", short_name: "rvw", locale: "en", footer: null,
-    voice: {audience: "engineers", register: "formal", guidance: null}}, failure: "presentation_config_invalid"});
+    voice: {audience: "engineers", register: "formal", guidance: null,
+      examples: [], allowed_terms: []}, synthesis: {enabled: true}}, failure: "presentation_config_invalid"});
   await expect(test.job.start(message)).rejects.toThrow("process failed to start");
   expect(test.record().presentationConfigFailure).toBe("presentation_config_invalid");
   expect(test.storage.put.mock.invocationCallOrder[0]).toBeLessThan(mocks.createCheckRun.mock.invocationCallOrder[0]);

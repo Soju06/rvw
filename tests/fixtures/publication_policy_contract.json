@@ -1,0 +1,216 @@
+[
+  {
+    "name": "default",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\n",
+    "expected": {
+      "channels": [
+        "checks",
+        "review"
+      ],
+      "checks": {
+        "on_block": "failure",
+        "on_pass": "success"
+      },
+      "inline": {
+        "severity_at_least": "suggestion",
+        "max_comments": null
+      }
+    }
+  },
+  {
+    "name": "legacy_none",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: none\n",
+    "expected": {
+      "channels": [
+        "checks"
+      ],
+      "checks": {
+        "on_block": "failure",
+        "on_pass": "success"
+      },
+      "inline": {
+        "severity_at_least": "suggestion",
+        "max_comments": null
+      }
+    }
+  },
+  {
+    "name": "checks_only",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish:\n  channels: [checks]\n",
+    "expected": {
+      "channels": [
+        "checks"
+      ],
+      "checks": {
+        "on_block": "failure",
+        "on_pass": "success"
+      },
+      "inline": {
+        "severity_at_least": "suggestion",
+        "max_comments": null
+      }
+    }
+  },
+  {
+    "name": "review_only_advisory",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: none\npublish:\n  channels: [review]\n  checks: {on_block: neutral, on_pass: neutral}\n  inline: {severity_at_least: warning, max_comments: 3}\n",
+    "expected": {
+      "channels": [
+        "review"
+      ],
+      "checks": {
+        "on_block": "neutral",
+        "on_pass": "neutral"
+      },
+      "inline": {
+        "severity_at_least": "warning",
+        "max_comments": 3
+      }
+    }
+  },
+  {
+    "name": "blocker_body_only",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish:\n  inline: {severity_at_least: blocker, max_comments: 0}\n",
+    "expected": {
+      "channels": [
+        "checks",
+        "review"
+      ],
+      "checks": {
+        "on_block": "failure",
+        "on_pass": "success"
+      },
+      "inline": {
+        "severity_at_least": "blocker",
+        "max_comments": 0
+      }
+    }
+  },
+  {
+    "name": "flow_duplicates",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {channels: [checks, checks, review], inline: {max_comments: null}}\n",
+    "expected": {
+      "channels": [
+        "checks",
+        "checks",
+        "review"
+      ],
+      "checks": {
+        "on_block": "failure",
+        "on_pass": "success"
+      },
+      "inline": {
+        "severity_at_least": "suggestion",
+        "max_comments": null
+      }
+    }
+  },
+  {
+    "name": "yaml_boolean",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish:\n  dismiss_on_pass: yes\n",
+    "expected": {
+      "channels": [
+        "checks",
+        "review"
+      ],
+      "checks": {
+        "on_block": "failure",
+        "on_pass": "success"
+      },
+      "inline": {
+        "severity_at_least": "suggestion",
+        "max_comments": null
+      }
+    }
+  },
+  {
+    "name": "empty_channels",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {channels: []}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "unknown_channel",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {channels: [email]}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "null_channels",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {channels: null}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "string_channels",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {channels: review}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "null_checks",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {checks: null}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "null_pass",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {checks: {on_pass: null}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "null_block",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {checks: {on_block: null}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "invalid_pass",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {checks: {on_pass: failure}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "invalid_block",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {checks: {on_block: success}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "null_inline",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {inline: null}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "null_floor",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {inline: {severity_at_least: null}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "float_cap",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {inline: {max_comments: 1.0}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "negative_cap",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {inline: {max_comments: -1}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "bool_cap",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {inline: {max_comments: true}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "string_cap",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {inline: {max_comments: \"3\"}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "unknown_inline",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {inline: {extra: true}}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "null_dismiss",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {dismiss_on_pass: null}\n",
+    "expected_error": "publish_policy_invalid"
+  },
+  {
+    "name": "approval_missing_optin",
+    "yaml": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\npublish: {on_pass: approve}\n",
+    "expected_error": "publish_policy_invalid"
+  }
+]

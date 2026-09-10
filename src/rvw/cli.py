@@ -75,6 +75,7 @@ from rvw.gate import (
 )
 from rvw.hostslots import HostSlotGate, host_slot_gate_from_env, parse_host_concurrency
 from rvw.hunks import hunk_sha256_by_id
+from rvw.i18n import Locale, t
 from rvw.lane import Lane, load_lane, load_new_lane
 from rvw.lane_lint import scope_diagnostics
 from rvw.merge import merge
@@ -109,6 +110,7 @@ from rvw.publish import (
     GhCliClient,
     PublicationLanguageMismatch,
     PublishError,
+    publication_policy_facts,
     publish_body_review,
     publish_review,
     resolve_own_identity,
@@ -591,29 +593,40 @@ def _plan_payload(
     }
 
 
-def _print_plan(payload: dict[str, Any]) -> None:
+def _print_plan(payload: dict[str, Any], *, locale: Locale = "en") -> None:
     target = cast(dict[str, object], payload["target"])
     _console.print(
-        f"Target: {target['kind']} {target['repo']} @ {target['head_sha']}", soft_wrap=True
+        t(
+            "cli.plan.target",
+            locale,
+            kind=target["kind"],
+            repo=target["repo"],
+            head_sha=target["head_sha"],
+        ),
+        soft_wrap=True,
     )
-    layers_table = Table(title="Activated layers")
-    layers_table.add_column("Layer")
-    layers_table.add_column("Tier")
-    layers_table.add_column("Predicate")
+    layers_table = Table(title=t("cli.plan.activated_layers", locale))
+    layers_table.add_column(t("cli.plan.layer", locale))
+    layers_table.add_column(t("cli.plan.tier", locale))
+    layers_table.add_column(t("cli.plan.predicate", locale))
     for layer_value in cast(list[dict[str, object]], payload["layers"]):
         predicate = layer_value["predicate"]
         layers_table.add_row(
             str(layer_value["id"]),
             str(layer_value["tier"]),
-            json.dumps(predicate) if predicate is not None else "unconditional",
+            (
+                json.dumps(predicate)
+                if predicate is not None
+                else t("cli.plan.unconditional", locale)
+            ),
         )
     _console.print(layers_table)
-    table = Table(title="Review plan")
-    table.add_column("Lane")
-    table.add_column("Tier")
-    table.add_column("Cost")
-    table.add_column("Rules", justify="right")
-    table.add_column("Replicas", justify="right")
+    table = Table(title=t("cli.plan.review_plan", locale))
+    table.add_column(t("cli.plan.lane", locale))
+    table.add_column(t("cli.plan.tier", locale))
+    table.add_column(t("cli.plan.cost", locale))
+    table.add_column(t("cli.plan.rules", locale), justify="right")
+    table.add_column(t("cli.plan.replicas", locale), justify="right")
     for lane_value in cast(list[dict[str, object]], payload["lanes"]):
         table.add_row(
             str(lane_value["lane"]),
@@ -623,10 +636,10 @@ def _print_plan(payload: dict[str, Any]) -> None:
             str(lane_value["replicas"]),
         )
     _console.print(table)
-    _console.print(f"Adjudication replicas: {payload['adjudicate_replicas']}")
-    _console.print(f"Discovery mode: {payload['discovery_mode']}")
-    _console.print(f"Chunks: {payload['chunk_count']}")
-    _console.print(f"Total runs: {payload['total_runs']}")
+    _console.print(t("cli.plan.adjudication_replicas", locale, p0=payload["adjudicate_replicas"]))
+    _console.print(t("cli.plan.discovery_mode", locale, p0=payload["discovery_mode"]))
+    _console.print(t("cli.plan.chunks", locale, p0=payload["chunk_count"]))
+    _console.print(t("cli.plan.total_runs", locale, p0=payload["total_runs"]))
 
 
 def _version_callback(value: bool) -> bool:
@@ -902,6 +915,7 @@ async def _review_pipeline(
             identity=resolve_own_identity(client=github) if github is not None else None,
             github=github,
             policy_source=selected.source,
+            publish_policy=selected.policy.publish,
             policy_verified=selected.verified,
             thread_policy=selected.policy.threads,
             cwd=Path.cwd(),
@@ -914,13 +928,28 @@ async def _review_pipeline(
         _write_json(_review_payload(artifacts))
         return
 
-    _console.print(f"run id: {artifacts.run.run_id}", markup=False, soft_wrap=True)
-    _console.print(f"status: {summary.status.value}", markup=False)
-    _console.print(f"report: {artifacts.report_path}", markup=False, soft_wrap=True)
+    locale = artifacts.presentation.locale
+    _console.print(
+        t("cli.result.run_id", locale, p0=artifacts.run.run_id), markup=False, soft_wrap=True
+    )
+    _console.print(t("cli.result.status", locale, p0=summary.status.value), markup=False)
+    _console.print(
+        t("cli.result.report", locale, p0=artifacts.report_path),
+        markup=False,
+        soft_wrap=True,
+    )
     if payload_path is not None:
-        _console.print(f"dry-run payload: {payload_path}", markup=False, soft_wrap=True)
+        _console.print(
+            t("cli.result.dry_run_payload", locale, p0=payload_path),
+            markup=False,
+            soft_wrap=True,
+        )
     if publication_url is not None:
-        _console.print(f"review: {publication_url}", markup=False, soft_wrap=True)
+        _console.print(
+            t("cli.result.review", locale, p0=publication_url),
+            markup=False,
+            soft_wrap=True,
+        )
 
 
 async def _execute_pipeline(
@@ -1598,6 +1627,7 @@ async def _gate_pipeline(
             artifacts.discovered.coverage,
             replicas=plan.replicas,
             chunk_count=plan.chunk_count,
+            locale=artifacts.presentation.locale,
         )
     except GateInvariantError as exc:
         _gate_invariant_failure(artifacts, exc)
@@ -1621,6 +1651,7 @@ async def _gate_pipeline(
                 outcome,
                 inherited_run_id=inherit_run_id,
                 current_hunk_sha256=current_hunk_sha256,
+                locale=artifacts.presentation.locale,
             )
             if inherited_verdict is not None and inherit_run_id is not None
             else None
@@ -1647,6 +1678,7 @@ async def _gate_pipeline(
                 artifacts.merged,
                 outcome,
                 inheritance=inheritance,
+                locale=artifacts.presentation.locale,
             )
         except GateInvariantError as exc:
             _gate_invariant_failure(
@@ -1689,12 +1721,14 @@ async def _gate_pipeline(
             )
             raise typer.Exit(EXIT_NOT_FOUND)
         if has_actionable:
-            dispositions = load_dispositions(template_path)
+            dispositions = load_dispositions(template_path, locale=artifacts.presentation.locale)
         else:
             dispositions = DispositionDocument(schema_version=1, dispositions=[])
     else:
         try:
-            dispositions = load_dispositions(dispositions_path)
+            dispositions = load_dispositions(
+                dispositions_path, locale=artifacts.presentation.locale
+            )
         except (OSError, ValueError) as exc:
             _error_console.print(str(exc), markup=False)
             raise typer.Exit(EXIT_USER_ERROR) from exc
@@ -1708,6 +1742,7 @@ async def _gate_pipeline(
             dispositions,
             inherited_run_id=inherit_run_id,
             inheritance=inheritance,
+            locale=artifacts.presentation.locale,
         ):
             accepted_ids = {
                 record.finding_id
@@ -1757,6 +1792,7 @@ async def _gate_pipeline(
             inherited_run_id=inherit_run_id,
             inheritance=inheritance,
             inheritance_summary=inheritance_summary,
+            locale=artifacts.presentation.locale,
         )
     except GateInvariantError as exc:
         _gate_invariant_failure(
@@ -1800,6 +1836,20 @@ class _PublicationPolicy:
     policy: AutoPolicy
     source: PublishPolicySource
     verified: bool
+
+
+def _publication_controls(policy: AutoPolicy, source: str) -> AutoPolicy:
+    """External policy retains only its legacy switch and judgment rules."""
+    if source != "external":
+        return policy
+    return policy.model_copy(
+        update={
+            "publish": PublishPolicy(
+                channels=["checks"] if policy.publish_state == "none" else ["checks", "review"]
+            ),
+            "threads": ThreadPolicy(),
+        }
+    )
 
 
 def _commit_available(cwd: Path, sha: str) -> bool:
@@ -1851,7 +1901,11 @@ def _publication_policy(
                 return _PublicationPolicy(default.policy, "default", True)
     snapshot = run.load_policy()
     if snapshot is not None:
-        return _PublicationPolicy(snapshot.policy, publish_policy_source(snapshot.source), False)
+        return _PublicationPolicy(
+            _publication_controls(snapshot.policy, snapshot.source),
+            publish_policy_source(snapshot.source),
+            False,
+        )
     default = resolve_auto_policy(target, cwd=cwd, allow_external=False)
     return _PublicationPolicy(default.policy, publish_policy_source(default.source), True)
 
@@ -2006,17 +2060,28 @@ def _publish_gate_verdict(
     if json_output:
         _write_json(payload)
     else:
-        _console.print(f"run id: {artifacts.run.run_id}", markup=False)
-        _console.print(f"verdict: {verdict.verdict}", markup=False)
-        _console.print(f"gate artifact: {verdict_path}", markup=False, soft_wrap=True)
+        locale = artifacts.presentation.locale
+        _console.print(t("cli.result.run_id", locale, p0=artifacts.run.run_id), markup=False)
+        _console.print(t("cli.gate.verdict", locale, p0=verdict.verdict), markup=False)
+        _console.print(
+            t("cli.gate.artifact", locale, p0=verdict_path), markup=False, soft_wrap=True
+        )
         if not execute:
             _console.print(
-                f"dry-run payload: {artifacts.run.dir / 'publish-payload.json'}",
+                t(
+                    "cli.result.dry_run_payload",
+                    locale,
+                    p0=artifacts.run.dir / "publish-payload.json",
+                ),
                 markup=False,
                 soft_wrap=True,
             )
         elif publication.review_url is not None:
-            _console.print(f"review: {publication.review_url}", markup=False, soft_wrap=True)
+            _console.print(
+                t("cli.result.review", locale, p0=publication.review_url),
+                markup=False,
+                soft_wrap=True,
+            )
     if verdict.verdict == "BLOCK":
         raise typer.Exit(EXIT_NOT_FOUND)
 
@@ -2191,6 +2256,7 @@ def _run_command(
         process.command.append("--allow-language-fallback")
     stage = "configuration"
     artifacts: PipelineArtifacts | None = None
+    publication_policy: AutoPolicy | None = None
 
     def terminate(signum: int, frame: object) -> Never:
         raise KeyboardInterrupt(f"received signal {signum}")
@@ -2288,10 +2354,15 @@ def _run_command(
                     source=effective.source, path=effective.path
                 )
                 run.save_policy(effective)
+                publication_policy = _publication_controls(effective.policy, effective.source)
                 if publish is None:
                     runtime.publish = (
-                        "github-review" if effective.policy.publish_state == "comment" else "none"
+                        "github-review"
+                        if "review" in publication_policy.publish.channels
+                        else "none"
                     )
+                if "review" not in publication_policy.publish.channels:
+                    runtime.publish = "none"
                 process.command.extend(["--publish", runtime.publish])
                 stage = "review"
                 save_process(run.dir, process)
@@ -2330,6 +2401,12 @@ def _run_command(
                             [],
                             presentation=process.presentation,
                             synthesis=health.synthesis,
+                            publish=publication_policy_facts(
+                                artifacts.merged,
+                                artifacts.outcome,
+                                publication_policy.publish,
+                                inline_keys=frozenset(),
+                            ),
                         ).model_dump(mode="json"),
                     )
                     detail = (
@@ -2346,6 +2423,12 @@ def _run_command(
                         decision.blocking,
                         presentation=process.presentation,
                         synthesis=health.synthesis,
+                        publish=publication_policy_facts(
+                            artifacts.merged,
+                            artifacts.outcome,
+                            publication_policy.publish,
+                            inline_keys=frozenset(),
+                        ),
                     ).model_dump(mode="json"),
                 )
                 stage = "publication"
@@ -2354,15 +2437,6 @@ def _run_command(
                         stage = "configuration"
                         raise ValueError("github-review publication requires a PR target")
                     github = GhCliClient()
-                    # The deprecated external file may still decide whether to publish and
-                    # the PASS/BLOCK verdict, never the review event or thread handling.
-                    publication_policy = (
-                        effective.policy
-                        if effective.source != "external"
-                        else effective.policy.model_copy(
-                            update={"publish": PublishPolicy(), "threads": ThreadPolicy()}
-                        )
-                    )
                     publication = publish_review(
                         allow_language_fallback=(
                             allow_language_fallback or effective.policy.allow_language_fallback
@@ -2465,6 +2539,14 @@ def _run_command(
                             if artifacts is not None
                             else SynthesisFacts()
                         ),
+                        publish=publication_policy_facts(
+                            merged,
+                            artifacts.outcome if artifacts else None,
+                            publication_policy.publish,
+                            inline_keys=frozenset(),
+                        )
+                        if publication_policy is not None
+                        else None,
                     ).model_dump(mode="json"),
                 )
     finally:
@@ -2501,8 +2583,15 @@ def _run_command(
     if json_output:
         _write_json(process.model_dump(mode="json"))
     else:
+        locale = process.presentation.locale
         _console.print(
-            f"run id: {process.run_id}\nstatus: {process.status}\nartifacts: {run.dir}",
+            "\n".join(
+                (
+                    t("cli.result.run_id", locale, p0=process.run_id),
+                    t("cli.result.status", locale, p0=process.status),
+                    t("cli.result.artifacts", locale, p0=run.dir),
+                )
+            ),
             markup=False,
         )
         if process.failure:
@@ -2553,7 +2642,12 @@ def plan(
     if json_output:
         _write_json(payload)
     else:
-        _print_plan(payload)
+        presentation = load_repo_presentation(
+            resolved_target,
+            cwd=Path.cwd(),
+            allow_worktree_rules=allow_worktree_rules,
+        )
+        _print_plan(payload, locale=presentation.locale)
 
 
 @app.command("adjudicate")
@@ -2726,7 +2820,7 @@ def publish_command(
     try:
         run = RunStore(out_root).open(run_id)
         target = run.load_target()
-        run.load_presentation()
+        presentation = run.load_presentation()
     except InvalidRunId as exc:
         _error_console.print(str(exc), markup=False)
         raise typer.Exit(EXIT_USER_ERROR) from exc
@@ -2787,7 +2881,11 @@ def publish_command(
         raise typer.Exit(EXIT_SYSTEM_ERROR) from exc
     if execute:
         _console.print(
-            str(result.review_url) if result.skipped is None else f"skipped: {result.skipped}",
+            (
+                str(result.review_url)
+                if result.skipped is None
+                else t("cli.publish.skipped", presentation.locale, p0=result.skipped)
+            ),
             markup=False,
             soft_wrap=True,
         )
@@ -2795,21 +2893,42 @@ def publish_command(
         _console.print(str(run.dir / "publish-payload.json"), markup=False, soft_wrap=True)
     facts = result.facts
     if facts is not None:
+        locale = presentation.locale
+        qualifiers = (
+            t("cli.publish.clamped", locale, p0=facts.event_clamped_reason)
+            if facts.event_clamped_reason
+            else ""
+        ) + (
+            t("cli.publish.skipped_qualifier", locale, p0=result.skipped) if result.skipped else ""
+        )
         _console.print(
-            f"event: {result.event or 'none'} (policy {facts.policy_source or 'default'}"
-            + (f", clamped: {facts.event_clamped_reason}" if facts.event_clamped_reason else "")
-            + (f", skipped: {result.skipped}" if result.skipped else "")
-            + ")",
+            t(
+                "cli.publish.event",
+                locale,
+                event=result.event or "none",
+                policy=facts.policy_source or "default",
+                qualifiers=qualifiers,
+            ),
             markup=False,
         )
         _console.print(
-            "threads: "
-            f"reuse {len(facts.reused_thread_ids)}, resolve {len(facts.resolved_thread_ids)}, "
-            f"supersede {len(facts.superseded_thread_ids)}, "
-            f"ambiguous {len(facts.threads_ambiguous)}"
-            + (f" ({facts.threads_skipped_reason})" if facts.threads_skipped_reason else "")
-            + (
-                f"; dismiss {len(facts.dismissed_review_ids)}" if facts.dismissed_review_ids else ""
+            t(
+                "cli.publish.threads",
+                locale,
+                reused=len(facts.reused_thread_ids),
+                resolved=len(facts.resolved_thread_ids),
+                superseded=len(facts.superseded_thread_ids),
+                ambiguous=len(facts.threads_ambiguous),
+                reason=(
+                    t("cli.publish.thread_reason", locale, p0=facts.threads_skipped_reason)
+                    if facts.threads_skipped_reason
+                    else ""
+                ),
+                dismissed=(
+                    t("cli.publish.dismissed", locale, p0=len(facts.dismissed_review_ids))
+                    if facts.dismissed_review_ids
+                    else ""
+                ),
             ),
             markup=False,
         )

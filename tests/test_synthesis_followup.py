@@ -178,9 +178,9 @@ def test_prompt_prioritizes_locale_and_backtick_instructions(locale: Literal["ko
         else "Write every prose field in technical-neutral English in the configured register."
     )
     example = (
-        "인벤토리 검증이 실패하면 `gmail_account_inventory_unavailable`과 함께 HTTP 503을 반환합니다."
+        "설정 파일이 없으면 `load_config`는 `ConfigMissing` 오류를 반환합니다."
         if locale == "ko"
-        else "If inventory validation fails, return HTTP 503 with `gmail_account_inventory_unavailable`."
+        else "If the configuration file is missing, `load_config` returns a `ConfigMissing` error."
     )
     assert prompt.splitlines()[2:5] == [
         "# Language",

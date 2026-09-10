@@ -46,10 +46,11 @@ from rvw.publication import (
     uncovered_regions,
 )
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
-from rvw.schema import Verdict
+from rvw.schema import Severity, Verdict
 from rvw.store import RunHandle, StageMissing
 from rvw.summary import (
     EventClampReason,
+    InlinePolicyFacts,
     PublicationSkipped,
     PublishFacts,
     ThreadsSkippedReason,
@@ -405,17 +406,46 @@ def read_pull_request_head(client: GitHubClient, repo: str, pr_number: int) -> s
 
 
 def _confirmed_inline_groups(
-    merged: MergeResult, outcome: AdjudicationOutcome | None
+    merged: MergeResult, outcome: AdjudicationOutcome | None, policy: PublishPolicy
 ) -> list[CollapseGroup]:
-    if outcome is None:
+    if outcome is None or "review" not in policy.channels:
         return []
-    return [
+    ranks = {Severity.SUGGESTION: 0, Severity.WARNING: 1, Severity.BLOCKER: 2}
+    groups = [
         group
         for group in merged.groups
         if outcome.verdicts.get(group.key) is Verdict.CONFIRMED
         and group.anchorable
         and group.line is not None
+        and ranks[group.severity] >= ranks[Severity(policy.inline.severity_at_least)]
     ]
+    if policy.inline.max_comments is not None:
+        groups.sort(key=lambda group: (-ranks[group.severity], group.key))
+        groups = groups[: policy.inline.max_comments]
+    return groups
+
+
+def publication_policy_facts(
+    merged: MergeResult,
+    outcome: AdjudicationOutcome | None,
+    policy: PublishPolicy,
+    *,
+    inline_keys: frozenset[str] | None = None,
+) -> PublishFacts:
+    """Resolved placement facts, also available when no review write is requested."""
+    if inline_keys is None:
+        inline_keys = frozenset(g.key for g in _confirmed_inline_groups(merged, outcome, policy))
+    return PublishFacts(
+        channels=list(policy.channels),
+        inline_policy=InlinePolicyFacts(
+            **policy.inline.model_dump(),
+            body_only_count=sum(
+                group.key not in inline_keys
+                for group in merged.groups
+                if outcome is None or outcome.verdicts.get(group.key) is not Verdict.REJECTED
+            ),
+        ),
+    )
 
 
 def _candidates(
@@ -577,8 +607,32 @@ def _gather(
         resolve_on_fix=thread_policy.resolve_on_fix,
         reuse_open_thread=thread_policy.reuse_open_thread,
     )
+    # Body-only findings participate in identity matching so their presence cannot
+    # be mistaken for fix evidence or steal an inline finding's thread. They do
+    # not participate in any reuse/supersession/write plan.
     result.threads = threads
     result.plan = reconcile_threads(threads, candidates, context)
+    for candidate in candidates:
+        if not candidate.inline:
+            thread_id = result.plan.reused.pop(candidate.key, None)
+            if thread_id is not None:
+                result.plan.outcomes.pop(thread_id, None)
+    # Changed evidence can prevent an exact match. Presence of a body-only finding
+    # for this rule/path still withholds fix proof for an unmatched old thread.
+    body_only_rules = {
+        (candidate.rule_id, candidate.lane_id, candidate.path)
+        for candidate in candidates
+        if not candidate.inline
+    }
+    for thread in threads:
+        marker = thread.marker
+        if (
+            marker is not None
+            and thread.id in result.plan.resolve
+            and (marker.rule_id, marker.lane_id, thread.path) in body_only_rules
+        ):
+            result.plan.resolve.remove(thread.id)
+            result.plan._record(thread.id, "skipped_policy")
     return result
 
 
@@ -786,7 +840,27 @@ def publish_review(
     locale = presentation.locale
     publish_policy = publish_policy or PublishPolicy()
     thread_policy = thread_policy or ThreadPolicy()
-    inline_groups = _confirmed_inline_groups(merged, outcome)
+    if publish_policy.inline.max_comments == 0:
+        thread_policy = ThreadPolicy(resolve_on_fix=False, reuse_open_thread=False)
+    inline_groups = _confirmed_inline_groups(merged, outcome, publish_policy)
+    if "review" not in publish_policy.channels:
+        facts = publication_policy_facts(merged, outcome, publish_policy)
+        facts.policy_source = policy_source
+        facts.threads_skipped_reason = "disabled_by_policy"
+        record_publish_facts(run.dir, facts, publication_skipped="review_channel_disabled")
+        (run.dir / "publish-payload.json").write_text(
+            _json_text({"event": None, "publication_skipped": "review_channel_disabled"}) + "\n",
+            encoding="utf-8",
+        )
+        return PublishResult(
+            review_url=None,
+            inline_count=0,
+            body_fallback_count=0,
+            state="skipped",
+            event=None,
+            skipped="review_channel_disabled",
+            facts=facts,
+        )
     try:
         coverage = run.load_discover().coverage
     except StageMissing:
@@ -920,6 +994,9 @@ def publish_review(
     )
 
     facts = _facts_from_plan(plan, identity=identity, reason=gathered.reason)
+    placement = publication_policy_facts(merged, outcome, publish_policy, inline_keys=posted_keys)
+    facts.channels = placement.channels
+    facts.inline_policy = placement.inline_policy
     facts.event = event
     facts.policy_source = policy_source
     facts.event_clamped_reason = clamp_reason
@@ -971,6 +1048,7 @@ def publish_review(
                 plan, event=event, skipped=skipped, dismiss=[review.id for review in to_dismiss]
             )
         (run.dir / "publish-payload.json").write_text(f"{_json_text(planned)}\n", encoding="utf-8")
+        record_publish_facts(run.dir, facts, publication_skipped=skipped)
         return PublishResult(
             review_url=None,
             inline_count=len(comments),
@@ -1018,6 +1096,7 @@ def publish_review(
             raw = _run(command, _json_text(fallback))
             inline_posted = False
             body_fallback_count = len(posted_groups)
+            facts.inline_policy.body_only_count += len(posted_groups)
         review_url = _review_url(raw, locale=locale)
     else:
         facts.event = None

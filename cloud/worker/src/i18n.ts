@@ -12,6 +12,7 @@ export const catalogEn = {
   reason_publish_policy: "The repository publish policy is invalid.",
   reason_language: "The review text could not be verified in the configured language.",
   reason_incomplete: "The review could not complete.",
+  review_without_check_details: "Review published without Check details.",
 
   check_started: "{display_name} · Review in progress",
   check_passed: "{display_name} · Review complete",
@@ -44,6 +45,7 @@ export const catalogKo: Record<MessageKey, string> = {
   reason_publish_policy: "저장소의 게시 정책이 올바르지 않습니다.",
   reason_language: "설정된 언어로 검토 내용을 확인하지 못했습니다.",
   reason_incomplete: "검토를 마치지 못했습니다.",
+  review_without_check_details: "Check 상세 정보 없이 검토를 게시했습니다.",
 
   check_started: "{display_name} · 검토 중",
   check_passed: "{display_name} · 검토 완료",

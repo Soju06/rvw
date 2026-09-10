@@ -25,6 +25,42 @@
       "title": "FindingCounts",
       "type": "object"
     },
+    "InlinePolicyFacts": {
+      "additionalProperties": false,
+      "properties": {
+        "severity_at_least": {
+          "default": "suggestion",
+          "enum": [
+            "suggestion",
+            "warning",
+            "blocker"
+          ],
+          "title": "Severity At Least",
+          "type": "string"
+        },
+        "max_comments": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Comments"
+        },
+        "body_only_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Body Only Count",
+          "type": "integer"
+        }
+      },
+      "title": "InlinePolicyFacts",
+      "type": "object"
+    },
     "PresentationConfig": {
       "additionalProperties": false,
       "description": "Base-ref presentation snapshot, safe to retain in strict run contracts.",
@@ -67,6 +103,9 @@
         },
         "voice": {
           "$ref": "#/$defs/VoiceConfig"
+        },
+        "synthesis": {
+          "$ref": "#/$defs/SynthesisConfig"
         }
       },
       "title": "PresentationConfig",
@@ -76,6 +115,25 @@
       "additionalProperties": false,
       "description": "What publication did on GitHub: the event, and every thread and review it touched.",
       "properties": {
+        "channels": {
+          "default": [
+            "checks",
+            "review"
+          ],
+          "items": {
+            "enum": [
+              "checks",
+              "review"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Channels",
+          "type": "array"
+        },
+        "inline_policy": {
+          "$ref": "#/$defs/InlinePolicyFacts"
+        },
         "event": {
           "anyOf": [
             {
@@ -319,6 +377,19 @@
       "title": "SummaryLanes",
       "type": "object"
     },
+    "SynthesisConfig": {
+      "additionalProperties": false,
+      "description": "Repository-selected synthesis execution setting.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "SynthesisConfig",
+      "type": "object"
+    },
     "SynthesisFacts": {
       "additionalProperties": false,
       "description": "Non-judgmental health and runtime facts for the synthesis pass.",
@@ -443,6 +514,22 @@
           ],
           "default": null,
           "title": "Guidance"
+        },
+        "examples": {
+          "items": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Examples",
+          "type": "array"
+        },
+        "allowed_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Terms",
+          "type": "array"
         }
       },
       "title": "VoiceConfig",
@@ -574,7 +661,8 @@
           "enum": [
             "duplicate_review_same_head",
             "on_pass_none",
-            "head_moved"
+            "head_moved",
+            "review_channel_disabled"
           ],
           "type": "string"
         },
