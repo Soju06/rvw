@@ -149,6 +149,7 @@ __all__ = [
     "ReviewStatus",
     "RunError",
     "RunSummary",
+    "TriggerFacts",
     "coverage_totals",
     "failed_lanes",
     "running_summary",
@@ -348,6 +349,17 @@ class PublishFacts(ContractModel):
     threads_skipped_reason: ThreadsSkippedReason | None = None
 
 
+class TriggerFacts(ContractModel):
+    """Repository trigger evaluation recorded in summary artifacts."""
+
+    skipped: bool = False
+    rule: str | None = None
+    mode: Literal["denylist", "allowlist"] = "denylist"
+    bypassed: Literal["rerequested", "force"] | None = None
+    policy_error: str | None = None
+    not_applicable: bool = False
+
+
 class ExecutionSummary(ContractModel):
     publication_failure: str | None = Field(default=None, min_length=1)
     language_fallback_used: bool = False
@@ -363,6 +375,7 @@ class ExecutionSummary(ContractModel):
     markdown: str = "Review has not completed."
     publish: PublishFacts = Field(default_factory=PublishFacts)
     synthesis: SynthesisFacts = Field(default_factory=SynthesisFacts)
+    trigger: TriggerFacts = Field(default_factory=TriggerFacts)
 
 
 def summary_failed_lanes(coverage: Sequence[LaneCoverage]) -> list[SummaryFailedLane]:
@@ -420,6 +433,7 @@ def execution_summary(
     presentation: PresentationConfig | None = None,
     synthesis: SynthesisFacts | None = None,
     publish: PublishFacts | None = None,
+    trigger: TriggerFacts | None = None,
 ) -> ExecutionSummary:
     """Compute presentation facts once for every review adapter."""
     lanes = SummaryLanes(
@@ -445,4 +459,5 @@ def execution_summary(
         markdown=markdown,
         synthesis=synthesis or SynthesisFacts(),
         publish=publish or PublishFacts(),
+        trigger=trigger or TriggerFacts(),
     )

@@ -143,6 +143,7 @@ export function shellQuote(value: string): string {
 }
 
 export interface ReviewInvocation {
+  trigger?: import("./triggers").TriggerFacts;
   owner: string;
   repo: string;
   prNumber: number;
@@ -206,12 +207,16 @@ export function buildRvwRunInvocation(options: ReviewInvocation): string {
     ? ""
     : ` --publish ${options.publish ?? "github-review"}`;
   return (
-    "env RVW_CODEX_SANDBOX=danger-full-access python -m rvw.container_entrypoint run " +
+    "env RVW_CODEX_SANDBOX=danger-full-access " +
+    (options.trigger === undefined ? "" : `RVW_TRIGGER_SNAPSHOT=${shellQuote(JSON.stringify({
+      repo: `${owner}/${repo}`, pr: prNumber, base: baseSha, head: headSha, trigger: options.trigger,
+    }))} `) +
+    "python -m rvw.container_entrypoint run " +
     `--target ${shellQuote(`https://github.com/${owner}/${repo}/pull/${prNumber}`)} ` +
     `--base-ref ${shellQuote(baseSha)} --head-ref ${shellQuote(headSha)} ` +
     `--out ${shellQuote(options.out ?? "/workspace/result")} ` +
     (options.repoDir === undefined ? "" : `--repo-dir ${shellQuote(options.repoDir)} `) +
     `--deadline ${deadlineSeconds} --policy auto${publicationArguments} --json` +
-    policyArguments
+    policyArguments + (options.trigger?.bypassed === "rerequested" ? " --force-review" : "")
   );
 }

@@ -47,7 +47,7 @@ This capability defines how operators and CI enter the common pipeline, how YAML
   read-only container root, as `docs/container-image.md` shows; the App Sandbox
   provisions its own checkout and enforces its own boundary. Project `.rvw/` policy and
   lanes resolve from the captured base commit, not from the pull-request head.
-- `review` does not itself apply the auto YAML policy; `auto` translates compatibility options into the shared `run` policy-gated command.
+- `review` applies the auto YAML trigger policy before discovery without applying its verdict rules; `auto` translates compatibility options into the shared `run` policy-gated command.
 - `adjudicate --run` requires persisted target, discovery, and merge inputs and never repeats discovery. A failed attempt may update `run.json` with its error while retaining the previous outcome and report.
 - Agentic execution without `--repo-dir` provisions a checkout used by discovery and adjudication. Inline execution without a checkout can render unadjudicated findings, which a confirmed-only policy does not block.
 - `run` and `auto` use the ordinary layered lane loader and support an explicit artifact directory; interactive pause and worktree-rule overrides remain `review` concerns.
@@ -139,3 +139,21 @@ The anchored presentation snapshot owns `voice.examples`, `voice.allowed_terms` 
 Inline selection applies the severity floor, then a highest-severity cap with finding-key ties. Selection precedes living-thread reuse, so reused candidates can reduce newly posted comments below the cap. Body-only findings retain their full explanation. Body-only findings still participate in identity matching, preventing a placement change from being mistaken for fix evidence; their matched threads are excluded from reuse and write plans; historical disappeared findings retain the existing fix-proof rules. `threads.resolve_on_fix` and `threads.reuse_open_thread` apply within that boundary. A zero cap selects no inline candidates. The channel and placement facts remain available in summary artifacts and enabled check details.
 
 Operator examples and all defaults are documented in [auto policy controls](../../../docs/auto-policy.md). The active change is [repository-publication-controls](../../changes/repository-publication-controls/proposal.md).
+
+## Repository review triggers (2026-09-10)
+
+The owner measured clawroid/bori#1772, a Changesets release pull request by
+`github-actions[bot]` on `changeset-release/main`, receiving 22 reviews, one per bot
+push. The same pattern occurred on #1743, #1749, #1751, and #1753. Audit rows A1–A3
+in `/tmp/rvw-hardcode-audit.md` identified eligibility and draft checks as hardcoded
+Worker decisions. Consumers now name their bots and repository conventions in the
+base-ref `.rvw/policies/auto.yaml`; packaged defaults contain no bot logins.
+
+Missing configuration retains the empty denylist and draft skip. A matched denylist
+rule supplies the human skip reason; an allowlist miss has no matching rule, so it
+records null and says that no allowlist rule matched. Draft skips also record null
+in CLI summaries, while the App retains the historical no-check draft path. Explicit
+reruns honor the human request. Trigger facts cross the App/CLI boundary so container
+metadata changes cannot undo the pre-enqueue decision or erase its diagnostics.
+
+The publication-controls integration applies the resolved presentation locale to trigger skips as well as completed results. Interactive skips persist the anchored presentation before rendering; matching rule names remain unchanged and draft/allowlist explanations use the English/Korean catalogs.

@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {"check": "tsc --noEmit", "test": "vitest run", "types": "wrangler types worker-configuration.d.ts"},
-  "dependencies": {"@cloudflare/sandbox": "0.12.9", "yaml": "2.8.1"},
+  "dependencies": {"@cloudflare/sandbox": "0.12.9", "yaml": "2.8.2"},
   "devDependencies": {"@types/node": "24.3.1", "typescript": "5.9.2", "vitest": "4.1.11", "wrangler": "4.128.0"}
 }

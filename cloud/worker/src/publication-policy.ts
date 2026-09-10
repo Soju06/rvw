@@ -117,9 +117,9 @@ function validateThreads(value: unknown): void {
 }
 
 /** Parse the strict publication subset of a repository auto policy. */
-export function parsePublicationPolicyYaml(raw: string): PublicationPolicy {
+export function parsePublicationPolicyYaml(raw: string, maximumCharacters = 32_768): PublicationPolicy {
   try {
-    if (raw.length > 32_768) invalid("policy file is too large");
+    if (raw.length > maximumCharacters) invalid("policy file is too large");
     // PyYAML, used by Python's authoritative reader, follows YAML 1.1 scalar coercion.
     const document = parseDocument(raw, {schema: "yaml-1.1", uniqueKeys: true});
     if (document.errors.length > 0) invalid(document.errors[0].message);

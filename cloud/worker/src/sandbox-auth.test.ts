@@ -144,6 +144,24 @@ describe("review process environment", () => {
 });
 
 describe("Codex runtime policy overrides", () => {
+  it("preserves a human rerequest bypass in the CLI invocation", () => {
+    expect(buildRvwRunInvocation({owner: "acme", repo: "rockets", prNumber: 42, baseSha: "b".repeat(40),
+      headSha: "a".repeat(40), deadlineSeconds: 900, trigger: {skipped: false, rule: null, mode: "denylist", bypassed: "rerequested", policy_error: null}})).toContain(" --force-review");
+  });
+  it("forwards the validated webhook trigger snapshot with safe shell quoting", () => {
+    const trigger = {skipped: false, rule: null, mode: "denylist" as const, bypassed: null, policy_error: "policy_invalid"};
+    const result = buildRvwRunInvocation({owner: "acme", repo: "rockets", prNumber: 42, baseSha: "b".repeat(40),
+      headSha: "a".repeat(40), deadlineSeconds: 900, trigger});
+    expect(result).toContain(`RVW_TRIGGER_SNAPSHOT='${JSON.stringify({repo: "acme/rockets", pr: 42,
+      base: "b".repeat(40), head: "a".repeat(40), trigger})}'`);
+  });
+  it("keeps the anchored trigger snapshot when review publication is disabled", () => {
+    const trigger = {skipped: false, rule: null, mode: "denylist" as const, bypassed: null, policy_error: null};
+    const result = buildRvwRunInvocation({owner: "acme", repo: "rockets", prNumber: 42,
+      baseSha: "b".repeat(40), headSha: "a".repeat(40), deadlineSeconds: 900, trigger, publish: null});
+    expect(result).toContain("RVW_TRIGGER_SNAPSHOT=");
+    expect(result).not.toContain("--publish");
+  });
   const options = {owner: "acme", repo: "rockets", prNumber: 42,
     baseSha: "b".repeat(40), headSha: "a".repeat(40), deadlineSeconds: 900};
 

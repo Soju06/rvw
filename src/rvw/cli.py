@@ -19,7 +19,7 @@ from typing import Annotated, Any, Literal, Never, cast
 
 import typer
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from rich.console import Console
 from rich.table import Table
 from typer import _click as click
@@ -91,12 +91,15 @@ from rvw.pipeline import (
 )
 from rvw.policy import (
     AutoPolicy,
+    EffectivePolicy,
     PolicyNotFound,
     PublishPolicy,
     PublishPolicyInvalid,
     PublishPolicySource,
     ThreadPolicy,
+    TriggerMetadata,
     evaluate,
+    evaluate_trigger,
     packaged_policy,
     publish_policy_source,
     repository_policy_from_contents,
@@ -181,6 +184,7 @@ from rvw.summary import (
     RunError,
     RunSummary,
     RuntimeSettings,
+    TriggerFacts,
     execution_summary,
     summarize_run,
 )
@@ -738,6 +742,7 @@ def review(
     allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
     model: _ModelOption = None,
     reasoning_effort: _ReasoningEffortOption = None,
+    force_review: Annotated[bool, Option("--force-review")] = False,
 ) -> None:
     runtime_policy = _command_runtime_policy(model, reasoning_effort)
     host_gate = _command_host_gate()
@@ -763,6 +768,7 @@ def review(
                 discovery_mode=discovery_mode,
                 allow_language_fallback=allow_language_fallback,
                 runtime_policy=runtime_policy,
+                force_review=force_review,
             )
         )
     except PublicationLanguageMismatch as exc:
@@ -831,6 +837,7 @@ async def _review_pipeline(
     allow_language_fallback: bool = False,
     no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
     runtime_policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
+    force_review: bool = False,
 ) -> None:
     resolved_target: ResolvedTarget | None = None
     selected: _PublicationPolicy | None = None
@@ -841,7 +848,9 @@ async def _review_pipeline(
             raise typer.Exit(EXIT_USER_ERROR)
         # A policy fault must fail before any lane is dispatched.
         try:
-            effective = resolve_auto_policy(resolved_target, cwd=Path.cwd(), allow_external=False)
+            effective = resolve_auto_policy(
+                resolved_target, cwd=repo_dir or Path.cwd(), allow_external=False
+            )
         except (ValueError, yaml.YAMLError) as exc:
             _error_console.print(_policy_fault(exc), markup=False)
             raise typer.Exit(EXIT_USER_ERROR) from exc
@@ -866,6 +875,8 @@ async def _review_pipeline(
             discovery_mode=discovery_mode,
             no_output_seconds=no_output_seconds,
             runtime_policy=runtime_policy,
+            apply_triggers=True,
+            force_review=force_review,
         )
     except PipelineInfrastructureError as exc:
         artifacts = exc.artifacts
@@ -901,7 +912,9 @@ async def _review_pipeline(
                 selected = _PublicationPolicy(default.policy, "default", False)
         if publish:
             artifacts.run.save_policy(
-                resolve_auto_policy(artifacts.target, cwd=Path.cwd(), allow_external=False)
+                resolve_auto_policy(
+                    artifacts.target, cwd=repo_dir or Path.cwd(), allow_external=False
+                )
             )
         publication = publish_review(
             allow_language_fallback=allow_language_fallback,
@@ -973,6 +986,8 @@ async def _execute_pipeline(
     presentation: PresentationConfig | None = None,
     no_output_seconds: int = DEFAULT_NO_OUTPUT_SECONDS,
     runtime_policy: CodexRuntimePolicy = DEFAULT_CODEX_RUNTIME_POLICY,
+    apply_triggers: bool = False,
+    force_review: bool = False,
 ) -> _PipelineArtifacts | None:
     """Execute and persist common review stages without publishing or rendering CLI output."""
     target = resolved_target or _resolve_cli_target(target_spec)
@@ -982,6 +997,30 @@ async def _execute_pipeline(
         resolved_presentation = presentation or load_repo_presentation(
             target, cwd=source_dir, allow_worktree_rules=allow_worktree_rules
         )
+        trigger_facts: TriggerFacts | None = None
+        selected_run = run_handle
+        if apply_triggers:
+            try:
+                effective = _resolve_execution_policy(
+                    target, cwd=checkout or Path.cwd(), allow_external=False
+                )
+            except (ValueError, yaml.YAMLError) as exc:
+                _error_console.print(_policy_fault(exc), markup=False)
+                raise typer.Exit(EXIT_USER_ERROR) from exc
+            trigger_facts = _trigger_facts(target, effective.policy, force_review=force_review)
+            selected_run = selected_run or RunStore(out_root).create(target)
+            selected_run.save_target(target)
+            selected_run.save_policy(effective)
+            selected_run.save_presentation(resolved_presentation)
+            if trigger_facts.skipped:
+                _save_trigger_summary(selected_run, trigger_facts)
+                _console.print(
+                    _trigger_skip_message(
+                        trigger_facts, target, effective.policy, locale=resolved_presentation.locale
+                    ),
+                    markup=False,
+                )
+                return None
         if registry_root.expanduser() == DEFAULT_REGISTRY_ROOT:
             registry = load_effective_registry(
                 target,
@@ -999,47 +1038,51 @@ async def _execute_pipeline(
                 if source.lane.id in active_ids:
                     lane_sources[source.source] = lane_sources.get(source.source, 0) + 1
 
-        return await execute_pipeline(
-            run_handle=run_handle,
-            presentation=resolved_presentation,
-            registry=registry,
-            lanes_root=lanes_root,
-            target=target,
-            runtime=CodexRuntime(
-                policy=runtime_policy,
-                mode=(
-                    CodexRuntimeMode.AGENTIC
-                    if discovery_mode is DiscoveryMode.AGENTIC
-                    else CodexRuntimeMode.TOOL_LESS
+        try:
+            return await execute_pipeline(
+                run_handle=selected_run,
+                presentation=resolved_presentation,
+                registry=registry,
+                lanes_root=lanes_root,
+                target=target,
+                runtime=CodexRuntime(
+                    policy=runtime_policy,
+                    mode=(
+                        CodexRuntimeMode.AGENTIC
+                        if discovery_mode is DiscoveryMode.AGENTIC
+                        else CodexRuntimeMode.TOOL_LESS
+                    ),
+                    no_output_seconds=no_output_seconds,
                 ),
-                no_output_seconds=no_output_seconds,
-            ),
-            adjudication_runtime=CodexRuntime(
-                policy=runtime_policy,
-                mode=CodexRuntimeMode.TOOL_LESS,
-                no_output_seconds=no_output_seconds,
-            ),
-            expanded_adjudication_runtime=CodexRuntime(
-                policy=runtime_policy,
-                mode=CodexRuntimeMode.AGENTIC,
-                no_output_seconds=no_output_seconds,
-            ),
-            adjudicator=adjudicate,
-            active_lanes=active_lanes,
-            repo_dir=checkout,
-            discover_replicas=discover_replicas,
-            adjudicate_replicas=adjudicate_replicas,
-            concurrency=concurrency,
-            deadline_seconds=deadline_seconds,
-            out_root=out_root,
-            pause=pause,
-            dynamic_brief=dynamic_brief,
-            on_pause=lambda message: _console.print(message, markup=False),
-            on_warning=lambda message: _error_console.print(message, markup=False),
-            host_gate=host_gate,
-            rule_source_warning=(WORKTREE_RULE_WARNING if allow_worktree_rules else None),
-            discovery_mode=discovery_mode,
-        )
+                adjudication_runtime=CodexRuntime(
+                    policy=runtime_policy,
+                    mode=CodexRuntimeMode.TOOL_LESS,
+                    no_output_seconds=no_output_seconds,
+                ),
+                expanded_adjudication_runtime=CodexRuntime(
+                    policy=runtime_policy,
+                    mode=CodexRuntimeMode.AGENTIC,
+                    no_output_seconds=no_output_seconds,
+                ),
+                adjudicator=adjudicate,
+                active_lanes=active_lanes,
+                repo_dir=checkout,
+                discover_replicas=discover_replicas,
+                adjudicate_replicas=adjudicate_replicas,
+                concurrency=concurrency,
+                deadline_seconds=deadline_seconds,
+                out_root=out_root,
+                pause=pause,
+                dynamic_brief=dynamic_brief,
+                on_pause=lambda message: _console.print(message, markup=False),
+                on_warning=lambda message: _error_console.print(message, markup=False),
+                host_gate=host_gate,
+                rule_source_warning=(WORKTREE_RULE_WARNING if allow_worktree_rules else None),
+                discovery_mode=discovery_mode,
+            )
+        finally:
+            if selected_run is not None and trigger_facts is not None:
+                _save_trigger_summary(selected_run, trigger_facts)
 
     if discovery_mode is DiscoveryMode.INLINE or repo_dir is not None:
         return await execute_with_checkout(repo_dir)
@@ -1831,6 +1874,156 @@ def _policy_fault(exc: Exception) -> str:
     return f"invalid_policy: {exc}"
 
 
+class _TriggerSkipped(Exception):
+    """Internal successful stop before discovery."""
+
+
+class _TriggerSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    repo: str
+    pr: int = Field(ge=1)
+    base: str
+    head: str
+    trigger: TriggerFacts
+
+
+def _worker_trigger_facts(target: ResolvedTarget) -> TriggerFacts | None:
+    raw = os.environ.get("RVW_TRIGGER_SNAPSHOT")
+    if raw is None:
+        return None
+    snapshot = _TriggerSnapshot.model_validate_json(raw)
+    if (
+        target.kind != "pr"
+        or snapshot.repo != target.repo
+        or snapshot.pr != target.pr_number
+        or snapshot.base != target.base_sha
+        or snapshot.head != target.head_sha
+        or snapshot.trigger.skipped
+        or snapshot.trigger.not_applicable
+    ):
+        raise ValueError("trigger snapshot anchor mismatch")
+    return snapshot.trigger
+
+
+def _trigger_facts(
+    target: ResolvedTarget, policy: AutoPolicy, *, force_review: bool = False
+) -> TriggerFacts:
+    if target.kind != "pr":
+        return TriggerFacts(not_applicable=True)
+    if force_review:
+        return TriggerFacts(bypassed="force", mode=policy.triggers.mode)
+    decision = evaluate_trigger(
+        policy.triggers,
+        TriggerMetadata(
+            author=target.pr_author,
+            head_branch=target.pr_head_branch,
+            base_branch=target.pr_base_branch,
+            labels=target.pr_labels,
+            title=target.pr_title or "",
+            draft=target.pr_draft,
+        ),
+    )
+    return TriggerFacts(skipped=decision.skipped, rule=decision.rule, mode=decision.mode)
+
+
+def _trigger_skip_message(
+    facts: TriggerFacts,
+    target: ResolvedTarget,
+    policy: AutoPolicy | None = None,
+    *,
+    locale: str = "en",
+) -> str:
+    draft_skipped = target.pr_draft and (policy is None or policy.triggers.drafts == "skip")
+    reason = (
+        t("cli.trigger.draft", locale)
+        if draft_skipped
+        else (facts.rule or t("cli.trigger.allowlist_miss", locale))
+    )
+    return t("cli.trigger.skipped", locale, p0=reason)
+
+
+def _read_execution_repository_policy(
+    target: ResolvedTarget, *, ignore_invalid_triggers: bool = False
+) -> EffectivePolicy | None:
+    path = f"repos/{target.repo}/contents/.rvw/policies/auto.yaml?ref={target.base_sha}"
+    try:
+        raw = GhCliClient().rest("GET", path)
+    except PublishError as exc:
+        if exc.status_code == 404:
+            return None
+        raise ValueError(f"repository policy read failed: {exc}") from exc
+    fetched = repository_policy_from_contents(raw, ignore_invalid_triggers=ignore_invalid_triggers)
+    if fetched is None:
+        raise ValueError("repository policy response is not a file")
+    return EffectivePolicy(fetched, "repository", path)
+
+
+def _resolve_execution_policy(
+    target: ResolvedTarget,
+    *,
+    cwd: Path,
+    policy: str | Path = "auto",
+    allow_external: bool = True,
+    ignore_invalid_triggers: bool = False,
+) -> EffectivePolicy:
+    effective = resolve_auto_policy(
+        target,
+        cwd=cwd,
+        policy=policy,
+        allow_external=False,
+        external_path=DEFAULT_AUTO_POLICY,
+        ignore_invalid_triggers=ignore_invalid_triggers,
+    )
+    if str(policy) != "auto" or effective.source == "repository":
+        return effective
+    if (
+        target.kind == "pr"
+        and target.base_sha is not None
+        and not _commit_available(cwd, target.base_sha)
+    ):
+        remote = _read_execution_repository_policy(
+            target, ignore_invalid_triggers=ignore_invalid_triggers
+        )
+        if remote is not None:
+            return remote
+    if allow_external:
+        return resolve_auto_policy(
+            target,
+            cwd=cwd,
+            policy=policy,
+            allow_external=True,
+            external_path=DEFAULT_AUTO_POLICY,
+            ignore_invalid_triggers=ignore_invalid_triggers,
+        )
+    return effective
+
+
+def _save_trigger_summary(run: RunHandle, facts: TriggerFacts) -> None:
+    summary_path = run.dir / "summary.json"
+    summary = (
+        ExecutionSummary.model_validate_json(summary_path.read_text())
+        if summary_path.is_file()
+        else ExecutionSummary(presentation=run.load_presentation())
+    )
+    summary.trigger = facts
+    if facts.skipped:
+        effective = run.load_policy()
+        if effective is not None:
+            summary.publish = publication_policy_facts(
+                merge([], lane_tiers={}),
+                None,
+                _publication_controls(effective.policy, effective.source).publish,
+            )
+        summary.markdown = _trigger_skip_message(
+            facts,
+            run.load_target(),
+            effective.policy if effective is not None else None,
+            locale=summary.presentation.locale,
+        )
+    write_artifact_json(summary_path, summary.model_dump(mode="json"))
+
+
 @dataclass(frozen=True)
 class _PublicationPolicy:
     policy: AutoPolicy
@@ -2112,6 +2305,7 @@ def auto(
     allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
     model: _ModelOption = None,
     reasoning_effort: _ReasoningEffortOption = None,
+    force_review: Annotated[bool, Option("--force-review")] = False,
 ) -> None:
     """Compatibility alias of run, using the policy's publication preference."""
     if allow_approve:
@@ -2134,6 +2328,7 @@ def auto(
         no_output_timeout=no_output_timeout,
         model=model,
         reasoning_effort=reasoning_effort,
+        force_review=force_review,
     )
 
 
@@ -2164,6 +2359,7 @@ def run_command(
     allow_language_fallback: Annotated[bool, Option("--allow-language-fallback")] = False,
     model: _ModelOption = None,
     reasoning_effort: _ReasoningEffortOption = None,
+    force_review: Annotated[bool, Option("--force-review")] = False,
 ) -> None:
     """Execute a policy-gated review and persist the shared result contract."""
     _run_command(
@@ -2184,6 +2380,7 @@ def run_command(
         no_output_timeout=no_output_timeout,
         model=model,
         reasoning_effort=reasoning_effort,
+        force_review=force_review,
     )
 
 
@@ -2205,6 +2402,7 @@ def _run_command(
     no_output_timeout: int | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    force_review: bool = False,
 ) -> None:
     started = time.monotonic()
     if publish == "github-comment":
@@ -2257,6 +2455,10 @@ def _run_command(
     stage = "configuration"
     artifacts: PipelineArtifacts | None = None
     publication_policy: AutoPolicy | None = None
+    trigger_facts: TriggerFacts | None = None
+    skipped_message: str | None = None
+    if force_review:
+        process.command.append("--force-review")
 
     def terminate(signum: int, frame: object) -> Never:
         raise KeyboardInterrupt(f"received signal {signum}")
@@ -2308,6 +2510,8 @@ def _run_command(
                 )
                 process.status, process.exit_code = "invalid", 2
             else:
+                stage = "configuration"
+                trigger_facts = _worker_trigger_facts(resolved)
                 if selected_policy != "auto" and not Path(selected_policy).is_file():
                     raise PolicyNotFound(Path(selected_policy))
                 if runtime.publish == "github-review" and resolved.kind != "pr":
@@ -2344,17 +2548,35 @@ def _run_command(
                     ExecutionSummary(presentation=process.presentation).model_dump(mode="json"),
                 )
                 stage = "policy"
-                effective = resolve_auto_policy(
+                effective = _resolve_execution_policy(
                     resolved,
                     cwd=Path.cwd(),
                     policy=selected_policy,
-                    external_path=DEFAULT_AUTO_POLICY,
+                    ignore_invalid_triggers=(
+                        selected_policy == "auto"
+                        and trigger_facts is not None
+                        and trigger_facts.policy_error is not None
+                    ),
                 )
                 process.effective_policy = EffectivePolicySource(
                     source=effective.source, path=effective.path
                 )
                 run.save_policy(effective)
                 publication_policy = _publication_controls(effective.policy, effective.source)
+                trigger_policy = (
+                    packaged_policy().policy if effective.source == "external" else effective.policy
+                )
+                trigger_facts = trigger_facts or _trigger_facts(
+                    resolved, trigger_policy, force_review=force_review
+                )
+                _save_trigger_summary(run, trigger_facts)
+                if trigger_facts.skipped:
+                    process.status, process.exit_code = "pass", 0
+                    process.failure = None
+                    skipped_message = _trigger_skip_message(
+                        trigger_facts, resolved, trigger_policy, locale=process.presentation.locale
+                    )
+                    raise _TriggerSkipped()
                 if publish is None:
                     runtime.publish = (
                         "github-review"
@@ -2460,6 +2682,8 @@ def _run_command(
                 process.status = "block" if decision.verdict == "BLOCK" else "pass"
                 process.exit_code = 1 if decision.verdict == "BLOCK" else 0
                 process.failure = None
+    except _TriggerSkipped:
+        pass
     except (Exception, KeyboardInterrupt) as exc:
         if isinstance(exc, PipelineInfrastructureError):
             artifacts = exc.artifacts
@@ -2551,6 +2775,9 @@ def _run_command(
                 )
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
+        if trigger_facts is not None:
+            with diagnostic_attempt("summary.json"):
+                _save_trigger_summary(run, trigger_facts)
         process.duration_ms = max(0, int((time.monotonic() - started) * 1000))
         with diagnostic_attempt("summary.json"):
             summary_path = run.dir / "summary.json"
@@ -2582,6 +2809,8 @@ def _run_command(
         save_process(run.dir, process)
     if json_output:
         _write_json(process.model_dump(mode="json"))
+    elif skipped_message is not None:
+        _console.print(skipped_message, markup=False)
     else:
         locale = process.presentation.locale
         _console.print(

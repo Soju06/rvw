@@ -270,6 +270,43 @@ Check facts retain synthesis status, publication channels and inline policy/coun
 See [the auto policy operator guide](../docs/auto-policy.md) for defaults and the
 interaction with living threads.
 
+The same base-ref policy controls review eligibility with an optional `triggers` block.
+The defaults (`mode: denylist`, `drafts: skip`, `rules: []`) preserve the historical
+behavior. A consuming repository that wants to skip generated Changesets release pull
+requests can add:
+
+```yaml
+triggers:
+  mode: denylist
+  drafts: skip
+  rules:
+    - name: changesets-release
+      authors: ["github-actions[bot]"]
+      head_branches: ["changeset-release/*"]
+```
+
+Rules use pull-request metadata only. Fields in one rule are ANDed and rules are ORed;
+list entries are ORed. Names are required, unique, and match `[a-z0-9-]+`. Optional
+`authors` and `labels` match exact names case-insensitively; bot authors retain `[bot]`.
+`head_branches` and `base_branches` match case-sensitive fnmatch patterns against ref
+names. `title` searches a portable regular expression, for example the single-quoted
+YAML value `'^chore\(release\)'`.
+
+Portable title patterns support Unicode literals, explicit character classes/ranges,
+grouping, alternation, ordinary quantifiers, anchors, and lookahead. Use `[0-9]` or
+explicit letter/space ranges instead of shorthand classes such as `\d`, `\w`, `\s`,
+or word boundaries. Named groups, lookbehind, backreferences, inline flags, and
+possessive quantifiers are rejected so Python and JavaScript agree.
+
+`allowlist` skips pull requests that match no rule; an empty allowlist or a rule without
+matching fields is invalid. Unknown policy keys/values and unsupported or invalid title
+patterns are also invalid. The App falls back to default trigger behavior on a policy
+read or validation error and records `trigger.policy_error` in the check facts. A policy
+skip creates a neutral check naming the matching rule and starts no container. With
+`drafts: skip`, drafts still create no check; `drafts: review` enables their review.
+A human re-run from GitHub's Check Run menu bypasses the filter and records
+`trigger.bypassed: rerequested`.
+
 ### Observe and operate jobs
 
 Each runtime execution inside the review receives the explicit `--deadline`

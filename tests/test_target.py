@@ -112,7 +112,7 @@ def pr_responses(number: int, repo: str = "octo/widgets") -> dict[Command, str |
             "--repo",
             repo,
             "--json",
-            "number,title,body,headRefOid,headRefName",
+            "number,title,body,headRefOid,headRefName,baseRefName,author,labels,isDraft",
         ): json.dumps(metadata),
         # gh pr view --json does NOT expose baseRefOid (live-verified 2026-07-27);
         # the recorded base SHA comes from the REST pulls endpoint instead.
@@ -210,3 +210,27 @@ def test_pr_url_binds_every_query_despite_unrelated_repository_environment(
             assert "--repo" in cmd, f"PR query is not bound to its repository: {cmd}"
             assert cmd[cmd.index("--repo") + 1] == "acme/rockets"
     assert os.environ["GH_REPO"] == "unrelated/checkout"
+
+
+@pytest.mark.parametrize(
+    "author",
+    [
+        {"login": "app/github-actions", "is_bot": True},
+        {"login": "github-actions[bot]", "is_bot": True},
+    ],
+)
+def test_pr_trigger_metadata_normalizes_gh_bot_login(monkeypatch, tmp_path, author):
+    responses = pr_responses(1772)
+    key = next(key for key in responses if key[:3] == ("gh", "pr", "view"))
+    response = responses[key]
+    assert isinstance(response, str)
+    raw = json.loads(response)
+    raw.update(author=author, baseRefName="main", labels=[{"name": "🧹 Chore"}], isDraft=True)
+    responses[key] = json.dumps(raw)
+    install_fake_run(monkeypatch, responses)
+    target = resolve_target("1772", cwd=tmp_path)
+    assert target.pr_author == "github-actions[bot]"
+    assert target.pr_head_branch == "fix/widget-race"
+    assert target.pr_base_branch == "main"
+    assert target.pr_labels == ["🧹 Chore"]
+    assert target.pr_draft is True

@@ -1,12 +1,22 @@
 import {createHmac} from "node:crypto";
 
-import {describe, expect, it} from "vitest";
+import {beforeEach, describe, expect, it, vi} from "vitest";
+import {defaultPresentation} from "./presentation";
+import {defaultTriggersPolicy, type TriggersPolicy} from "./triggers";
+
+const mocks = vi.hoisted(() => ({
+  getInstallationToken: vi.fn(async () => "installation-token"),
+  getTriggerPolicy: vi.fn(), getPresentationConfig: vi.fn(),
+  upsertSkippedCheckRun: vi.fn(async () => {}),
+}));
+vi.mock("./github-app", async (original) => ({...await original<typeof import("./github-app")>(), ...mocks}));
 
 import {
   idempotencyKey,
   parseWebhookEvent,
   verifyWebhookSignature,
   type ReviewJobMessage,
+  handleWebhook,
 } from "./webhook";
 
 const SECRET = "offline-test-secret";
@@ -28,8 +38,10 @@ function pullRequestPayload(
     pull_request: {
       number: 42,
       draft: options.draft ?? false,
-      head: {sha: options.head ?? "a".repeat(40)},
-      base: {sha: "b".repeat(40)},
+      user: {login: "github-actions[bot]"},
+      title: "chore(release): version packages", labels: [{name: "🧹 Chore"}],
+      head: {sha: options.head ?? "a".repeat(40), ref: "changeset-release/main"},
+      base: {sha: "b".repeat(40), ref: "main"},
     },
   };
 }
@@ -102,9 +114,8 @@ describe("parseWebhookEvent", () => {
 
   it.each([
     ["pull_request", pullRequestPayload("closed")],
-    ["pull_request", pullRequestPayload("opened", {draft: true})],
     ["issues", {action: "opened"}],
-  ])("ignores unsupported or draft events", (eventName, payload) => {
+  ])("ignores unsupported events", (eventName, payload) => {
     expect(parseWebhookEvent(eventName, "delivery-ignore", payload, NOW)).toEqual({
       kind: "ignore",
     });
@@ -132,6 +143,87 @@ describe("parseWebhookEvent", () => {
     expect(() =>
       parseWebhookEvent("pull_request", "delivery-bad", {action: "opened"}, NOW),
     ).toThrow(/payload/i);
+  });
+});
+
+describe("webhook repository trigger policy", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getTriggerPolicy.mockResolvedValue({policy: defaultTriggersPolicy()});
+    mocks.getPresentationConfig.mockResolvedValue({presentation: defaultPresentation()});
+  });
+  async function deliver(payload: Record<string, unknown>, event = "pull_request") {
+    const body = JSON.stringify(payload);
+    const send = vi.fn(); const supersede = vi.fn();
+    const env = {GITHUB_WEBHOOK_SECRET: SECRET, GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "private-key",
+      RVW_REVIEW_JOBS: {send}, RVW_REVIEW_JOB: {getByName: vi.fn(() => ({supersede}))}} as unknown as Env;
+    const response = await handleWebhook(new Request("https://example.test/github/webhook", {method: "POST", body,
+      headers: {"X-Hub-Signature-256": signature(body), "X-GitHub-Event": event, "X-GitHub-Delivery": "delivery-1"}}), env);
+    return {response, send, supersede};
+  }
+  it("skips matching release PRs before enqueue and creates a localized neutral check", async () => {
+    const policy: TriggersPolicy = {mode: "denylist", drafts: "skip", rules: [{name: "changesets-release", authors: ["github-actions[bot]"], head_branches: ["changeset-release/*"]}]};
+    mocks.getTriggerPolicy.mockResolvedValue({policy});
+    mocks.getPresentationConfig.mockResolvedValue({presentation: {...defaultPresentation(), locale: "ko", short_name: "검토"}});
+    const result = await deliver(pullRequestPayload("opened"));
+    expect(result.response.status).toBe(202);
+    expect(result.send).not.toHaveBeenCalled();
+    expect(mocks.getTriggerPolicy).toHaveBeenCalledWith("installation-token", expect.objectContaining({baseSha: "b".repeat(40)}));
+    expect(mocks.upsertSkippedCheckRun).toHaveBeenCalledWith("installation-token", expect.objectContaining({
+      title: "검토 · 검토 건너뜀", summary: "저장소 정책에 따라 검토를 건너뛰었습니다: changesets-release.",
+      trigger: {skipped: true, rule: "changesets-release", mode: "denylist", bypassed: null, policy_error: null}}));
+  });
+  it("rerequested bypasses filtering and records why", async () => {
+    mocks.getTriggerPolicy.mockResolvedValue({policy: {mode: "denylist", drafts: "skip",
+      rules: [{name: "changesets-release", authors: ["github-actions[bot]"]}]}});
+    const payload = pullRequestPayload("rerequested");
+    payload.check_run = {head_sha: "a".repeat(40), pull_requests: [{number: 42, head: {sha: "a".repeat(40)}, base: {sha: "b".repeat(40)}}]};
+    const result = await deliver(payload, "check_run");
+    expect(result.send).toHaveBeenCalledWith(expect.objectContaining({trigger: expect.objectContaining({bypassed: "rerequested", skipped: false})}));
+    expect(mocks.upsertSkippedCheckRun).not.toHaveBeenCalled();
+  });
+  it("policy read failures enqueue with a visible reason", async () => {
+    mocks.getTriggerPolicy.mockRejectedValue(new Error("network unavailable"));
+    const result = await deliver(pullRequestPayload("opened"));
+    expect(result.send).toHaveBeenCalledWith(expect.objectContaining({trigger: expect.objectContaining({policy_error: "policy_read_failed", skipped: false})}));
+  });
+  it("policy read failures preserve enqueue even when optional matching metadata is unavailable", async () => {
+    mocks.getTriggerPolicy.mockRejectedValue(new Error("network unavailable"));
+    const payload = pullRequestPayload("opened");
+    const pull = payload.pull_request as Record<string, unknown>;
+    delete pull.user; delete pull.labels; delete pull.title;
+    const result = await deliver(payload);
+    expect(result.response.status).toBe(202);
+    expect(result.send).toHaveBeenCalledOnce();
+  });
+  it("invalid policy enqueues with policy_invalid", async () => {
+    mocks.getTriggerPolicy.mockResolvedValue({policy: defaultTriggersPolicy(), failure: "policy_invalid"});
+    const result = await deliver(pullRequestPayload("opened"));
+    expect(result.send).toHaveBeenCalledWith(expect.objectContaining({trigger: expect.objectContaining({policy_error: "policy_invalid"})}));
+  });
+  it("drafts remain silent by default but drafts review is respected", async () => {
+    const skipped = await deliver(pullRequestPayload("opened", {draft: true}));
+    expect(skipped.send).not.toHaveBeenCalled();
+    expect(mocks.upsertSkippedCheckRun).not.toHaveBeenCalled();
+    mocks.getTriggerPolicy.mockResolvedValue({policy: {...defaultTriggersPolicy(), drafts: "review"}});
+    const reviewed = await deliver(pullRequestPayload("opened", {draft: true}));
+    expect(reviewed.send).toHaveBeenCalledOnce();
+  });
+  it("ready_for_review remains eligible even if the payload draft flag is stale", async () => {
+    const result = await deliver(pullRequestPayload("ready_for_review", {draft: true}));
+    expect(result.send).toHaveBeenCalledOnce();
+    expect(mocks.upsertSkippedCheckRun).not.toHaveBeenCalled();
+  });
+  it("a skipped synchronize still supersedes the previous head", async () => {
+    mocks.getTriggerPolicy.mockResolvedValue({policy: {mode: "denylist", drafts: "skip",
+      rules: [{name: "changesets-release", head_branches: ["changeset-release/*"]}]}});
+    const payload = pullRequestPayload("synchronize");
+    payload.before = "c".repeat(40);
+    const result = await deliver(payload);
+    expect(result.send).not.toHaveBeenCalled();
+    expect(result.supersede).toHaveBeenCalledWith(
+      idempotencyKey(17, 23, 42, "c".repeat(40)), expect.any(String));
+    expect(mocks.upsertSkippedCheckRun).toHaveBeenCalledOnce();
   });
 });
 

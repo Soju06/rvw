@@ -2,6 +2,7 @@ import {artifactManifest} from "./artifacts";
 import {t} from "./i18n";
 import {parsePresentation, type PresentationConfig} from "./presentation";
 import type {CheckPublicationPolicy, PublishChannel} from "./publication-policy";
+import {parseTriggerFacts, type TriggerFacts} from "./triggers";
 
 export type JobState =
   | "queued"
@@ -269,6 +270,7 @@ export interface PublishFacts extends Record<(typeof PUBLISH_THREAD_LISTS)[numbe
 }
 
 export interface ArtifactSummary extends PublicationFacts {
+  trigger: TriggerFacts | null;
   schema_version: 1;
   lanes: SummaryLanes;
   failed_lanes: SummaryFailedLane[];
@@ -383,10 +385,11 @@ function waveWallSeconds(value: unknown): WaveWallSeconds | null {
 /** Consume Python summary facts; no discovery/adjudication recount lives here. */
 export function parseArtifactSummary(output: string): ArtifactSummary {
   const value = recordValue(JSON.parse(output), "summary");
+  const trigger = value.trigger === undefined ? null : parseTriggerFacts(value.trigger);
   fields(value, ["schema_version", "lanes", "findings", "verdicts", "blockers", "markdown",
     ...(value.presentation === undefined ? [] : ["presentation"]),
     ...["publication_failure", "language_fallback_used", "failed_lanes", "wave_wall_seconds",
-      "publication_skipped", "publish", "synthesis"].filter(key => key in value)], "summary");
+      "publication_skipped", "publish", "synthesis", "trigger"].filter(key => key in value)], "summary");
   const publication = publicationFacts(value);
   const presentation = parsePresentation(value.presentation === undefined ? {} : value.presentation);
   for (const [key, names] of [["findings", ["blocker", "warning", "suggestion"]],
@@ -416,9 +419,11 @@ export function parseArtifactSummary(output: string): ArtifactSummary {
     throw new Error("summary lanes uncovered_regions must be a non-negative integer no greater than the receipt count");
   }
   const uncoveredRegions = rawRegions === undefined ? null : (rawRegions as number);
-  if (valid === 0 || valid > dispatched) throw new Error("review coverage has no valid lanes or exceeds dispatched lanes");
+  if ((valid === 0 && !trigger?.skipped) || valid > dispatched) {
+    throw new Error("review coverage has no valid lanes or exceeds dispatched lanes");
+  }
   return {schema_version: 1, lanes: {dispatched, valid, uncovered, uncovered_regions: uncoveredRegions},
-    markdown: value.markdown, presentation, ...publication,
+    markdown: value.markdown, presentation, trigger, ...publication,
     failed_lanes: failedLanes(value.failed_lanes), wave_wall_seconds: waveWallSeconds(value.wave_wall_seconds),
     synthesis: synthesisFacts(value.synthesis),
     publication_skipped: publicationSkipped(value.publication_skipped), publish: publishFacts(value.publish),

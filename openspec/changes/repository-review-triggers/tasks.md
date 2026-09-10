@@ -1,0 +1,8 @@
+- [x] Add strict Python trigger policy models, matching, defaults, and regression tests.
+- [x] Add Worker trigger parser/matcher, shared fixtures, and webhook eligibility tests.
+- [x] Add Worker skipped-check path, policy read error handling, and contract facts.
+- [x] Add CLI PR-target filtering, `--force-review`, summary facts, and tests.
+- [x] Add packaged/default policy and repository/worker documentation.
+- [x] Update operation/cloud specs and context with the changesets measurement and consumer-owned bot decision.
+- [x] Run all required gates and write `/tmp/rvw-review-triggers-report.md`.
+- [x] Integrate publication controls without losing trigger facts, localize all CLI skip paths, and verify the rebased union.

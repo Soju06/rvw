@@ -10,14 +10,14 @@ import subprocess
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 _COMMIT_SPEC = re.compile(r"[0-9a-fA-F]{7,40}")
 _PR_URL = re.compile(
     r"https?://github\.com/(?P<owner>[^/\s]+)/(?P<name>[^/\s]+)/pull/(?P<number>\d+)"
     r"(?:[/?#]|$)"
 )
-_PR_FIELDS = "number,title,body,headRefOid,headRefName"
+_PR_FIELDS = "number,title,body,headRefOid,headRefName,baseRefName,author,labels,isDraft"
 
 
 class ResolvedTarget(BaseModel):
@@ -34,6 +34,11 @@ class ResolvedTarget(BaseModel):
     pr_number: int | None = None
     pr_title: str | None = None
     pr_body: str | None = None
+    pr_author: str | None = None
+    pr_head_branch: str | None = None
+    pr_base_branch: str | None = None
+    pr_labels: list[str] = Field(default_factory=list)
+    pr_draft: bool = False
 
 
 class TargetResolutionError(RuntimeError):
@@ -57,6 +62,10 @@ class _PrView(BaseModel):
     body: str | None
     headRefOid: str
     headRefName: str
+    baseRefName: str | None = None
+    author: dict[str, object] | None = None
+    labels: list[dict[str, object]] = Field(default_factory=list)
+    isDraft: bool = False
 
 
 def _run(cmd: list[str], cwd: Path) -> str:
@@ -173,6 +182,12 @@ def _resolve_pr(number: int, cwd: Path, repo_from_url: str | None = None) -> Res
     repo = repo_from_url or _repo_name(cwd)
     raw = _run(["gh", "pr", "view", str(number), "--repo", repo, "--json", _PR_FIELDS], cwd)
     metadata = _PrView.model_validate_json(raw)
+    author = (metadata.author or {}).get("login")
+    author_login = author if isinstance(author, str) else None
+    if author_login and (metadata.author or {}).get("is_bot") is True:
+        author_login = author_login.removeprefix("app/")
+        if not author_login.endswith("[bot]"):
+            author_login += "[bot]"
     diff = _run(["gh", "pr", "diff", str(number), "--repo", repo], cwd)
     names = _run(["gh", "pr", "diff", str(number), "--repo", repo, "--name-only"], cwd)
     return ResolvedTarget(
@@ -185,6 +200,15 @@ def _resolve_pr(number: int, cwd: Path, repo_from_url: str | None = None) -> Res
         pr_number=metadata.number,
         pr_title=metadata.title,
         pr_body=metadata.body,
+        pr_author=author_login,
+        pr_head_branch=metadata.headRefName,
+        pr_base_branch=metadata.baseRefName,
+        pr_labels=[
+            str(label.get("name"))
+            for label in metadata.labels
+            if isinstance(label.get("name"), str)
+        ],
+        pr_draft=metadata.isDraft,
     )
 
 

@@ -203,6 +203,38 @@ it("reads bootstrap presentation with installation authorization at the base SHA
   });
   expect(await getPresentationConfig("ghs_scoped", {owner: "acme", repo: "rvw", baseSha: "b".repeat(40)}, fetcher)).toMatchObject({presentation: {short_name: "VOOY Review", locale: "ko"}});
 });
+it("reads trigger policy only from the base SHA with installation authorization", async () => {
+  const {getTriggerPolicy} = await import("./github-app");
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(String(input)).toBe(`https://api.github.com/repos/acme/rvw/contents/.rvw/policies/auto.yaml?ref=${"b".repeat(40)}`);
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer scoped-token");
+    return Response.json({type: "file", encoding: "base64", content: btoa("promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {drafts: review}")});
+  });
+  expect(await getTriggerPolicy("scoped-token", {owner: "acme", repo: "rvw", baseSha: "b".repeat(40)}, fetcher)).toMatchObject({policy: {drafts: "review"}});
+});
+it.each(["missing", "invalid", "symlink", "error", "network"])("reports %s base-ref trigger policy safely", async (kind) => {
+  const {getTriggerPolicy} = await import("./github-app");
+  const fetcher = vi.fn(async () => { if (kind === "network") throw new TypeError("fetch failed"); return kind === "missing" ? new Response("", {status: 404}) : kind === "error" ? new Response("", {status: 500}) : Response.json({
+    type: kind === "symlink" ? "symlink" : "file", encoding: "base64", content: btoa("triggers: {mode: all}"),
+  }); });
+  const promise = getTriggerPolicy("token", {owner: "a", repo: "b", baseSha: "base"}, fetcher);
+  if (kind === "error" || kind === "network") await expect(promise).rejects.toThrow(kind === "error" ? "HTTP 500" : "HTTP 503");
+  else await expect(promise).resolves.toEqual({policy: {mode: "denylist", drafts: "skip", rules: []}, ...(kind === "missing" ? {} : {failure: "policy_invalid"})});
+});
+it.each([false, true])("upserts a completed neutral skipped check (existing=%s)", async (existing) => {
+  const {upsertSkippedCheckRun} = await import("./github-app");
+  const trigger = {skipped: true, rule: "release", mode: "denylist" as const, bypassed: null, policy_error: null};
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "GET") return Response.json({check_runs: existing ? [{id: 42, app: {id: 1}, external_id: "job-1"}] : []});
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({status: "completed", conclusion: "neutral", output: {title: "rvw · Review skipped", summary: "Review skipped by repository policy: release."}});
+    expect(body.output.text).toContain('"skipped": true');
+    return Response.json({id: 42});
+  });
+  await upsertSkippedCheckRun("token", {owner: "acme", repo: "rvw", headSha: "a".repeat(40), jobId: "job-1", appId: "1", trigger,
+    title: "rvw · Review skipped", summary: "Review skipped by repository policy: release."}, fetcher);
+  expect(fetcher.mock.calls[1][1]?.method).toBe(existing ? "PATCH" : "POST");
+});
 it.each(["missing", "malformed", "symlink"])("uses safe bootstrap defaults for %s config", async (kind) => {
   const {getPresentationConfig} = await import("./github-app");
   const fetcher = vi.fn(async () => kind === "missing" ? new Response("", {status: 404}) : Response.json({

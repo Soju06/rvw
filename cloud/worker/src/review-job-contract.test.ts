@@ -119,6 +119,16 @@ describe("check-run conclusion mapping", () => {
 });
 
 describe("Python artifact summary", () => {
+  it("preserves trigger facts and accepts skipped summaries without discovery", () => {
+    const trigger = {skipped: true, rule: "changesets-release", mode: "denylist", bypassed: null, policy_error: null};
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture({trigger, lanes: {dispatched: 0, valid: 0, uncovered: 0}})))).toMatchObject({trigger, lanes: {dispatched: 0, valid: 0}});
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture({trigger: {...trigger, skipped: false, bypassed: "rerequested"}}))).trigger?.bypassed).toBe("rerequested");
+  });
+  it.each([null, {skipped: "true"}, {skipped: true, rule: null, mode: "all", bypassed: null, policy_error: null},
+    {skipped: true, rule: null, mode: "denylist", bypassed: "automatic", policy_error: null},
+    {skipped: true, rule: null, mode: "denylist", bypassed: null, policy_error: null, unknown: 1}])("rejects malformed trigger facts %#", (trigger) => {
+    expect(() => parseArtifactSummary(JSON.stringify(summaryFixture({trigger})))).toThrow();
+  });
   it("uses the shared facts and markdown without recounting stages", () => {
     const summary = {schema_version: 1, lanes: {dispatched: 3, valid: 2, uncovered: 1},
       findings: {blocker: 1, warning: 2, suggestion: 0},

@@ -1,3 +1,8 @@
+import {getInstallationToken, getPresentationConfig, getTriggerPolicy, upsertSkippedCheckRun, type TokenStorage} from "./github-app";
+import {t} from "./i18n";
+import {defaultPresentation} from "./presentation";
+import {defaultTriggersPolicy, evaluateTrigger, parseTriggerFacts, triggerFacts, type TriggerFacts, type TriggerMetadata} from "./triggers";
+
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SIGNATURE_PATTERN = /^sha256=([0-9a-f]{64})$/;
 const PULL_REQUEST_ACTIONS = new Set([
@@ -23,6 +28,7 @@ export interface ReviewJobMessage {
   attempt: number;
   deliveryId: string;
   enqueuedAt: string;
+  trigger?: TriggerFacts;
 }
 
 export type WebhookDecision =
@@ -127,6 +133,7 @@ export function validateReviewJobMessage(value: unknown): ReviewJobMessage {
     attempt: message.attempt,
     deliveryId: stringValue(message.deliveryId, "deliveryId"),
     enqueuedAt: stringValue(message.enqueuedAt, "enqueuedAt"),
+    ...(message.trigger === undefined ? {} : {trigger: parseTriggerFacts(message.trigger)}),
   };
 }
 
@@ -229,7 +236,6 @@ export function parseWebhookEvent(
   if (eventName === "pull_request") {
     if (!PULL_REQUEST_ACTIONS.has(action)) return {kind: "ignore"};
     const pullRequest = objectValue(payload.pull_request, "pull_request");
-    if (pullRequest.draft === true && action !== "ready_for_review") return {kind: "ignore"};
     const head = objectValue(pullRequest.head, "pull_request.head");
     const base = objectValue(pullRequest.base, "pull_request.base");
     const previousHeadSha =
@@ -306,10 +312,67 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
       request.headers.get("X-GitHub-Delivery") ?? "",
       payload,
     );
-    if (decision.kind === "enqueue") await env.RVW_REVIEW_JOBS.send(decision.message);
+    if (decision.kind === "enqueue") {
+      const message = decision.message;
+      // Token storage is request-local; secrets never enter queue messages or module state.
+      const values = new Map<string, unknown>();
+      const storage: TokenStorage = {
+        get: async <T>(key: string) => values.get(key) as T | undefined,
+        put: async <T>(key: string, value: T) => { values.set(key, value); },
+      };
+      let policy = defaultTriggersPolicy();
+      let token: string | undefined;
+      let policyError: string | null = null;
+      try {
+        token = await getInstallationToken({storage, appId: env.GITHUB_APP_ID ?? "",
+          privateKey: env.GITHUB_APP_PRIVATE_KEY, installationId: message.installationId, repoId: message.repoId});
+        const loaded = await getTriggerPolicy(token, message);
+        policy = loaded.policy;
+        policyError = loaded.failure ?? null;
+      } catch { policyError = "policy_read_failed"; }
+      if (message.event === "check_run.rerequested") {
+        message.trigger = {...triggerFacts(policy.mode), bypassed: "rerequested", policy_error: policyError};
+      } else {
+        const metadata = pullRequestMetadata(objectValue(payload, "root"));
+        if (metadata.draft && policy.drafts === "skip") {
+          return Response.json({accepted: true, queued: false}, {status: 202});
+        }
+        message.trigger = {...evaluateTrigger(policy, metadata), policy_error: policyError};
+        if (message.trigger.skipped) {
+          // A skipped synchronize still replaces the old head, exactly as the queue consumer does.
+          if (message.previousHeadSha !== undefined && message.previousHeadSha !== message.headSha) {
+            const previousKey = idempotencyKey(message.installationId, message.repoId, message.prNumber, message.previousHeadSha);
+            await env.RVW_REVIEW_JOB.getByName(previousKey).supersede(previousKey, t("superseded", "en", {job_id: message.jobId}));
+          }
+          let presentation = defaultPresentation();
+          try { presentation = (await getPresentationConfig(token!, message)).presentation; } catch { /* Safe display defaults. */ }
+          await upsertSkippedCheckRun(token!, {...message, appId: env.GITHUB_APP_ID ?? "", presentation,
+            title: t("check_skipped", presentation.locale, {short_name: presentation.short_name}),
+            summary: t("trigger_skipped", presentation.locale, {rule: message.trigger.rule ?? t("trigger_no_match", presentation.locale)}),
+            trigger: message.trigger});
+          return Response.json({accepted: true, queued: false, skipped: true}, {status: 202});
+        }
+      }
+      await env.RVW_REVIEW_JOBS.send(message);
+    }
     return Response.json({accepted: true, queued: decision.kind === "enqueue"}, {status: 202});
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid webhook payload";
     return Response.json({error: message}, {status: 400});
   }
+}
+
+function pullRequestMetadata(payload: Record<string, unknown>): TriggerMetadata {
+  const pull = objectValue(payload.pull_request, "pull_request");
+  const head = objectValue(pull.head, "pull_request.head");
+  const base = objectValue(pull.base, "pull_request.base");
+  const user = typeof pull.user === "object" && pull.user !== null ? pull.user as Record<string, unknown> : {};
+  return {author: typeof user.login === "string" ? user.login : null,
+    headBranch: typeof head.ref === "string" ? head.ref : null, baseBranch: typeof base.ref === "string" ? base.ref : null,
+    labels: Array.isArray(pull.labels) ? pull.labels.flatMap((label) => {
+      if (typeof label !== "object" || label === null || typeof label.name !== "string") return [];
+      return [label.name];
+    }) : [],
+    title: typeof pull.title === "string" ? pull.title : "",
+    draft: pull.draft === true && payload.action !== "ready_for_review"};
 }
