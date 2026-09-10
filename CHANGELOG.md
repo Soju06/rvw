@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.22.0](https://github.com/Soju06/rvw/compare/v0.21.0...v0.22.0) (2026-09-10)
+
+
+### Features
+
+* **policy:** make pull request review triggers repository policy ([#98](https://github.com/Soju06/rvw/issues/98)) ([aefea6c](https://github.com/Soju06/rvw/commit/aefea6cc9fdcc83a70d668424539012f00efeb96))
+* **policy:** repository publication and synthesis controls ([#97](https://github.com/Soju06/rvw/issues/97)) ([b45014b](https://github.com/Soju06/rvw/commit/b45014bfa14ab6c646405b51ed8bfbc8ed507087))
+
 ## [0.21.0](https://github.com/Soju06/rvw/compare/v0.20.0...v0.21.0) (2026-09-10)
 
 
