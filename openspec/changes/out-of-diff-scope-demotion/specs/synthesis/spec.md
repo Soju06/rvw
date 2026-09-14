@@ -2,7 +2,7 @@
 
 ### Requirement: Out-of-diff scope demotion
 
-Synthesis input MUST carry scope and effective_severity, and synthesis validation MUST prevent demoted findings from being rewritten as actionable.
+Synthesis input MUST contain only actionable groups after controller scope classification. Informational groups MUST remain visible in the controller-rendered 참고 section and MUST not be rewritten by synthesis as actionable findings.
 
 #### Scenario: Demoted blocker remains visible
 
@@ -14,6 +14,8 @@ Synthesis input MUST carry scope and effective_severity, and synthesis validatio
 ### Requirement: Synthesis rewrites persisted evidence after adjudication
 
 Ordinary reviews MUST, by default, attempt one synthesis invocation after successful adjudication and before reporting/publication. Inputs MUST come exclusively from persisted PR title/body, base/head refs, non-rejected merged findings with severity, rule, source location and original prose, adjudication reasons/evidence, coverage and failure facts, and presentation including voice. Synthesis MUST NOT discover new evidence, change severity, omit or add finding keys, or alter review judgments. UNCERTAIN findings MUST retain their uncertainty.
+
+Informational findings whose `effective_severity` is `info` MUST be excluded from the synthesis candidate set, prompt, and `SynthesisDocument.findings`; overview and `first_action` MUST be written over actionable groups only.
 
 Repository `synthesis.enabled: false` MUST skip synthesis execution, record `summary.synthesis.status: disabled`, and render the fallback publication view. The default MUST be true.
 
@@ -41,16 +43,21 @@ The synthesis artifact MUST be strict JSON with exactly `overview`, nullable `fi
 - **WHEN** adjudication does not establish a claim containing a source literal and synthesis omits that claim and literal
 - **THEN** omission passes fidelity validation while an invented or mutated output literal fails
 
-### Requirement: Synthesis cannot re-escalate informational findings
+### Requirement: Informational findings stay outside synthesis
 
-Synthesis validation MUST reject any overview, first action, or per-finding prose that uses the closed locale vocabulary for blocking or required work when the referenced finding has `effective_severity: info`. The rejection MUST use machine-readable diagnostic `synthesis_reescalated_info_finding` with the finding ID and matched token. The synthesis model has no actionable-count field; actionable counts MUST remain controller-derived.
+Informational findings MUST be excluded from synthesis input, including the candidate set, prompt, and `SynthesisDocument.findings`; synthesis overview and `first_action` MUST cover actionable groups only. `validate_synthesis` MUST reject a synthesized finding ID belonging to an informational group through the existing identity validation path. The publication view MUST render the localized 참고 section deterministically from controller adjudication state after the synthesized actionable body, including each rule ID, location, scope disclosure, raw-severity provenance, and adjudicated finding body. Actionable counts MUST remain controller-derived.
 
-#### Scenario: Informational blocker prose is rejected
+#### Scenario: Informational findings are absent from synthesis
 
-- **WHEN** an outside-diff blocker is synthesized with prose saying it must be fixed before merge
-- **THEN** validation rejects the document with `synthesis_reescalated_info_finding`
+- **WHEN** an adjudicated merge contains an outside-diff blocker and a changed blocker
+- **THEN** the synthesis prompt and candidate document contain only the changed blocker, while publication still renders the outside-diff blocker in the 참고 section
 
-#### Scenario: Informational reference prose is accepted
+#### Scenario: Informational identity is rejected
 
-- **WHEN** an outside-diff blocker is synthesized with neutral reference wording
-- **THEN** validation accepts it and retains the controller's informational effective severity
+- **WHEN** a synthesized document contains the key of an informational group
+- **THEN** validation rejects it with the existing synthesis finding identity mismatch diagnostic
+
+#### Scenario: Reference rendering is independent of synthesis status
+
+- **WHEN** synthesis succeeds or falls back for a merge containing informational findings
+- **THEN** publication renders the same controller-derived 참고 entries after the actionable content

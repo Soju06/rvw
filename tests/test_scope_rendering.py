@@ -98,6 +98,48 @@ def test_report_and_publication_separate_demoted_findings() -> None:
     assert "변경 범위 밖 참고 2건" in publication
 
 
+def test_publication_synthesis_ok_still_renders_controller_reference_section() -> None:
+    merged, outcome = _review()
+    actionable = [
+        group for group in merged.groups if group.effective_severity is not EffectiveSeverity.INFO
+    ]
+    synthesis = SynthesisDocument(
+        overview="The changed code has actionable findings.",
+        first_action="Address the changed code findings.",
+        findings=[
+            SynthesisFinding(
+                key=group.key,
+                title=f"Finding {group.key}",
+                what="The changed code has a problem.",
+                consequence="The behavior may be incorrect.",
+                fix="Update the changed code.",
+            )
+            for group in actionable
+        ],
+    )
+    body = render_publication(
+        merged=merged,
+        outcome=outcome,
+        presentation=PresentationConfig(locale="en"),
+        synthesis=synthesis,
+    )
+    assert "## Reference · Outside the change scope (existing code)" in body
+    assert "This is outside this pull request's change scope" in body
+    assert "Reported severity: Blocker → Info" in body
+
+
+def test_publication_fallback_renders_same_controller_reference_section() -> None:
+    merged, outcome = _review()
+    body = render_publication(
+        merged=merged,
+        outcome=outcome,
+        presentation=PresentationConfig(locale="en"),
+    )
+    assert "## Reference · Outside the change scope (existing code)" in body
+    assert "This is outside this pull request's change scope" in body
+    assert "Reported severity: Blocker → Info" in body
+
+
 def test_demoted_groups_are_body_only_and_synthesis_receives_scope() -> None:
     merged, outcome = _review()
     inline = _confirmed_inline_groups(merged, outcome, PublishPolicy())
@@ -112,10 +154,10 @@ def test_demoted_groups_are_body_only_and_synthesis_receives_scope() -> None:
         presentation=PresentationConfig(locale="ko"),
         budget_seconds=60,
     )
-    assert "effective_severity: info" in prompt
-    assert "scope: outside_diff" in prompt
-    assert "demotion_reason: outside_diff" in prompt
-    assert "Do not describe them as required work" in prompt
+    assert "effective_severity: info" not in prompt
+    assert "scope: outside_diff" not in prompt
+    assert "demotion_reason: outside_diff" not in prompt
+    assert "The supplied findings are the actionable candidate set" in prompt
 
 
 def test_info_only_publish_payload_has_no_inline_comments_and_suppresses_synthesis_action(

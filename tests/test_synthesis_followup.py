@@ -241,30 +241,68 @@ def test_retained_synthesis_checks_the_saved_locale(tmp_path: Path) -> None:
     assert run.load_synthesis() == document(candidate)
 
 
-def test_info_finding_reescalating_synthesis_is_rejected_with_machine_diagnostic() -> None:
-    candidate = group(body="Existing code observation.")
-    candidate.scope = FindingScope.OUTSIDE_DIFF
-    value = document(candidate)
+def test_info_groups_are_excluded_from_synthesis_prompt_and_candidates() -> None:
+    actionable = group("changed")
+    info = group("info", body="Existing code observation.").model_copy(
+        update={"scope": FindingScope.OUTSIDE_DIFF}
+    )
+    combined = merged(actionable, info)
+    outcome = outcome_for([actionable, info])
+    prompt = build_synthesis_prompt(
+        target=target(),
+        merged=combined,
+        outcome=outcome,
+        coverage=[],
+        status="complete",
+        presentation=PresentationConfig(locale="en"),
+        budget_seconds=60,
+    )
+    assert "key: changed" in prompt
+    assert "key: info" not in prompt
+    candidate = english_document().model_copy(
+        update={
+            "findings": [english_document().findings[0].model_copy(update={"key": actionable.key})]
+        }
+    )
+    assert validate_synthesis(candidate, combined, outcome, locale="en") == candidate
+    with pytest.raises(ValueError, match=r"synthesis finding identity mismatch.*unexpected"):
+        validate_synthesis(
+            candidate.model_copy(
+                update={"findings": [*candidate.findings, document(info).findings[0]]}
+            ),
+            combined,
+            outcome,
+            locale="en",
+        )
+
+
+def test_changed_finding_with_blocking_prose_is_accepted_when_info_is_mixed() -> None:
+    actionable = group("changed")
+    info = group("info", body="Existing code observation.").model_copy(
+        update={"scope": FindingScope.OUTSIDE_DIFF}
+    )
+    value = english_document().model_copy(
+        update={
+            "findings": [english_document().findings[0].model_copy(update={"key": actionable.key})]
+        }
+    )
     value.overview = "This blocker must be fixed before merge."
     value.first_action = "Fix this blocker before merge."
     value.findings[0].title = "Blocker must be fixed before merge"
     value.findings[0].what = "This blocker must be fixed before merge."
-    with pytest.raises(
-        ValueError, match=r"synthesis_reescalated_info_finding.*matched_token=blocker"
-    ):
-        validate_synthesis(value, merged(candidate), outcome_for([candidate]), locale="en")
-
-
-def test_info_finding_neutral_reference_synthesis_is_accepted() -> None:
-    candidate = group(body="Existing code observation.")
-    candidate.scope = FindingScope.OUTSIDE_DIFF
-    value = document(candidate)
-    value.overview = "참고: 변경 범위 밖 기존 코드에서 관찰된 내용입니다."
-    value.first_action = None
-    value.findings[0].title = "변경 범위 밖 기존 코드 참고"
-    value.findings[0].what = "이 PR의 변경 대상이 아닌 기존 코드에서 관찰되었습니다."
-    value.findings[0].consequence = "현재 변경의 결함으로 판정하지 않습니다."
-    value.findings[0].fix = "추가 조치는 필요하지 않습니다."
+    value.findings[0].consequence = "The blocker can break the request."
+    value.findings[0].fix = "Fix the changed code before merging."
     assert (
-        validate_synthesis(value, merged(candidate), outcome_for([candidate]), locale="ko") == value
+        validate_synthesis(
+            value, merged(actionable, info), outcome_for([actionable, info]), locale="en"
+        )
+        == value
     )
+
+
+def test_synthesized_info_finding_id_is_rejected() -> None:
+    candidate = group(body="Existing code observation.")
+    candidate = candidate.model_copy(update={"scope": FindingScope.OUTSIDE_DIFF})
+    value = document(candidate)
+    with pytest.raises(ValueError, match=r"synthesis finding identity mismatch.*unexpected"):
+        validate_synthesis(value, merged(candidate), outcome_for([candidate]), locale="en")

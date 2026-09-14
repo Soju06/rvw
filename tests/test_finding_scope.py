@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from test_discover import FakeRuntime, registry, target, write_lane
 
-from rvw.discover import EnrichedFinding, discover
+from rvw.discover import EnrichedFinding, classify_finding_scope, discover
+from rvw.hunks import parse_hunks
 from rvw.merge import merge
 from rvw.schema import RuntimeFinding, Severity, Tier
 
@@ -134,10 +135,39 @@ def test_runtime_finding_schema_remains_byte_identical() -> None:
 def test_crlf_diff_classifies_same_as_lf(tmp_path: Path) -> None:
     lf = DIFF
     crlf = lf.replace("\n", "\r\n")
-    assert [
-        h.model_dump(exclude={"raw_text"})
-        for h in __import__("rvw.hunks", fromlist=["parse_hunks"]).parse_hunks(lf)
-    ] == [
-        h.model_dump(exclude={"raw_text"})
-        for h in __import__("rvw.hunks", fromlist=["parse_hunks"]).parse_hunks(crlf)
+    assert [h.model_dump(exclude={"raw_text"}) for h in parse_hunks(lf)] == [
+        h.model_dump(exclude={"raw_text"}) for h in parse_hunks(crlf)
     ]
+
+    def classify(diff: str) -> list[tuple[str, str]]:
+        hunks = parse_hunks(diff)
+        results = []
+        for file, line, severity in (
+            ("src/a.py", 11, Severity.BLOCKER),
+            ("src/a.py", 99, Severity.BLOCKER),
+            ("src/legacy.py", 5, Severity.BLOCKER),
+        ):
+            finding = EnrichedFinding(
+                rule_id="base/test",
+                file=file,
+                hunk_id="h",
+                line=line,
+                severity=severity,
+                body="body",
+                anchorable=True,
+                lane_id="lane",
+                replica=1,
+                scope=classify_finding_scope(hunks, {"src/a.py"}, file, line),
+            )
+            results.append((finding.scope.value, finding.effective_severity.value))
+        return results
+
+    assert (
+        classify(lf)
+        == classify(crlf)
+        == [
+            ("changed", "blocker"),
+            ("unchanged_in_file", "info"),
+            ("outside_diff", "info"),
+        ]
+    )

@@ -556,19 +556,19 @@ def evaluate(
             continue
 
         considered += 1
-        effective_severity = Severity(group.effective_severity.value)
+        policy_severity = Severity(group.effective_severity.value)
         promote_rule = policy.promote_to_blocker
         if (
-            effective_severity is not Severity.BLOCKER
+            policy_severity is not Severity.BLOCKER
             and group.agreement >= promote_rule.agreement_at_least
-            and _at_least(effective_severity, promote_rule.severity_at_least)
+            and _at_least(policy_severity, promote_rule.severity_at_least)
         ):
-            effective_severity = Severity.BLOCKER
+            policy_severity = Severity.BLOCKER
             promoted.append(group.key)
 
         block_rule = policy.block_when
         may_block = group_verdict is Verdict.CONFIRMED or not block_rule.confirmed_only
-        if may_block and _at_least(effective_severity, block_rule.severity_at_least):
+        if may_block and _at_least(policy_severity, block_rule.severity_at_least):
             blocking.append(group.key)
 
     return AutoDecision(

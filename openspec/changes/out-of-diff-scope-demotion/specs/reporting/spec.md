@@ -9,6 +9,15 @@ Demoted findings MUST render in a localized 참고 section with disclosure and p
 - **WHEN** a blocker is outside the changed hunks
 - **THEN** it remains visible for audit with informational effective severity and cannot block or create an inline thread
 
+### Requirement: Controller renders informational reference entries
+
+The publication 참고 section MUST be rendered deterministically by the controller from adjudicated informational groups, independently of synthesis success or fallback. Each entry MUST include its rule ID, `file:line` location, localized scope disclosure, raw-severity provenance, and the adjudicated finding body, and the section MUST follow synthesized actionable content when synthesis succeeds.
+
+#### Scenario: Synthesis status does not alter references
+
+- **WHEN** a run with informational groups has either a validated synthesis or synthesis fallback
+- **THEN** both publication views contain the same 참고 entries and controller-derived reference count
+
 ## MODIFIED Requirements
 
 ### Requirement: Reports separate verdict classes

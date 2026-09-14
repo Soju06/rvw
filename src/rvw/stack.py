@@ -429,8 +429,6 @@ def make_origin_lineage(
     origin_reason: str,
     origin_evidence: str,
     scope: FindingScope = FindingScope.CHANGED,
-    effective_severity: EffectiveSeverity | None = None,
-    demotion_reason: str | None = None,
 ) -> FindingLineage:
     """Create a lineage without manufacturing cross-PR finding identity."""
 
@@ -455,8 +453,6 @@ def make_origin_lineage(
         line=line,
         severity=severity,
         scope=scope,
-        effective_severity=effective_severity or EffectiveSeverity(severity.value),
-        demotion_reason=demotion_reason,
         bodies=list(bodies),
         origin_verdict=origin_verdict,
         observations=[first],
@@ -533,8 +529,6 @@ def origin_lineages(
                 line=group.line,
                 severity=group.severity,
                 scope=group.scope,
-                effective_severity=group.effective_severity,
-                demotion_reason=group.demotion_reason,
                 bodies=group.bodies,
                 origin_verdict=verdict,
                 origin_reason=outcome.reasons.get(group.key, ""),

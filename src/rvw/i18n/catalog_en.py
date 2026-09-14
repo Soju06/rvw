@@ -140,7 +140,6 @@ CATALOG: dict[str, str] = {
     "severity.warning": "Warning",
     "severity.suggestion": "Suggestion",
     "severity.info": "Info",
-    "synthesis.info_reescalation_tokens": "blocker|must fix|must be fixed|before merge|required fix|changes required",
     "gate.error.gate_plan_lane_IDs_must": "gate plan lane IDs must be unique",
     "gate.error.disposition_reason_must_be_nonblank": "disposition reason must be nonblank",
     "gate.error.could_not_load_dispositions_from": "could not load dispositions from {p0}: {p1}",

@@ -50,6 +50,20 @@ class EnrichedFinding(Finding, ScopedFinding):
     replica: int = Field(ge=1)
 
 
+def classify_finding_scope(
+    hunks: list[Hunk], diff_files: set[str], file: str, line: int
+) -> FindingScope:
+    """Classify a finding against the controller's parsed three-dot diff."""
+
+    if hunk_for_line(hunks, file, line) is not None:
+        return FindingScope.CHANGED
+    if line <= 0 and file in diff_files:
+        return FindingScope.CHANGED
+    if file in diff_files:
+        return FindingScope.UNCHANGED_IN_FILE
+    return FindingScope.OUTSIDE_DIFF
+
+
 class RunAttempt(BaseModel):
     """Validity, wave, and wall time of one execution attempt for a planned run."""
 
@@ -452,13 +466,7 @@ async def discover(
         for finding in result.output.findings:
             hunk = hunk_for_line(hunks, finding.file, finding.line)
             anchorable = is_anchorable(hunks, finding.file, finding.line)
-            scope = (
-                FindingScope.CHANGED
-                if hunk is not None or (finding.line <= 0 and finding.file in diff_files)
-                else FindingScope.UNCHANGED_IN_FILE
-                if finding.file in diff_files
-                else FindingScope.OUTSIDE_DIFF
-            )
+            scope = classify_finding_scope(hunks, diff_files, finding.file, finding.line)
             enriched.append(
                 EnrichedFinding.model_validate(
                     {

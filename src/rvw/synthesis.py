@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import LaneCoverage
 from rvw.hostslots import HostSlotGate, host_slot
-from rvw.i18n import info_reescalation_tokens
 from rvw.langgate import check_language
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.presentation import PresentationConfig
@@ -117,7 +116,10 @@ def synthesis_schema() -> dict[str, Any]:
 
 def _included_groups(merged: MergeResult, outcome: AdjudicationOutcome) -> list[CollapseGroup]:
     return [
-        group for group in merged.groups if outcome.verdicts.get(group.key) is not Verdict.REJECTED
+        group
+        for group in merged.groups
+        if outcome.verdicts.get(group.key) is not Verdict.REJECTED
+        and group.effective_severity.value != "info"
     ]
 
 
@@ -271,30 +273,6 @@ def validate_synthesis(
         for index, finding in enumerate(document.findings)
         for field in ("title", "what", "consequence", "fix")
     )
-    info_keys = {group.key for group in included if group.effective_severity.value == "info"}
-    info_key_by_label = {
-        f"findings[{index}]": finding.key
-        for index, finding in enumerate(document.findings)
-        if finding.key in info_keys
-    }
-    for label, prose, _sources, _protected in prose_segments:
-        matched = next(
-            (
-                token
-                for token in info_reescalation_tokens(locale)
-                if token.casefold() in prose.casefold()
-            ),
-            None,
-        )
-        if matched is not None and info_keys:
-            finding_id = next(
-                (key for prefix, key in info_key_by_label.items() if label.startswith(prefix)),
-                min(info_keys) if info_keys else "<overview>",
-            )
-            raise ValueError(
-                "synthesis_reescalated_info_finding: "
-                f"finding_id={finding_id}; matched_token={matched}"
-            )
     errors: list[str] = []
     wrong_language: list[str] = []
     for label, prose, sources, protected in prose_segments:
@@ -477,10 +455,7 @@ def build_synthesis_prompt(
             "Set first_action to null when the supplied findings require no action. Otherwise set "
             "it to exactly one sentence naming the action to take first."
         ),
-        (
-            "Findings with effective_severity info are reference-only existing-code observations. "
-            "Do not describe them as required work, include them in first_action, or escalate them."
-        ),
+        "The supplied findings are the actionable candidate set; write the overview and first_action over them only.",
         "# Pull request",
         f"title: {target.pr_title or '(not supplied)'}",
         f"body:\n{target.pr_body or '(not supplied)'}",

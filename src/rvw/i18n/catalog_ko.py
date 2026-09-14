@@ -140,7 +140,6 @@ CATALOG: dict[str, str] = {
     "severity.warning": "경고",
     "severity.suggestion": "제안",
     "severity.info": "참고",
-    "synthesis.info_reescalation_tokens": "차단|수정 필요|수정해야|머지 전|병합 전|반드시 수정|필수 수정",
     "gate.error.gate_plan_lane_IDs_must": "게이트 계획의 레인 ID는 고유해야 합니다",
     "gate.error.disposition_reason_must_be_nonblank": "처리 사유는 비어 있을 수 없습니다",
     "gate.error.could_not_load_dispositions_from": "{p0}에서 처리 내역을 불러올 수 없습니다: {p1}",
