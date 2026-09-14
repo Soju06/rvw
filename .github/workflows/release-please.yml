@@ -44,7 +44,7 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
       - name: Sync uv.lock on the release branch
         if: steps.release.outputs.prs_created == 'true'
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
       - name: Commit synced lockfile
         if: steps.release.outputs.prs_created == 'true'
         shell: bash
