@@ -28,6 +28,7 @@ from rvw.gate import (
     InheritanceSummary,
     InheritanceTier,
     PullRequestState,
+    _actionable,
     _body_sha256,
     _redact_subprocess_diagnostic,
     build_gate_verdict,
@@ -47,7 +48,7 @@ from rvw.gate import (
 )
 from rvw.merge import MergeResult, merge
 from rvw.report import render_report
-from rvw.schema import Severity, Tier, Verdict
+from rvw.schema import FindingScope, Severity, Tier, Verdict
 from rvw.target import ResolvedTarget
 
 HUNK_TEXT = "@@ -1 +1 @@\n-old\n+new\n"
@@ -1588,3 +1589,67 @@ def test_pull_request_requery_rejects_malformed_api_data() -> None:
 def test_pull_request_verification_fails_closed(state: PullRequestState, match: str) -> None:
     with pytest.raises(GateInvariantError, match=match):
         verify_pull_request(GateAnchor(base_sha="a" * 40, head_sha="b" * 40), state)
+
+
+def test_gate_actionability_demotes_outside_diff_blocker_but_not_changed_blocker() -> None:
+    finding = EnrichedFinding(
+        rule_id="rule/blocker",
+        file="src/a.py",
+        hunk_id="src/a.py:*",
+        line=99,
+        severity=Severity.BLOCKER,
+        body="blocker",
+        anchorable=False,
+        lane_id="lane",
+        replica=1,
+        scope="outside_diff",
+    )
+    merged = merge([finding], lane_tiers={"lane": Tier.BASE})
+    outcome = AdjudicationOutcome(
+        verdicts={merged.groups[0].key: Verdict.CONFIRMED},
+        reasons={merged.groups[0].key: "confirmed"},
+        evidence={merged.groups[0].key: "evidence"},
+        replica_votes={merged.groups[0].key: [Verdict.CONFIRMED]},
+        unresolved=[],
+        coerced_rejections=0,
+    )
+    assert _actionable(merged, outcome) == []
+    outside_verdict = build_gate_verdict(
+        run_id="run",
+        target=target(),
+        coverage=[],
+        merged=merged,
+        outcome=outcome,
+        dispositions=DispositionDocument(schema_version=1, dispositions=[]),
+    )
+    assert outside_verdict.verdict == "PASS"
+    assert outside_verdict.findings == []
+    finding.scope = FindingScope.CHANGED
+    changed = merge([finding], lane_tiers={"lane": Tier.BASE})
+    changed_outcome = outcome.model_copy(
+        update={
+            "verdicts": {changed.groups[0].key: Verdict.CONFIRMED},
+            "reasons": {changed.groups[0].key: "confirmed"},
+            "evidence": {changed.groups[0].key: "evidence"},
+            "replica_votes": {changed.groups[0].key: [Verdict.CONFIRMED]},
+        }
+    )
+    assert len(_actionable(changed, changed_outcome)) == 1
+    changed_verdict = build_gate_verdict(
+        run_id="run",
+        target=target(),
+        coverage=[],
+        merged=changed,
+        outcome=changed_outcome,
+        dispositions=DispositionDocument(
+            schema_version=1,
+            dispositions=[
+                DispositionRecord(
+                    finding_id=changed.groups[0].key,
+                    decision=DispositionDecision.MUST_FIX,
+                    reason="must fix",
+                )
+            ],
+        ),
+    )
+    assert changed_verdict.verdict == "BLOCK"

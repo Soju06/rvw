@@ -31,6 +31,17 @@ class FindingScope(StrEnum):
     OUTSIDE_DIFF = "outside_diff"
 
 
+def derive_scope_severity(
+    severity: Severity, scope: FindingScope
+) -> tuple[EffectiveSeverity, Literal["unchanged_in_file", "outside_diff"] | None]:
+    """Derive controller severity and demotion provenance from scope."""
+
+    if scope is FindingScope.CHANGED:
+        return EffectiveSeverity(severity.value), None
+    reason = "unchanged_in_file" if scope is FindingScope.UNCHANGED_IN_FILE else "outside_diff"
+    return EffectiveSeverity.INFO, reason
+
+
 class ScopedFinding(BaseModel):
     """Persist controller decisions separately from the model's severity.
 
@@ -48,18 +59,9 @@ class ScopedFinding(BaseModel):
 
     @model_validator(mode="after")
     def _derive_scope_severity(self) -> ScopedFinding:
-        if self.scope is FindingScope.CHANGED:
-            object.__setattr__(self, "effective_severity", EffectiveSeverity(self.severity.value))
-            object.__setattr__(self, "demotion_reason", None)
-        else:
-            object.__setattr__(self, "effective_severity", EffectiveSeverity.INFO)
-            object.__setattr__(
-                self,
-                "demotion_reason",
-                "unchanged_in_file"
-                if self.scope is FindingScope.UNCHANGED_IN_FILE
-                else "outside_diff",
-            )
+        effective, reason = derive_scope_severity(self.severity, self.scope)
+        object.__setattr__(self, "effective_severity", effective)
+        object.__setattr__(self, "demotion_reason", reason)
         return self
 
 

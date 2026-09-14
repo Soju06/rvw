@@ -15,7 +15,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.merge import MergeResult
-from rvw.schema import EffectiveSeverity, FindingScope, Severity, Verdict
+from rvw.schema import (
+    EffectiveSeverity,
+    FindingScope,
+    Severity,
+    Verdict,
+    derive_scope_severity,
+)
 from rvw.target import ResolvedTarget
 
 CommandRunner = Callable[[list[str], Path], str]
@@ -143,6 +149,9 @@ class FindingLineage(BaseModel):
 
     @model_validator(mode="after")
     def _history_is_ordered(self) -> FindingLineage:
+        effective, reason = derive_scope_severity(self.severity, self.scope)
+        object.__setattr__(self, "effective_severity", effective)
+        object.__setattr__(self, "demotion_reason", reason)
         if self.origin_verdict is Verdict.REJECTED:
             raise ValueError("rejected findings cannot originate stack lineages")
         numbers = [item.pr_number for item in self.observations]

@@ -129,3 +129,15 @@ def test_runtime_finding_schema_remains_byte_identical() -> None:
         hashlib.sha256(encoded).hexdigest()
         == "285767420e49c13161e5a39e2d63e511a76711061003a68c0b736fb8cb7e2135"
     )
+
+
+def test_crlf_diff_classifies_same_as_lf(tmp_path: Path) -> None:
+    lf = DIFF
+    crlf = lf.replace("\n", "\r\n")
+    assert [
+        h.model_dump(exclude={"raw_text"})
+        for h in __import__("rvw.hunks", fromlist=["parse_hunks"]).parse_hunks(lf)
+    ] == [
+        h.model_dump(exclude={"raw_text"})
+        for h in __import__("rvw.hunks", fromlist=["parse_hunks"]).parse_hunks(crlf)
+    ]

@@ -5,7 +5,7 @@ from test_stack_report import valid_members
 
 from rvw.gate import DispositionDecision, DispositionDocument, DispositionRecord, build_gate_verdict
 from rvw.presentation import PresentationConfig
-from rvw.schema import Severity, Verdict
+from rvw.schema import FindingScope, Severity, Verdict
 from rvw.special_publication import render_gate_publication, render_stack_publication
 from rvw.stack import StackManifest, make_origin_lineage
 
@@ -95,3 +95,49 @@ def test_stack_publication_localizes_state_and_preserves_verbatim_evidence() -> 
         "STILL_PRESENT",
     ):
         assert text not in report
+
+
+def test_stack_publication_demoted_lineage_is_reference_with_raw_provenance() -> None:
+    manifest = StackManifest(run_id="rvw-stack-private", repo="owner/repo", members=valid_members())
+    lineage = make_origin_lineage(
+        origin_pr=1,
+        origin_run_id="private-origin-run",
+        origin_finding_id="private-finding-id",
+        rule_id="rule/cache",
+        file="src/cache.py",
+        line=10,
+        severity=Severity.BLOCKER,
+        scope=FindingScope.OUTSIDE_DIFF,
+        bodies=["기존 코드의 캐시 문제입니다."],
+        origin_verdict=Verdict.CONFIRMED,
+        origin_reason="기존 코드에 남아 있습니다.",
+        origin_evidence="return `stale`",
+    )
+    report = render_stack_publication(manifest, [], [lineage], PresentationConfig(locale="ko"))
+    assert "## 참고 · 변경 범위 밖 (기존 코드)" in report
+    assert "참고 · `rule/cache`" in report
+    assert "보고 심각도: 차단 → 참고" in report
+    assert "## 수정 필요" not in report
+    assert "차단 · `rule/cache`" not in report
+
+
+def test_stack_publication_demoted_lineage_english_provenance() -> None:
+    manifest = StackManifest(run_id="rvw-stack-private", repo="owner/repo", members=valid_members())
+    lineage = make_origin_lineage(
+        origin_pr=1,
+        origin_run_id="private-origin-run",
+        origin_finding_id="private-finding-id",
+        rule_id="rule/cache",
+        file="src/cache.py",
+        line=10,
+        severity=Severity.BLOCKER,
+        scope=FindingScope.OUTSIDE_DIFF,
+        bodies=["Existing code observation."],
+        origin_verdict=Verdict.CONFIRMED,
+        origin_reason="Existing code.",
+        origin_evidence="return `stale`",
+    )
+    report = render_stack_publication(manifest, [], [lineage], PresentationConfig(locale="en"))
+    assert "## Reference · Outside the change scope (existing code)" in report
+    assert "Reported severity: Blocker → Info" in report
+    assert "Blocker · `rule/cache`" not in report

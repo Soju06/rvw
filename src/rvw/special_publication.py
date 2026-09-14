@@ -66,26 +66,52 @@ def render_stack_publication(
     lines = [t("pub.stack_heading", locale)]
     if {member.number for member in manifest.members} - {run.pr_number for run in member_runs}:
         lines.append(t("pub.incomplete", locale))
-    for lineage in lineages:
+    actionable = [lineage for lineage in lineages if lineage.effective_severity.value != "info"]
+    references = [lineage for lineage in lineages if lineage.effective_severity.value == "info"]
+
+    def render_lineage(lineage: FindingLineage) -> list[str]:
         location = f"{lineage.file}:{lineage.line if lineage.line is not None else t('common.unknown', locale)}"
         state = t("pub.state." + lineage.state.value, locale)
         if lineage.state_pr is not None:
             state += f" · PR #{lineage.state_pr}"
-        lines.extend(
+        rendered = [
+            f"### `{location}`",
+            f"**{t('severity.' + lineage.effective_severity.value, locale)} · `{lineage.rule_id}`**",
+            state,
+            *lineage.bodies,
+        ]
+        if lineage.effective_severity.value == "info":
+            rendered.insert(2, t("pub.scope_disclosure", locale))
+            rendered.insert(
+                3,
+                t(
+                    "pub.stack_reported_severity",
+                    locale,
+                    severity=t("severity." + lineage.severity.value, locale),
+                ),
+            )
+        rendered.extend(
             [
-                f"### `{location}`",
-                f"**{t('severity.' + lineage.severity.value, locale)} · `{lineage.rule_id}`**",
-                state,
-                *lineage.bodies,
+                *(
+                    item
+                    for observation in lineage.observations
+                    for item in (
+                        f"#### PR #{observation.pr_number}",
+                        t("pub.presence." + observation.presence.value, locale),
+                        *([observation.reason] if observation.reason else []),
+                        *([evidence_fence(observation.evidence)] if observation.evidence else []),
+                    )
+                ),
             ]
         )
-        for observation in lineage.observations:
-            lines.append(f"#### PR #{observation.pr_number}")
-            lines.append(t("pub.presence." + observation.presence.value, locale))
-            if observation.reason:
-                lines.append(observation.reason)
-            if observation.evidence:
-                lines.append(evidence_fence(observation.evidence))
+        return rendered
+
+    for lineage in actionable:
+        lines.extend(render_lineage(lineage))
+    if references:
+        lines.append(t("pub.stack_reference", locale))
+        for lineage in references:
+            lines.extend(render_lineage(lineage))
     if not lineages:
         lines.append(t("pub.empty", locale))
     if presentation.footer:

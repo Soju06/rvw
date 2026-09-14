@@ -49,3 +49,17 @@ requests, or comments on origin members.
 - **WHEN** a publish payload is built for a stack ending at PR 3
 - **THEN** the payload targets PR 3 and contains the stack report only in its
   body
+
+### Requirement: Stack publication preserves informational scope
+
+Stack lineages MUST derive legacy `effective_severity` from raw `severity` when scope evidence is absent. Stack publication MUST render lineages with `effective_severity: info` in a separate localized 참고 section, show raw severity only as provenance, and never render them among actionable rows.
+
+#### Scenario: Legacy blocker lineage preserves severity
+
+- **WHEN** a pre-change lineage contains raw blocker severity without scope fields
+- **THEN** loading derives `scope: changed` and effective blocker severity
+
+#### Scenario: Demoted lineage is reference-only
+
+- **WHEN** a lineage has outside-diff scope and raw blocker severity
+- **THEN** stack publication places it in the 참고 section with `보고 심각도: 차단 → 참고` provenance

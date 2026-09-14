@@ -7,6 +7,7 @@ import pytest
 from test_synthesis import FakeRuntime, document, group, merged, outcome_for, target
 
 from rvw.presentation import PresentationConfig
+from rvw.schema import FindingScope
 from rvw.store import RunStore
 from rvw.synthesis import (
     SynthesisDocument,
@@ -238,3 +239,32 @@ def test_retained_synthesis_checks_the_saved_locale(tmp_path: Path) -> None:
     assert run.load_synthesis() is None
     run.save_synthesis(document(candidate))
     assert run.load_synthesis() == document(candidate)
+
+
+def test_info_finding_reescalating_synthesis_is_rejected_with_machine_diagnostic() -> None:
+    candidate = group(body="Existing code observation.")
+    candidate.scope = FindingScope.OUTSIDE_DIFF
+    value = document(candidate)
+    value.overview = "This blocker must be fixed before merge."
+    value.first_action = "Fix this blocker before merge."
+    value.findings[0].title = "Blocker must be fixed before merge"
+    value.findings[0].what = "This blocker must be fixed before merge."
+    with pytest.raises(
+        ValueError, match=r"synthesis_reescalated_info_finding.*matched_token=blocker"
+    ):
+        validate_synthesis(value, merged(candidate), outcome_for([candidate]), locale="en")
+
+
+def test_info_finding_neutral_reference_synthesis_is_accepted() -> None:
+    candidate = group(body="Existing code observation.")
+    candidate.scope = FindingScope.OUTSIDE_DIFF
+    value = document(candidate)
+    value.overview = "참고: 변경 범위 밖 기존 코드에서 관찰된 내용입니다."
+    value.first_action = None
+    value.findings[0].title = "변경 범위 밖 기존 코드 참고"
+    value.findings[0].what = "이 PR의 변경 대상이 아닌 기존 코드에서 관찰되었습니다."
+    value.findings[0].consequence = "현재 변경의 결함으로 판정하지 않습니다."
+    value.findings[0].fix = "추가 조치는 필요하지 않습니다."
+    assert (
+        validate_synthesis(value, merged(candidate), outcome_for([candidate]), locale="ko") == value
+    )

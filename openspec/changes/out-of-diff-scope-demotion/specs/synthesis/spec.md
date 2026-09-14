@@ -40,3 +40,17 @@ The synthesis artifact MUST be strict JSON with exactly `overview`, nullable `fi
 
 - **WHEN** adjudication does not establish a claim containing a source literal and synthesis omits that claim and literal
 - **THEN** omission passes fidelity validation while an invented or mutated output literal fails
+
+### Requirement: Synthesis cannot re-escalate informational findings
+
+Synthesis validation MUST reject any overview, first action, or per-finding prose that uses the closed locale vocabulary for blocking or required work when the referenced finding has `effective_severity: info`. The rejection MUST use machine-readable diagnostic `synthesis_reescalated_info_finding` with the finding ID and matched token. The synthesis model has no actionable-count field; actionable counts MUST remain controller-derived.
+
+#### Scenario: Informational blocker prose is rejected
+
+- **WHEN** an outside-diff blocker is synthesized with prose saying it must be fixed before merge
+- **THEN** validation rejects the document with `synthesis_reescalated_info_finding`
+
+#### Scenario: Informational reference prose is accepted
+
+- **WHEN** an outside-diff blocker is synthesized with neutral reference wording
+- **THEN** validation accepts it and retains the controller's informational effective severity
