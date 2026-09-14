@@ -98,7 +98,7 @@ def render_stack_report(
                     p2=lineage.origin_finding_id,
                 ),
                 t("stack.location", locale, p0=location),
-                t("stack.severity", locale, p0=lineage.severity.value),
+                t("stack.severity", locale, p0=lineage.effective_severity.value),
                 t("stack.timeline", locale, p0=pr_timeline),
                 t("stack.presence", locale, p0=presence_timeline),
                 "",

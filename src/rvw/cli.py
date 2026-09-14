@@ -141,7 +141,7 @@ from rvw.runtimes.codex import (
     resolve_no_output_seconds,
 )
 from rvw.sample import SampleReport, sample_lane
-from rvw.schema import Severity, Tier, Verdict, finding_schema, lane_output_schema
+from rvw.schema import Tier, Verdict, finding_schema, lane_output_schema
 from rvw.special_publication import render_stack_publication
 from rvw.stack import (
     FindingLineage,
@@ -1795,7 +1795,7 @@ async def _gate_pipeline(
             blocker_ids = sorted(
                 group.key
                 for group in artifacts.merged.groups
-                if group.key in accepted_ids and group.severity is Severity.BLOCKER
+                if group.key in accepted_ids and group.effective_severity.value == "blocker"
             )
             if not blocker_ids:
                 raise GateInvariantError(

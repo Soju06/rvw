@@ -47,7 +47,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.merge import MergeResult
-from rvw.schema import Severity, Verdict
+from rvw.schema import EffectiveSeverity, Severity, Verdict
 from rvw.target import ResolvedTarget
 
 _SEVERITY_RANK = {
@@ -543,20 +543,25 @@ def evaluate(
         if group_verdict is Verdict.REJECTED:
             continue
 
+        # Informational (out-of-scope) findings remain visible but never enter
+        # policy drop, promotion, or blocking decisions.
+        if group.effective_severity is EffectiveSeverity.INFO:
+            continue
+
         drop_rule = policy.drop
         if group.agreement <= drop_rule.agreement_at_most and _at_most(
-            group.severity, drop_rule.severity_at_most
+            Severity(group.effective_severity.value), drop_rule.severity_at_most
         ):
             dropped.append(group.key)
             continue
 
         considered += 1
-        effective_severity = group.severity
+        effective_severity = Severity(group.effective_severity.value)
         promote_rule = policy.promote_to_blocker
         if (
-            group.severity is not Severity.BLOCKER
+            effective_severity is not Severity.BLOCKER
             and group.agreement >= promote_rule.agreement_at_least
-            and _at_least(group.severity, promote_rule.severity_at_least)
+            and _at_least(effective_severity, promote_rule.severity_at_least)
         ):
             effective_severity = Severity.BLOCKER
             promoted.append(group.key)

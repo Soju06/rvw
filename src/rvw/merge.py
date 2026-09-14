@@ -20,7 +20,7 @@ from itertools import pairwise
 from pydantic import BaseModel, ConfigDict, Field
 
 from rvw.discover import EnrichedFinding
-from rvw.schema import Severity, Tier
+from rvw.schema import EffectiveSeverity, FindingScope, ScopedFinding, Severity, Tier
 
 _BACKTICK_TOKEN = re.compile(r"`([^`\n]+)`")
 _PATTERN_JACCARD_THRESHOLD = 0.40
@@ -29,9 +29,25 @@ _SEVERITY_PRIORITY = {
     Severity.WARNING: 2,
     Severity.BLOCKER: 3,
 }
+_EFFECTIVE_PRIORITY = {
+    severity: rank
+    for rank, severity in enumerate(
+        (
+            EffectiveSeverity.INFO,
+            EffectiveSeverity.SUGGESTION,
+            EffectiveSeverity.WARNING,
+            EffectiveSeverity.BLOCKER,
+        )
+    )
+}
+_SCOPE_PRIORITY = {
+    FindingScope.OUTSIDE_DIFF: 0,
+    FindingScope.UNCHANGED_IN_FILE: 1,
+    FindingScope.CHANGED: 2,
+}
 
 
-class CollapseGroup(BaseModel):
+class CollapseGroup(ScopedFinding):
     """One ADR-003 adjudication unit collapsed across lane replicas.
 
     ``priority`` stores the four descending numeric priority axes in order:
@@ -132,6 +148,10 @@ def _collapse(findings: Sequence[EnrichedFinding]) -> list[CollapseGroup]:
                 hunk_id=hunk_id,
                 line=grouped_findings[0].line,
                 severity=severity,
+                scope=max(
+                    (finding.scope for finding in grouped_findings),
+                    key=_SCOPE_PRIORITY.__getitem__,
+                ),
                 lane_ids=sorted({finding.lane_id for finding in grouped_findings}),
                 agreement=len({finding.replica for finding in grouped_findings}),
                 bodies=bodies,
@@ -331,7 +351,7 @@ def merge(findings: Sequence[EnrichedFinding], *, lane_tiers: Mapping[str, Tier]
             int(cross_layer_by_group[group.key]),
             group.agreement,
             repetition_by_group.get(group.key, 1),
-            _SEVERITY_PRIORITY[group.severity],
+            _EFFECTIVE_PRIORITY[group.effective_severity],
         ]
     groups.sort(
         key=lambda group: (

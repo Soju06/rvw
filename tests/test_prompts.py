@@ -11,6 +11,11 @@ ROOT = Path(__file__).parent.parent
 FIXTURES = Path(__file__).parent / "fixtures" / "lanes"
 NEUTRALITY_GATE = ROOT / "scripts" / "check-deployer-neutral.py"
 
+CAUSAL_ANCHOR = (
+    "When a defect caused by this change manifests in pre-existing code, anchor the finding "
+    "at the changed line in the diff that causes it and explain the connection in the body."
+)
+
 LOCALE_CONTRACT = (
     "Write every explanatory field (title, body, reason, recommendation) in {language}. "
     "Keep identifiers, enum values, file paths, symbol names, and quoted source verbatim. "
@@ -157,7 +162,9 @@ def test_agentic_prompt_is_minimal_and_contains_no_diff_content() -> None:
         f"lane's declared rules: {', '.join(f'`{rule}`' for rule in lane.rules)}. "
         "The output schema enforces the allowed rule identifiers; use `file` and "
         "NEW-file `line` numbers from the repository diff. Populate `covered` with "
-        "every changed file or `file:start-end` range actually reviewed. Do not modify files."
+        "every changed file or `file:start-end` range actually reviewed. "
+        + CAUSAL_ANCHOR
+        + " Do not modify files."
         "\n\n" + LOCALE_CONTRACT.format(language="English")
     )
     assert diff not in prompt
@@ -317,3 +324,10 @@ def test_budget_prompts_name_no_deployer() -> None:
     ):
         lowered = prompt.casefold()
         assert [token for token in tokens if token in lowered] == []
+
+
+def test_prompts_anchor_change_caused_defects_at_the_causing_diff_line() -> None:
+    lane = load_lane(FIXTURES / "slop-hygiene.md")
+    for prompt in (agentic_prompt(lane), inline_prompt(lane)):
+        assert CAUSAL_ANCHOR in prompt
+        assert "run git diff" not in prompt.lower()

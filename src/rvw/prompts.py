@@ -67,7 +67,9 @@ def _output_instructions(
         f"lane's declared rules: {declared_rules}. The output schema enforces the allowed "
         f"rule identifiers; use `file` and NEW-file `line` numbers from {location_source}. "
         "Populate `covered` with every changed file or `file:start-end` range actually "
-        "reviewed. Do not modify files."
+        "reviewed. When a defect caused by this change manifests in pre-existing code, "
+        "anchor the finding at the changed line in the diff that causes it and explain "
+        "the connection in the body. Do not modify files."
     ]
     if deadline_seconds is not None:
         paragraphs.append(_budget_contract(deadline_seconds, tool_call_budget))

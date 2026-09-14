@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.merge import MergeResult
-from rvw.schema import Severity, Verdict
+from rvw.schema import EffectiveSeverity, FindingScope, Severity, Verdict
 from rvw.target import ResolvedTarget
 
 CommandRunner = Callable[[list[str], Path], str]
@@ -132,6 +132,9 @@ class FindingLineage(BaseModel):
     file: str = Field(min_length=1)
     line: int | None
     severity: Severity
+    scope: FindingScope = FindingScope.CHANGED
+    effective_severity: EffectiveSeverity = EffectiveSeverity.SUGGESTION
+    demotion_reason: str | None = None
     bodies: list[str] = Field(min_length=1)
     origin_verdict: Verdict
     observations: list[PresenceObservation] = Field(min_length=1)
@@ -416,6 +419,9 @@ def make_origin_lineage(
     origin_verdict: Verdict,
     origin_reason: str,
     origin_evidence: str,
+    scope: FindingScope = FindingScope.CHANGED,
+    effective_severity: EffectiveSeverity | None = None,
+    demotion_reason: str | None = None,
 ) -> FindingLineage:
     """Create a lineage without manufacturing cross-PR finding identity."""
 
@@ -439,6 +445,9 @@ def make_origin_lineage(
         file=file,
         line=line,
         severity=severity,
+        scope=scope,
+        effective_severity=effective_severity or EffectiveSeverity(severity.value),
+        demotion_reason=demotion_reason,
         bodies=list(bodies),
         origin_verdict=origin_verdict,
         observations=[first],
@@ -514,6 +523,9 @@ def origin_lineages(
                 file=group.file,
                 line=group.line,
                 severity=group.severity,
+                scope=group.scope,
+                effective_severity=group.effective_severity,
+                demotion_reason=group.demotion_reason,
                 bodies=group.bodies,
                 origin_verdict=verdict,
                 origin_reason=outcome.reasons.get(group.key, ""),

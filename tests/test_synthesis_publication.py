@@ -10,7 +10,7 @@ from rvw.merge import MergeResult, merge
 from rvw.presentation import PresentationConfig
 from rvw.publication import render_publication, render_publication_item
 from rvw.publish import publish_review
-from rvw.schema import Severity, Tier, Verdict
+from rvw.schema import EffectiveSeverity, Severity, Tier, Verdict
 from rvw.store import RunStore
 from rvw.synthesis import SynthesisDocument
 from rvw.target import ResolvedTarget
@@ -176,7 +176,15 @@ def test_synthesized_inline_item_has_full_explanation_collapsed_evidence() -> No
 
 def test_synthesis_order_applies_within_each_severity_section() -> None:
     merged, outcome = _review()
-    groups = [group.model_copy(update={"severity": Severity.BLOCKER}) for group in merged.groups]
+    groups = [
+        group.model_copy(
+            update={
+                "severity": Severity.BLOCKER,
+                "effective_severity": EffectiveSeverity.BLOCKER,
+            }
+        )
+        for group in merged.groups
+    ]
     merged = merged.model_copy(update={"groups": groups})
     synthesis = _synthesis(merged).model_copy(
         update={"findings": list(reversed(_synthesis(merged).findings))}

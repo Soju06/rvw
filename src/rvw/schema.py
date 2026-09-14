@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,6 +14,53 @@ class Severity(StrEnum):
     BLOCKER = "blocker"
     WARNING = "warning"
     SUGGESTION = "suggestion"
+
+
+class EffectiveSeverity(StrEnum):
+    """Controller severity; never used by the runtime output schema."""
+
+    BLOCKER = "blocker"
+    WARNING = "warning"
+    SUGGESTION = "suggestion"
+    INFO = "info"
+
+
+class FindingScope(StrEnum):
+    CHANGED = "changed"
+    UNCHANGED_IN_FILE = "unchanged_in_file"
+    OUTSIDE_DIFF = "outside_diff"
+
+
+class ScopedFinding(BaseModel):
+    """Persist controller decisions separately from the model's severity.
+
+    Legacy artifacts lack diff scope evidence and keep their prior severity.
+    Recompute derived fields on load so an inconsistent persisted severity
+    cannot promote a finding whose scope is informational.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    severity: Severity
+    scope: FindingScope = FindingScope.CHANGED
+    effective_severity: EffectiveSeverity = EffectiveSeverity.SUGGESTION
+    demotion_reason: Literal["unchanged_in_file", "outside_diff"] | None = None
+
+    @model_validator(mode="after")
+    def _derive_scope_severity(self) -> ScopedFinding:
+        if self.scope is FindingScope.CHANGED:
+            object.__setattr__(self, "effective_severity", EffectiveSeverity(self.severity.value))
+            object.__setattr__(self, "demotion_reason", None)
+        else:
+            object.__setattr__(self, "effective_severity", EffectiveSeverity.INFO)
+            object.__setattr__(
+                self,
+                "demotion_reason",
+                "unchanged_in_file"
+                if self.scope is FindingScope.UNCHANGED_IN_FILE
+                else "outside_diff",
+            )
+        return self
 
 
 class Verdict(StrEnum):
