@@ -168,8 +168,8 @@ function objectValue(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function tokenCacheKey(installationId: number, repoId: number): string {
-  return `github-token:${installationId}:${repoId}`;
+function tokenCacheKey(installationId: number, repoId: number, issuesWrite = false): string {
+  return `github-token:${installationId}:${repoId}${issuesWrite ? ":issues-write" : ""}`;
 }
 
 export interface InstallationTokenOptions {
@@ -180,13 +180,15 @@ export interface InstallationTokenOptions {
   repoId: number;
   nowMs?: number;
   fetcher?: GitHubFetch;
+  /** Optional only: older installations must keep working before Issues permission approval. */
+  issuesWrite?: boolean;
 }
 
 export async function getInstallationToken(
   options: InstallationTokenOptions,
 ): Promise<string> {
   const nowMs = options.nowMs ?? Date.now();
-  const key = tokenCacheKey(options.installationId, options.repoId);
+  const key = tokenCacheKey(options.installationId, options.repoId, options.issuesWrite);
   const cached = await options.storage.get<CachedInstallationToken>(key);
   if (
     cached !== undefined &&
@@ -198,19 +200,30 @@ export async function getInstallationToken(
   }
 
   const jwt = await createAppJwt(options.appId, options.privateKey, nowMs);
-  const value = await githubJson(
-    "installation token exchange",
-    `/app/installations/${options.installationId}/access_tokens`,
-    jwt,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        repository_ids: [options.repoId],
-        permissions: {checks: "write", contents: "read", pull_requests: "write"},
-      }),
-    },
-    options.fetcher ?? fetch,
-  );
+  let value: unknown;
+  try {
+    value = await githubJson(
+      "installation token exchange",
+      `/app/installations/${options.installationId}/access_tokens`,
+      jwt,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          repository_ids: [options.repoId],
+          permissions: {checks: "write", contents: "read", pull_requests: "write",
+            ...(options.issuesWrite ? {issues: "write"} : {})},
+        }),
+      },
+      options.fetcher ?? fetch,
+    );
+  } catch (error) {
+    if (options.issuesWrite && error instanceof GitHubApiError && [403, 422].includes(error.status)) {
+      console.log(JSON.stringify({event: "mention_reaction_permission_unavailable", installationId: options.installationId,
+        repoId: options.repoId, status: error.status}));
+      return await getInstallationToken({...options, issuesWrite: false});
+    }
+    throw error;
+  }
   const response = objectValue(value, "installation token");
   if (typeof response.token !== "string" || typeof response.expires_at !== "string") {
     throw new Error("GitHub installation token response is missing token or expires_at");
@@ -237,7 +250,96 @@ export async function clearInstallationToken(
 ): Promise<void> {
   if (storage.delete !== undefined) {
     await storage.delete(tokenCacheKey(installationId, repoId));
+    await storage.delete(tokenCacheKey(installationId, repoId, true));
   }
+}
+
+export interface AuthenticatedApp {
+  id: number;
+  slug: string;
+}
+
+const APP_IDENTITY_TTL_MS = 5 * 60_000;
+// Only authenticated public metadata persists across webhook requests. Installation
+// tokens remain in their existing scoped storage, and JWTs/private keys are not cached.
+const appIdentities = new Map<string, AuthenticatedApp & {expiresAtMs: number}>();
+const appIdentityRequests = new Map<string, Promise<AuthenticatedApp>>();
+
+/** Expired metadata cannot reject a candidate before its identity refresh. */
+export function getCachedAuthenticatedApp(appId: string, nowMs = Date.now()): AuthenticatedApp | undefined {
+  const cached = appIdentities.get(appId);
+  return cached === undefined || cached.expiresAtMs <= nowMs ? undefined : {id: cached.id, slug: cached.slug};
+}
+
+/** The authenticated App is known before any review/check exists. */
+export async function getAuthenticatedApp(options: {
+  appId: string; privateKey: string; nowMs?: number; fetcher?: GitHubFetch;
+}): Promise<AuthenticatedApp> {
+  const nowMs = options.nowMs ?? Date.now();
+  const cached = appIdentities.get(options.appId);
+  if (cached !== undefined && cached.expiresAtMs > nowMs) return {id: cached.id, slug: cached.slug};
+  const pending = appIdentityRequests.get(options.appId);
+  if (pending !== undefined) return await pending;
+  const request = (async () => {
+    const jwt = await createAppJwt(options.appId, options.privateKey, nowMs);
+    const response = objectValue(await githubJson("App identity", "/app", jwt, {method: "GET"}, options.fetcher ?? fetch), "App identity");
+    if (typeof response.id !== "number" || !Number.isSafeInteger(response.id) || response.id <= 0 ||
+        String(response.id) !== options.appId || typeof response.slug !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(response.slug)) throw new Error("GitHub App identity is invalid");
+    const app = {id: response.id, slug: response.slug};
+    appIdentities.set(options.appId, {...app, expiresAtMs: nowMs + APP_IDENTITY_TTL_MS});
+    return app;
+  })();
+  appIdentityRequests.set(options.appId, request);
+  try { return await request; }
+  finally { appIdentityRequests.delete(options.appId); }
+}
+
+export interface PullRequestMetadata {
+  state: "open" | "closed";
+  number: number;
+  head: {sha: string; ref: string};
+  base: {sha: string; ref: string};
+  draft: boolean;
+  user: {login: string};
+  labels: {name: string}[];
+  title: string;
+}
+
+export async function getPullRequestMetadata(token: string,
+  input: {owner: string; repo: string; prNumber: number}, fetcher: GitHubFetch = fetch,
+): Promise<PullRequestMetadata> {
+  const response = objectValue(await githubJson("pull request read",
+    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/pulls/${input.prNumber}`,
+    token, {method: "GET"}, fetcher), "pull request");
+  const ref = (value: unknown): {sha: string; ref: string} => {
+    const branch = objectValue(value, "pull request ref");
+    if (typeof branch.sha !== "string" || !/^[a-f0-9]{40}$/i.test(branch.sha) ||
+        typeof branch.ref !== "string" || branch.ref.length === 0) throw new Error("GitHub pull request ref is invalid");
+    return {sha: branch.sha, ref: branch.ref};
+  };
+  const user = objectValue(response.user, "pull request user");
+  if ((response.state !== "open" && response.state !== "closed") || response.number !== input.prNumber ||
+      typeof response.draft !== "boolean" || typeof response.title !== "string" ||
+      typeof user.login !== "string" || user.login.length === 0 || !Array.isArray(response.labels)) {
+    throw new Error("GitHub pull request metadata is invalid");
+  }
+  const labels = response.labels.map((entry) => {
+    const label = objectValue(entry, "pull request label");
+    if (typeof label.name !== "string") throw new Error("GitHub pull request label is invalid");
+    return {name: label.name};
+  });
+  return {state: response.state, number: input.prNumber, head: ref(response.head), base: ref(response.base),
+    draft: response.draft, user: {login: user.login}, labels, title: response.title};
+}
+
+export async function addCommentReaction(token: string,
+  input: {owner: string; repo: string; commentId: number; surface: "issue_comment" | "pull_request_review_comment"},
+  fetcher: GitHubFetch = fetch,
+): Promise<void> {
+  const route = input.surface === "issue_comment" ? "issues" : "pulls";
+  await githubJson("comment reaction", `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/${route}/comments/${input.commentId}/reactions`,
+    token, {method: "POST", body: JSON.stringify({content: "eyes"})}, fetcher);
 }
 
 export interface CreateCheckRunInput {
@@ -410,6 +512,86 @@ export async function getTriggerPolicy(
   }
 }
 
+interface HeadChecksInput {
+  owner: string;
+  repo: string;
+  headSha: string;
+  appId: string;
+}
+
+async function* ownHeadChecks(token: string, input: HeadChecksInput, fetcher: GitHubFetch): AsyncGenerator<Record<string, unknown>> {
+  const prefix = `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/commits/${encodeURIComponent(input.headSha)}/check-runs`;
+  for (let page = 1; ; page += 1) {
+    const result = objectValue(await githubJson("Check Runs read",
+      `${prefix}?filter=all&app_id=${encodeURIComponent(input.appId)}&per_page=100&page=${page}`,
+      token, {method: "GET"}, fetcher), "Check Runs read");
+    if (!Array.isArray(result.check_runs)) throw new Error("GitHub Check Runs response is missing check_runs");
+    for (const value of result.check_runs) {
+      const check = objectValue(value, "Check Run");
+      const app = check.app;
+      if (typeof app !== "object" || app === null || Array.isArray(app)) continue;
+      const appId = (app as Record<string, unknown>).id;
+      if (typeof appId === "number" && Number.isSafeInteger(appId) && appId > 0 && String(appId) === input.appId) yield check;
+    }
+    if (result.check_runs.length < 100) return;
+  }
+}
+
+function reviewCheckFacts(check: Record<string, unknown>): Record<string, unknown> | null {
+  const output = check.output;
+  if (typeof output !== "object" || output === null) return null;
+  const text = (output as Record<string, unknown>).text;
+  if (typeof text !== "string") return null;
+  const json = /(?:^|\n)(`{3,})json\n([\s\S]*?)\n\1(?:\n|$)/.exec(text);
+  if (json === null) return null;
+  try { return objectValue(JSON.parse(json[2]), "review facts"); } catch { return null; }
+}
+
+/** Job identities, unlike GitHub commit/branch PR associations, identify reviewed work. */
+function reviewJobId(value: unknown): string | null {
+  return typeof value === "string" && /^[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*:[0-9a-f]{40}$/.test(value)
+    ? value : null;
+}
+
+/** A neutral policy check or infrastructure result is not completed review work. */
+export async function hasCompletedReviewForHead(token: string,
+  input: HeadChecksInput & {installationId: number; repoId: number; prNumber: number},
+  fetcher: GitHubFetch = fetch,
+): Promise<boolean> {
+  const jobId = `${input.installationId}:${input.repoId}:${input.prNumber}:${input.headSha}`;
+  for await (const check of ownHeadChecks(token, input, fetcher)) {
+    if (check.head_sha !== input.headSha || check.status !== "completed" ||
+        typeof check.external_id !== "string" || check.external_id.endsWith(":trigger-skip")) continue;
+    const externalJobId = reviewJobId(check.external_id);
+    if (externalJobId !== null && externalJobId !== jobId) continue;
+    const facts = reviewCheckFacts(check);
+    if (facts === null) continue;
+    const artifactKey = `jobs/${jobId}/`;
+    // Embedded identities must agree with the requested job, including when the
+    // explicit completion marker is present. Association alone is never evidence.
+    if (facts.job_id !== undefined && facts.job_id !== jobId) continue;
+    if (facts.artifact_key !== undefined && facts.artifact_key !== artifactKey) continue;
+    if (externalJobId === null && facts.job_id !== jobId && facts.artifact_key !== artifactKey) continue;
+    const trigger = facts.trigger;
+    if (typeof trigger === "object" && trigger !== null && (trigger as Record<string, unknown>).skipped) continue;
+    if (facts.review_completed === true) return true;
+    if (facts.review_completed !== undefined) continue;
+    // Legacy checks predate the explicit marker. Require the structured, known terminal
+    // process reason and completed lane evidence; the configurable conclusion is insufficient.
+    const lanes = facts.lanes;
+    if (facts.job_id !== jobId || facts.artifact_key !== artifactKey ||
+        typeof lanes !== "object" || lanes === null || typeof (lanes as Record<string, unknown>).valid !== "number" ||
+        Number((lanes as Record<string, unknown>).valid) <= 0 || typeof facts.reason !== "string") continue;
+    for (const locale of ["en", "ko"] as const) {
+      for (const key of ["process_passed", "process_blocked"] as const) {
+        const suffix = t(key, locale, {display_name: ""});
+        if (facts.reason.endsWith(suffix) && facts.reason.length > suffix.length) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** Idempotent neutral outcome for a skipped head; no review job or sandbox is created. */
 export async function upsertSkippedCheckRun(
   token: string,
@@ -418,22 +600,17 @@ export async function upsertSkippedCheckRun(
 ): Promise<void> {
   const presentation = input.presentation ?? defaultPresentation();
   const prefix = `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}`;
-  const existing = objectValue(await githubJson("Check Runs read",
-    `${prefix}/commits/${input.headSha}/check-runs?check_name=${encodeURIComponent(presentation.short_name)}&filter=latest&per_page=100`,
-    token, {method: "GET"}, fetcher), "Check Runs read");
-  if (!Array.isArray(existing.check_runs)) throw new Error("GitHub Check Runs response is missing check_runs");
-  const check = existing.check_runs.map((entry) => objectValue(entry, "Check Run")).find((entry) => {
-    const app = entry.app;
-    return entry.external_id === input.jobId && typeof app === "object" && app !== null &&
-      String((app as Record<string, unknown>).id) === input.appId;
-  });
+  const externalId = `${input.jobId}:trigger-skip`;
   const text = checkDetails({trigger: input.trigger}, presentation);
-  if (check !== undefined && typeof check.id === "number") {
-    await updateCheckRun(token, {...input, checkRunId: check.id, conclusion: "neutral", text}, fetcher);
-    return;
+  for await (const check of ownHeadChecks(token, input, fetcher)) {
+    if (check.external_id === externalId && check.status === "completed" && check.conclusion === "neutral" &&
+        typeof check.id === "number") {
+      await updateCheckRun(token, {...input, checkRunId: check.id, conclusion: "neutral", text}, fetcher);
+      return;
+    }
   }
   await githubJson("skipped Check Run creation", `${prefix}/check-runs`, token, {method: "POST", body: JSON.stringify({
-    name: presentation.short_name, head_sha: input.headSha, external_id: input.jobId,
+    name: presentation.short_name, head_sha: input.headSha, external_id: externalId,
     status: "completed", conclusion: "neutral", completed_at: new Date().toISOString(),
     output: {title: input.title, summary: input.summary, text},
   })}, fetcher);

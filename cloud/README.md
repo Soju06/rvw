@@ -218,9 +218,11 @@ consumers may manage Terraform themselves and set it false.
    `https://<worker-host>/github/webhook`; the callback remains a registration
    placeholder because A1 has no user OAuth flow.
 2. Open GitHub's App manifest creation flow and submit the template. Confirm the
-   requested permissions are Checks write, Pull requests write, Contents read,
-   and Metadata read, and confirm `pull_request` plus `check_run` are among the
-   subscribed events.
+   requested permissions are Checks write, Issues write, Pull requests write,
+   Contents read, and Metadata read. Confirm subscriptions for Pull request
+   (`pull_request`), Check run (`check_run`), Check suite (`check_suite`),
+   Issue comment (`issue_comment`), and Pull request review comment
+   (`pull_request_review_comment`).
 3. Record the generated numeric App ID in the deployer's private
    `GITHUB_APP_ID` Wrangler override, download the App private key once, create a
    webhook secret, and install the App on the intended repositories.
@@ -241,6 +243,31 @@ consumers may manage Terraform themselves and set it false.
    are non-secret vars supplied by the deployer.
 
 ### Publication identity and permissions
+
+For an existing App, add **Issue comment** and **Pull request review comment**
+webhook subscriptions and grant **Issues: read and write** in App settings;
+installation owners must approve the new permission. The creation manifest in
+`cloud/github-app.manifest.json` declares these defaults for new Apps. Terraform
+in `cloud/infra/` manages Cloudflare resources only; updating an existing App is
+**manual in App settings**.
+
+Issue-comment reactions require `issues: write`; PR review-comment reactions
+require the existing `pull_requests: write`. Reading live PR metadata requires
+`pull_requests: read` (already covered). Mention handling requests Issues write
+as an optional token scope and falls back to the existing review scopes when
+an installation has not approved it. A forbidden eyes reaction is logged and
+does not cancel the review. See GitHub's [issue-comment reactions](https://docs.github.com/en/rest/reactions/reactions#create-reaction-for-an-issue-comment),
+[PR review-comment reactions](https://docs.github.com/en/rest/reactions/reactions#create-reaction-for-a-pull-request-review-comment),
+and [PR metadata permissions](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request).
+
+Mention admission obtains the App slug from authenticated GitHub App metadata,
+using the configured App ID and private key, with a five-minute cache shared
+across requests. The mention text is `@<app-slug>`
+or `@<app-slug> review`; the deployed App identity supplies the slug.
+Comments without `@` return before API calls or Markdown parsing in every cache
+state. With a fresh identity, an unrelated mention also returns before that
+work. An expired identity permits one authenticated refresh before testing the
+current slug, so a new App name can be recognized after the cache expires.
 
 The Worker passes `RVW_GITHUB_LOGIN=<app-slug>[bot]` into the review process (read from
 the check-run creation response, or from the existing check run when a job re-enters) so
@@ -271,8 +298,14 @@ See [the auto policy operator guide](../docs/auto-policy.md) for defaults and th
 interaction with living threads.
 
 The same base-ref policy controls review eligibility with an optional `triggers` block.
-The defaults (`mode: denylist`, `drafts: skip`, `rules: []`) preserve the historical
-behavior. A consuming repository that wants to skip generated Changesets release pull
+Automatic reviews default to `opened`, `synchronize`, `reopened`, and
+`ready_for_review`, with `mode: denylist`, `drafts: skip`, and `rules: []`.
+Mentions are enabled on both comment surfaces, and `dedupe_same_head: true`
+skips automatic starts after this App has completed the exact head for this PR. Set
+`events.pull_request.enabled: false` for mention-only operation or select fewer
+`events.pull_request.actions` for cheaper automatic reviews. See [trigger modes
+and explicit default YAML](../docs/auto-policy.md) for complete examples.
+A consuming repository that wants to skip generated Changesets release pull
 requests can add:
 
 ```yaml
@@ -302,8 +335,30 @@ possessive quantifiers are rejected so Python and JavaScript agree.
 matching fields is invalid. Unknown policy keys/values and unsupported or invalid title
 patterns are also invalid. The App falls back to default trigger behavior on a policy
 read or validation error and records `trigger.policy_error` in the check facts. A policy
-skip creates a neutral check naming the matching rule and starts no container. With
-`drafts: skip`, drafts still create no check; `drafts: review` enables their review.
+rule skip creates a neutral check naming the matching rule and starts no container.
+Event selection and completed-head skips use neutral checks with machine reasons
+`events_disabled`, `action_not_selected`, or `same_head_reviewed`. With
+`drafts: skip`, automatic draft events still create no check; `drafts: review`
+enables their review. A Ready flip treats the PR as ready, but an unchanged head
+that was already reviewed for that PR is deduplicated.
+Authorized human mentions bypass draft/rule filters and can rerun a completed
+head; a mention during an active run for the same PR/head joins it and records
+`in_flight_same_head`. Completion on another PR with the same SHA does not
+suppress this PR, and separate PRs can execute concurrently. Check fallback
+requires authoritative job identity matching the requested installation,
+repository, PR, and head. A parseable `external_id` (`installation:repo:pr:sha`)
+or structured `job_id`/`artifact_key` can supply that identity, but any recovered
+identity for a different job rejects the check regardless of `pull_requests[]`.
+Legacy facts must match the requested job, not merely the check's own external
+ID. Commit/branch association alone never suppresses review; missing recoverable
+job identity fails open.
+Mentions inside blockquotes, code, and HTML are ignored; whole-token boundaries
+remain enforced across formatting. Team syntax such as `@slug/review` is ignored;
+sentence punctuation, strikethrough, and curly quotation marks preserve a valid
+mention. A replay of the same comment stays pinned to
+its original head; a genuinely new comment after a push can request the new head.
+Accepted mentions receive an eyes reaction when permitted. Defaults allow
+OWNER, MEMBER, and COLLABORATOR associations; bot/App authors are ignored.
 A human re-run from GitHub's Check Run menu bypasses the filter and records
 `trigger.bypassed: rerequested`.
 

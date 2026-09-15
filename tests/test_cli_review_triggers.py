@@ -281,9 +281,13 @@ def snapshot(target, **trigger):
 
 
 @pytest.mark.parametrize("policy_error", [None, "policy_invalid"])
+@pytest.mark.parametrize("source", ["pull_request", "mention"])
 def test_worker_snapshot_preserves_bypass_and_trigger_error(
-    monkeypatch, tmp_path, release, policy, policy_error
+    monkeypatch, tmp_path, release, policy, policy_error, source
 ):
+    if source == "mention":
+        release = release.model_copy(update={"pr_draft": True})
+        monkeypatch.setattr(cli, "_resolve_cli_target", lambda _: release)
     if policy_error:
         raw = yaml.safe_load(policy.read_text())
         raw["triggers"] = {"mode": "broken"}
@@ -320,22 +324,31 @@ def test_worker_snapshot_preserves_bypass_and_trigger_error(
             str(tmp_path),
             "--out",
             str(out),
-            "--force-review",
+            *(["--force-review"] if source == "pull_request" else []),
         ],
         env={
             "RVW_TRIGGER_SNAPSHOT": snapshot(
-                release, bypassed="rerequested", policy_error=policy_error
+                release,
+                bypassed="rerequested" if source == "pull_request" else None,
+                policy_error=policy_error,
+                source=source,
+                actor="maintainer" if source == "mention" else None,
+                comment_id=42 if source == "mention" else None,
             )
         },
     )
     assert result.exit_code == 0, result.output
     facts = json.loads((out / "summary.json").read_text())["trigger"]
-    assert facts["bypassed"] == "rerequested"
+    assert facts["bypassed"] == ("rerequested" if source == "pull_request" else None)
     assert facts["policy_error"] == policy_error
+    assert facts["source"] == source
+    assert facts["actor"] == ("maintainer" if source == "mention" else None)
+    assert facts["comment_id"] == (42 if source == "mention" else None)
 
 
+@pytest.mark.parametrize("source", ["pull_request", "mention"])
 def test_worker_snapshot_rejects_anchor_mismatch_before_discovery(
-    monkeypatch, tmp_path, release, policy
+    monkeypatch, tmp_path, release, policy, source
 ):
     async def forbidden(**_):
         pytest.fail("mismatched snapshot ran discovery")
@@ -355,7 +368,13 @@ def test_worker_snapshot_rejects_anchor_mismatch_before_discovery(
             "--out",
             str(tmp_path / "out"),
         ],
-        env={"RVW_TRIGGER_SNAPSHOT": snapshot(changed, bypassed="rerequested")},
+        env={
+            "RVW_TRIGGER_SNAPSHOT": snapshot(
+                changed,
+                source=source,
+                bypassed="rerequested" if source == "pull_request" else None,
+            )
+        },
     )
     assert result.exit_code == 2, result.output
     assert "trigger snapshot anchor mismatch" in result.stderr

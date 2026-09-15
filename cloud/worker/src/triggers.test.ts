@@ -7,7 +7,9 @@ const metadata: TriggerMetadata = {author: "github-actions[bot]", headBranch: "c
 
 describe("repository review triggers", () => {
   it("defaults to denylist with drafts skipped", () => {
-    expect(parseTriggersPolicy({})).toEqual({mode: "denylist", drafts: "skip", rules: []});
+    expect(parseTriggersPolicy({})).toEqual({mode: "denylist", drafts: "skip", rules: [], dedupe_same_head: true,
+      events: {pull_request: {enabled: true, actions: ["opened", "synchronize", "reopened", "ready_for_review"]},
+        mention: {enabled: true, surfaces: ["issue_comment", "pull_request_review_comment"], allow: ["OWNER", "MEMBER", "COLLABORATOR"]}}});
   });
   it("rejects unknown keys, empty allowlists, and empty rules", () => {
     expect(() => parseTriggersPolicy({wat: true})).toThrow("policy_invalid");
@@ -47,9 +49,9 @@ publish: {dismiss_on_pass: y}
 });
 
 const fixtures = JSON.parse(readFileSync(new URL("../../../tests/fixtures/trigger-policy.json", import.meta.url), "utf8")) as {
-  policies: {name: string; input: unknown; valid: boolean}[];
-  auto_policies: {name: string; input: unknown; valid: boolean}[];
-  yaml_policies: {name: string; input: string; valid: boolean}[];
+  policies: {name: string; input: unknown; valid: boolean; expected?: unknown}[];
+  auto_policies: {name: string; input: unknown; valid: boolean; expected?: unknown}[];
+  yaml_policies: {name: string; input: string; valid: boolean; expected?: unknown}[];
   evaluations: {name: string; policy: unknown; metadata: {author: string; head_branch: string; base_branch: string; labels: string[]; title: string; draft: boolean}; expected: {skipped: boolean; rule: string | null; mode: string}}[];
   matches: {name: string; rule: unknown; metadata: {author: string; head_branch: string; base_branch: string; labels: string[]; title: string; draft: boolean}; matches: boolean}[];
 };
@@ -57,16 +59,19 @@ describe("shared Python and Worker trigger fixtures", () => {
   it.each(fixtures.evaluations)("evaluation $name", ({policy, metadata, expected}) => {
     expect(evaluateTrigger(parseTriggersPolicy(policy), {...metadata, headBranch: metadata.head_branch, baseBranch: metadata.base_branch})).toMatchObject(expected);
   });
-  it.each(fixtures.yaml_policies)("raw YAML $name", ({input, valid}) => {
-    if (valid) expect(() => parseTriggersYaml(input)).not.toThrow();
+  it.each(fixtures.yaml_policies)("raw YAML $name", ({input, valid, expected}) => {
+    if (valid) expect(parseTriggersYaml(input)).toEqual(expected);
     else expect(() => parseTriggersYaml(input)).toThrow("policy_invalid");
   });
-  it.each(fixtures.policies)("policy $name", ({input, valid}) => {
-    if (valid) expect(() => parseTriggersPolicy(input)).not.toThrow();
+  it.each(fixtures.policies)("policy $name", ({input, valid, expected}) => {
+    if (valid) {
+      const parsed = parseTriggersPolicy(input);
+      expect(parsed).toEqual(expected);
+    }
     else expect(() => parseTriggersPolicy(input)).toThrow("policy_invalid");
   });
-  it.each(fixtures.auto_policies)("auto policy $name", ({input, valid}) => {
-    if (valid) expect(() => parseTriggersYaml(stringify(input))).not.toThrow();
+  it.each(fixtures.auto_policies)("auto policy $name", ({input, valid, expected}) => {
+    if (valid) expect(parseTriggersYaml(stringify(input))).toEqual(expected);
     else expect(() => parseTriggersYaml(stringify(input))).toThrow("policy_invalid");
   });
   it.each(fixtures.matches)("matching $name", ({rule, metadata, matches}) => {

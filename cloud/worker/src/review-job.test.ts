@@ -4,9 +4,12 @@ import type {PublicationPolicy} from "./publication-policy";
 import type {UpdateCheckRunInput} from "./github-app";
 import type {Process} from "@cloudflare/sandbox";
 import {beforeEach, describe, expect, it, vi} from "vitest";
+import {createHmac} from "node:crypto";
 
 const mocks = vi.hoisted(() => ({
   sandboxFor: vi.fn(), configureOutbound: vi.fn(),
+  getTriggerPolicy: vi.fn(), getCachedAuthenticatedApp: vi.fn(), getAuthenticatedApp: vi.fn(),
+  getPullRequestMetadata: vi.fn(), addCommentReaction: vi.fn(),
   getInstallationToken: vi.fn(async () => "installation-placeholder"),
   getPresentationConfig: vi.fn(async (): Promise<{presentation: PresentationConfig; failure?: string}> => ({presentation: {display_name: "VOOY Review System", short_name: "VOOY Review", locale: "ko" as const, footer: null,
     voice: {audience: "engineers", register: "formal", guidance: null,
@@ -36,7 +39,9 @@ vi.mock("./publication-policy", async (importOriginal) => ({
 }));
 
 import {RvwReviewJob, reviewScript} from "./review-job";
-import {idempotencyKey, type ReviewJobMessage} from "./webhook";
+import {defaultTriggersPolicy, parseTriggerFacts} from "./triggers";
+import {consumeReviewJobs} from "./queue-consumer";
+import {handleWebhook, idempotencyKey, type ReviewJobMessage} from "./webhook";
 
 const message: ReviewJobMessage = {
   jobId: idempotencyKey(17, 23, 42, "a".repeat(40)),
@@ -75,10 +80,23 @@ function setup(state: string, envOverrides: Record<string, string> = {}) {
     exec: vi.fn(async (_command: string) => { events.push("exec"); return {success: true, exitCode: 0}; }),
     startProcess: vi.fn(async () => { throw new Error("process failed to start"); }),
   };
+  const metadata = new Map<string, unknown>();
+  let present = true;
+  let transactionTail = Promise.resolve();
   const storage = {
-    get: vi.fn(async () => record),
-    put: vi.fn(async (_key: string, value: Record<string, unknown>) => { record = value; }),
+    get: vi.fn(async (key: string) => structuredClone(key === "job" ? (present ? record : undefined) : metadata.get(key))),
+    put: vi.fn(async (key: string, value: Record<string, unknown>) => {
+      if (key === "job") { record = structuredClone(value); present = true; } else metadata.set(key, structuredClone(value));
+    }),
+    delete: vi.fn(async (key: string) => { if (key === "job") present = false; else metadata.delete(key); }),
     setAlarm: vi.fn(),
+    transaction: async <T>(callback: (txn: unknown) => Promise<T>): Promise<T> => {
+      const previous = transactionTail;
+      let release!: () => void;
+      transactionTail = new Promise<void>(resolve => { release = resolve; });
+      await previous;
+      try { return await callback(storage); } finally { release(); }
+    },
   };
   mocks.sandboxFor.mockReturnValue(sandbox);
   const put = vi.fn(async (key: string, value: string) => {
@@ -88,7 +106,7 @@ function setup(state: string, envOverrides: Record<string, string> = {}) {
   const ctx = {storage} as unknown as DurableObjectState;
   const env = {CODEX_PROXY_HOST: "proxy.example", GITHUB_APP_ID: "1", RVW_REVIEW_DEADLINE_SECONDS: "900",
     RVW_JOB_DEADLINE_MINUTES: "120", RVW_ARTIFACTS: {put}, ...envOverrides} as unknown as Env;
-  return {job: new RvwReviewJob(ctx, env), events, put, sandbox, storage, files, record: () => record};
+  return {job: new RvwReviewJob(ctx, env), events, put, sandbox, storage, files, ctx, env, record: () => record};
 }
 function startOptions(call: unknown[]): {env: Record<string, string>} {
   return (call as [string, {env: Record<string, string>}])[1];
@@ -124,7 +142,7 @@ it("includes webhook trigger facts in the bootstrap check", async () => {
   const input = {...message, trigger};
   test.record().message = input;
   await expect(test.job.start(input)).rejects.toThrow("process failed to start");
-  expect(mocks.createCheckRun).toHaveBeenCalledWith("installation-placeholder", expect.objectContaining({trigger}));
+  expect(mocks.createCheckRun).toHaveBeenCalledWith("installation-placeholder", expect.objectContaining({trigger: parseTriggerFacts(trigger)}));
 });
 describe("terminal diagnostic persistence", () => {
   it.each(["timeout", "start failure", "supersession"])(
@@ -374,7 +392,7 @@ it("terminalizes a skipped summary as a localized neutral Check", async () => {
   expect(update).toMatchObject({conclusion: "neutral", title: "rvw · Review skipped",
     summary: "Review skipped by repository policy: changesets-release."});
   const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
-  expect(facts.trigger).toEqual(trigger);
+  expect(facts.trigger).toEqual(parseTriggerFacts(trigger));
 });
 
 it.each(["block", "invalid-manifest"])("keeps %s failures when a summary claims a trigger skip", async (failure) => {
@@ -509,7 +527,8 @@ it("terminalizes a review-only run as neutral without detailed Check output", as
   expect(mocks.updateCheckRun).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
     conclusion: "neutral", summary: "Review published without Check details.",
   }));
-  expect(mocks.updateCheckRun.mock.calls[0][1]).not.toHaveProperty("text");
+  expect(mocks.updateCheckRun.mock.calls[0][1].text).toContain('"review_completed": true');
+  expect(mocks.updateCheckRun.mock.calls[0][1].text).not.toContain('"lanes"');
 });
 
 it.each([
@@ -709,5 +728,342 @@ describe("Codex runtime policy on the App path", () => {
     const update = mocks.updateCheckRun.mock.calls[0][1];
     const facts = JSON.parse(update.text!.split("```json\n")[1].split("\n```")[0]);
     expect(facts).toHaveProperty("runtime", null);
+  });
+});
+
+// Baseline measurement: admission handles Ready, while a terminal PR/head key already
+// prevented an ordinary Ready queue delivery from allocating another sandbox.
+it("keeps an unchanged-head Ready delivery idempotent after completion", async () => {
+  const test = setup("completed");
+  await expect(test.job.start({...message, event: "pull_request.ready_for_review", deliveryId: "ready-new"}))
+    .resolves.toEqual({started: false, state: "completed"});
+  expect(test.sandbox.startProcess).not.toHaveBeenCalled();
+});
+
+function mention(commentId = 101): ReviewJobMessage {
+  return {...message, deliveryId: `mention-${commentId}`, event: "issue_comment.created",
+    trigger: {skipped: false, rule: null, mode: "denylist", bypassed: null, policy_error: null,
+      source: "mention", actor: "maintainer", comment_id: commentId, not_applicable: false}};
+}
+function permitStart(test: ReturnType<typeof setup>): void {
+  test.sandbox.startProcess.mockImplementation((async () => ({id: "new-process", command: "/workspace/run-review.sh",
+    startTime: new Date()})) as never);
+}
+describe("durable review trigger admission through start", () => {
+  it("starts a new mention after completion and remembers it across later reruns and eviction", async () => {
+    const test = setup("completed");
+    test.record().conclusion = "success";
+    permitStart(test);
+    expect(await test.job.start(mention())).toEqual({started: true, state: "running"});
+    expect((await test.job.status())?.reviewCompleted).toBe(true);
+    test.record().state = "completed";
+    expect(await test.job.start(mention(102))).toEqual({started: true, state: "running"});
+    test.record().state = "completed";
+    const restored = new RvwReviewJob(test.ctx, test.env);
+    expect(await restored.start({...mention(), deliveryId: "replayed-with-another-delivery"}))
+      .toEqual({started: false, state: "completed"});
+    expect(test.sandbox.startProcess).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["queued", "provisioning", "running", "publishing"])("joins a mention while %s and remembers the joined comment", async state => {
+    const test = setup(state);
+    expect(await test.job.start(mention())).toEqual({started: false, state, skipped: "in_flight_same_head"});
+    test.record().state = "completed";
+    const restored = new RvwReviewJob(test.ctx, test.env);
+    expect(await restored.start({...mention(), deliveryId: "redelivery"})).toEqual({started: false, state: "completed"});
+    expect(test.sandbox.startProcess).not.toHaveBeenCalled();
+  });
+
+  it("consumes a webhook-observed join even if the executor finishes before queue delivery", async () => {
+    const test = setup("completed");
+    const joined = {...mention(), trigger: {...mention().trigger!, skipped: "in_flight_same_head" as const}};
+    expect(await test.job.start(joined)).toEqual({started: false, state: "completed", skipped: "in_flight_same_head"});
+    const restored = new RvwReviewJob(test.ctx, test.env);
+    expect(await restored.start(mention())).toEqual({started: false, state: "completed"});
+    expect(test.sandbox.startProcess).not.toHaveBeenCalled();
+  });
+
+  it("starts exactly one of two concurrently queued mentions on a fresh PR/head", async () => {
+    const test = setup("completed");
+    await test.storage.delete("job");
+    permitStart(test);
+    const results = await Promise.all([test.job.start(mention()), test.job.start(mention(102))]);
+    expect(results).toEqual([{started: true, state: "running"},
+      {started: false, state: "running", skipped: "in_flight_same_head"}]);
+    expect(test.sandbox.startProcess).toHaveBeenCalledOnce();
+  });
+
+  it("permits distinct auto deliveries with dedupe disabled but never replays an earlier delivery", async () => {
+    const test = setup("completed");
+    permitStart(test);
+    const first = {...message, deliveryId: "auto-2", dedupeSameHead: false};
+    const second = {...first, deliveryId: "auto-3"};
+    expect(await test.job.start(first)).toEqual({started: true, state: "running"});
+    test.record().state = "completed";
+    expect(await test.job.start(second)).toEqual({started: true, state: "running"});
+    test.record().state = "completed";
+    expect(await test.job.start(first)).toEqual({started: false, state: "completed"});
+    expect(await test.job.start(message)).toEqual({started: false, state: "completed"});
+    expect(test.sandbox.startProcess).toHaveBeenCalledTimes(2);
+  });
+
+  it("reruns a terminal check rerequest once and retains the old delivery identity", async () => {
+    const test = setup("completed");
+    permitStart(test);
+    const rerequest = {...message, deliveryId: "rerequest-2", event: "check_run.rerequested"};
+    expect(await test.job.start(rerequest)).toEqual({started: true, state: "running"});
+    test.record().state = "completed";
+    expect(await test.job.start(rerequest)).toEqual({started: false, state: "completed"});
+    expect(await test.job.start({...message, event: "check_run.rerequested"}))
+      .toEqual({started: false, state: "completed"});
+    expect(test.sandbox.startProcess).toHaveBeenCalledOnce();
+  });
+
+  it("serializes concurrent queue deliveries while provisioning is awaiting external I/O", async () => {
+    const test = setup("queued");
+    delete test.record().processId;
+    permitStart(test);
+    let unblock!: () => void;
+    let tokenRequested!: () => void;
+    const requested = new Promise<void>(resolve => { tokenRequested = resolve; });
+    mocks.getInstallationToken.mockImplementationOnce(async () => {
+      tokenRequested();
+      await new Promise<void>(resolve => { unblock = resolve; });
+      return "installation-placeholder";
+    });
+    const first = test.job.start(message);
+    await requested;
+    const duplicate = test.job.start(message);
+    const joined = test.job.start(mention());
+    unblock();
+    const results = await Promise.all([first, duplicate, joined]);
+    expect(results).toEqual([{started: true, state: "running"}, {started: false, state: "running"},
+      {started: false, state: "running", skipped: "in_flight_same_head"}]);
+    expect(test.sandbox.startProcess).toHaveBeenCalledOnce();
+  });
+
+  // Regression adapted from the adversarial do-race-probes.ts legacy cleanup reproduction.
+  it("preserves unsettled terminal cleanup and check IDs across eviction before permitting a rerun", async () => {
+    const test = setup("timed_out");
+    test.record().cleanupPending = true;
+    test.record().checkUpdatePending = true;
+    test.sandbox.destroy.mockRejectedValueOnce(new Error("destroy unavailable"));
+    mocks.updateCheckRun.mockRejectedValueOnce(new Error("check unavailable"));
+    permitStart(test);
+    const restored = new RvwReviewJob(test.ctx, test.env);
+    await expect(restored.start(mention())).rejects.toThrow("prior execution cleanup or check update is pending");
+    expect(test.record()).toMatchObject({state: "timed_out", sandboxId: "sandbox-1", processId: "process-1",
+      checkRunId: 42, cleanupPending: true, checkUpdatePending: true, message});
+    expect(test.sandbox.killProcess).toHaveBeenCalledWith("process-1", "SIGTERM");
+    expect(test.sandbox.startProcess).not.toHaveBeenCalled();
+    const recovered = new RvwReviewJob(test.ctx, test.env);
+    expect(await recovered.start(mention())).toEqual({started: true, state: "running"});
+    expect(test.sandbox.destroy).toHaveBeenCalledTimes(2);
+    expect(test.sandbox.startProcess).toHaveBeenCalledOnce();
+  });
+
+  it("retains a completed record until its pending terminal check update succeeds", async () => {
+    const test = setup("failed");
+    test.record().cleanupPending = false;
+    test.record().checkUpdatePending = true;
+    mocks.updateCheckRun.mockRejectedValueOnce(new Error("check unavailable"));
+    permitStart(test);
+    await expect(test.job.start(mention())).rejects.toThrow("prior execution cleanup or check update is pending");
+    expect(test.record()).toMatchObject({state: "failed", sandboxId: "sandbox-1", processId: "process-1",
+      checkRunId: 42, cleanupPending: false, checkUpdatePending: true});
+    expect(test.sandbox.startProcess).not.toHaveBeenCalled();
+    expect(await test.job.start(mention())).toEqual({started: true, state: "running"});
+  });
+
+  it("recovers the persisted process after eviction during start without redispatch or reinitialization", async () => {
+    const test = setup("provisioning");
+    test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "/workspace/run-review.sh", status: "running",
+      startTime: new Date()} as Process);
+    expect(await test.job.start(message)).toEqual({started: true, state: "running"});
+    expect(test.sandbox.startProcess).not.toHaveBeenCalled();
+    expect(test.sandbox.exec).not.toHaveBeenCalled();
+  });
+
+  it("does not let exhausted delivery retries fail a newer rerun", async () => {
+    const test = setup("provisioning");
+    test.record().message = mention(102);
+    await test.job.failStart(mention(), "old retries exhausted");
+    expect(test.record().state).toBe("provisioning");
+    expect(test.sandbox.destroy).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("records actual completion independently of check publication, skipped=%s", async skipped => {
+    const test = setup("publishing");
+    test.record().deadlineAt = "2100-01-01T00:00:00.000Z";
+    test.record().publicationPolicy = {channels: ["review"], checks: {on_block: "failure", on_pass: "success"},
+      inline: {severity_at_least: "suggestion", max_comments: null}};
+    test.sandbox.getProcess.mockResolvedValue({id: "process-1", command: "rvw run", status: "completed",
+      startTime: new Date(), exitCode: 0} as Process);
+    test.files.set("/workspace/result/process.json", JSON.stringify(processFixture()));
+    test.files.set("/workspace/result/summary.json", JSON.stringify(summaryFixture({
+      lanes: {dispatched: skipped ? 0 : 1, valid: skipped ? 0 : 1, uncovered: 0},
+      trigger: {skipped, rule: skipped ? "release" : null, mode: "denylist", bypassed: null, policy_error: null},
+    })));
+    refreshManifest(test.files);
+    await test.job.alarm();
+    expect((await test.job.status())?.reviewCompleted).toBe(!skipped);
+    expect(mocks.updateCheckRun.mock.calls[0][1].text).toContain(`"review_completed": ${!skipped}`);
+  });
+});
+
+it("pins accepted mention anchors durably across PR head movement", async () => {
+  const test = setup("completed");
+  const first = mention();
+  expect(await test.job.pinMention(first)).toMatchObject(first);
+  const nextHead = "d".repeat(40);
+  const nextKey = idempotencyKey(first.installationId, first.repoId, first.prNumber, nextHead);
+  const replay = {...first, headSha: nextHead, jobId: nextKey, idempotencyKey: nextKey, deliveryId: "redelivery"};
+  expect(await test.job.pinMention(replay)).toMatchObject(first);
+  const revived = new RvwReviewJob(test.ctx, test.env);
+  expect(await revived.pinMention(replay)).toMatchObject(first);
+});
+
+
+describe("completion evidence on the executor status path", () => {
+  it.each([
+    ["completed", "success", false, true],
+    ["completed", "failure", false, true],
+    ["completed", "neutral", false, false],
+    ["completed", "success", true, false],
+    ["failed", "failure", false, false],
+    ["failed", "neutral", false, false],
+    ["running", "success", false, false],
+  ])("legacy state=%s conclusion=%s skipped=%s completed=%s", async (state, conclusion, skipped, expected) => {
+    const test = setup(String(state));
+    test.record().conclusion = conclusion;
+    test.record().message = {...message, trigger: parseTriggerFacts({skipped})};
+    expect((await test.job.status())?.reviewCompleted).toBe(expected);
+  });
+
+  it("retains explicit completion evidence after a later failed rerun", async () => {
+    const test = setup("failed");
+    test.record().reviewCompleted = true;
+    expect((await test.job.status())?.reviewCompleted).toBe(true);
+  });
+
+  it("does not replace an explicit negative marker with legacy conclusion inference", async () => {
+    const test = setup("completed");
+    test.record().conclusion = "success";
+    test.record().reviewCompleted = false;
+    expect((await test.job.status())?.reviewCompleted).toBe(false);
+  });
+
+  it("allows another PR executor on the same commit to run independently", async () => {
+    const first = setup("running");
+    const other = setup("completed");
+    await other.storage.delete("job");
+    const key = idempotencyKey(17, 23, 43, message.headSha);
+    const request = {...mention(), prNumber: 43, jobId: key, idempotencyKey: key, baseSha: "c".repeat(40)};
+    permitStart(other);
+    expect(await other.job.start(request)).toEqual({started: true, state: "running"});
+    expect((await first.job.status())?.state).toBe("running");
+    expect(other.record().message).toMatchObject({prNumber: 43, baseSha: "c".repeat(40)});
+  });
+});
+
+
+function webhookExecutorHarness(initialState: string) {
+  const oldHead = setup(initialState);
+  const newHead = setup("completed");
+  const oldComment = setup("completed");
+  const newComment = setup("completed");
+  const nextSha = "c".repeat(40);
+  const nextKey = idempotencyKey(message.installationId, message.repoId, message.prNumber, nextSha);
+  const queued: ReviewJobMessage[] = [];
+  const objects = new Map<string, RvwReviewJob>();
+  const getByName = vi.fn((key: string) => {
+    const object = objects.get(key);
+    if (object === undefined) throw new Error(`unexpected Durable Object address: ${key}`);
+    return object;
+  });
+  const env = {...oldHead.env, GITHUB_WEBHOOK_SECRET: "test-secret", GITHUB_APP_PRIVATE_KEY: "test-key",
+    RVW_REVIEW_JOBS: {send: vi.fn(async (body: ReviewJobMessage) => { queued.push(structuredClone(body)); })},
+    RVW_REVIEW_JOB: {getByName}} as unknown as Env;
+  function restoreObjects() {
+    objects.set(message.jobId, new RvwReviewJob(oldHead.ctx, env));
+    objects.set(nextKey, new RvwReviewJob(newHead.ctx, env));
+    objects.set("mention:17:23:issue_comment:101", new RvwReviewJob(oldComment.ctx, env));
+    objects.set("mention:17:23:issue_comment:102", new RvwReviewJob(newComment.ctx, env));
+  }
+  restoreObjects();
+  permitStart(oldHead);
+  mocks.sandboxFor.mockReturnValue(oldHead.sandbox);
+  mocks.getTriggerPolicy.mockResolvedValue({policy: defaultTriggersPolicy()});
+  mocks.getCachedAuthenticatedApp.mockReturnValue({id: 1, slug: "review-helper"});
+  mocks.getAuthenticatedApp.mockResolvedValue({id: 1, slug: "review-helper"});
+  mocks.addCommentReaction.mockResolvedValue(undefined);
+  function currentHead(sha: string) {
+    mocks.getPullRequestMetadata.mockResolvedValue({number: 42, state: "open", draft: false,
+      title: "A change", labels: [], user: {login: "author"}, head: {sha, ref: "feature"},
+      base: {sha: message.baseSha, ref: "main"}});
+  }
+  currentHead(message.headSha);
+  async function deliver(commentId: number, deliveryId: string) {
+    const body = JSON.stringify({action: "created", installation: {id: 17},
+      repository: {id: 23, name: message.repo, owner: {login: message.owner}},
+      issue: {number: 42, pull_request: {url: `https://api.github.com/repos/${message.owner}/${message.repo}/pulls/42`}},
+      comment: {id: commentId, body: "@review-helper review", user: {type: "User", login: "maintainer"},
+        author_association: "MEMBER"}});
+    const signature = "sha256=" + createHmac("sha256", "test-secret").update(body).digest("hex");
+    return handleWebhook(new Request("https://example.test/github/webhook", {method: "POST", body,
+      headers: {"X-Hub-Signature-256": signature, "X-GitHub-Event": "issue_comment", "X-GitHub-Delivery": deliveryId}}), env);
+  }
+  async function consume() {
+    const body = queued.shift();
+    expect(body).toBeDefined();
+    const delivery = {body, id: "queue-1", attempts: 1, ack: vi.fn(), retry: vi.fn()};
+    await consumeReviewJobs({messages: [delivery]} as unknown as MessageBatch<unknown>, env);
+    expect(delivery.ack).toHaveBeenCalledOnce();
+    expect(delivery.retry).not.toHaveBeenCalled();
+    return body!;
+  }
+  return {oldHead, newHead, oldComment, newComment, nextSha, nextKey, queued, getByName,
+    currentHead, deliver, consume, restoreObjects};
+}
+
+describe("signed webhook through queue and real executor", () => {
+  it("pins redelivery across a push and starts the new head only for a new comment", async () => {
+    const test = webhookExecutorHarness("completed");
+    await test.newHead.storage.delete("job");
+    expect((await test.deliver(101, "first-comment")).status).toBe(202);
+    expect((await test.consume()).headSha).toBe(message.headSha);
+    expect(test.oldHead.sandbox.startProcess).toHaveBeenCalledOnce();
+    test.oldHead.record().state = "completed";
+    test.currentHead(test.nextSha);
+    test.restoreObjects();
+    test.getByName.mockClear();
+    expect((await test.deliver(101, "first-comment-redelivery")).status).toBe(202);
+    expect((await test.consume()).headSha).toBe(message.headSha);
+    expect(test.getByName).toHaveBeenLastCalledWith(message.jobId);
+    expect(await test.newHead.storage.get("job")).toBeUndefined();
+    expect(test.oldHead.sandbox.startProcess).toHaveBeenCalledOnce();
+    expect((await test.deliver(102, "fresh-comment")).status).toBe(202);
+    expect((await test.consume()).headSha).toBe(test.nextSha);
+    expect(test.oldHead.sandbox.startProcess).toHaveBeenCalledTimes(2);
+    expect(test.newHead.record().state).toBe("running");
+    expect(test.oldComment.storage.setAlarm).not.toHaveBeenCalled();
+    expect(test.newComment.storage.setAlarm).not.toHaveBeenCalled();
+  });
+
+  it("keeps an observed in-flight join consumed when its queue message arrives after completion", async () => {
+    const test = webhookExecutorHarness("running");
+    const response = await test.deliver(101, "joined-comment");
+    expect(await response.json()).toMatchObject({queued: true, trigger: {skipped: "in_flight_same_head"}});
+    expect(mocks.addCommentReaction).toHaveBeenCalledOnce();
+    test.oldHead.record().state = "completed";
+    test.restoreObjects();
+    expect((await test.consume()).trigger?.skipped).toBe("in_flight_same_head");
+    expect(test.oldHead.sandbox.startProcess).not.toHaveBeenCalled();
+    expect((await test.deliver(101, "joined-comment-redelivery")).status).toBe(202);
+    await test.consume();
+    expect(test.oldHead.sandbox.startProcess).not.toHaveBeenCalled();
+    expect((await test.deliver(102, "new-comment")).status).toBe(202);
+    await test.consume();
+    expect(test.oldHead.sandbox.startProcess).toHaveBeenCalledOnce();
   });
 });

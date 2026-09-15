@@ -5,7 +5,6 @@ import {
   canTransition,
   checkConclusionForResult,
   isDeadlineReached,
-  shouldRestartForRerequest,
   parseArtifactSummary,
   parseProcessResult,
   type JobState,
@@ -54,21 +53,6 @@ describe("durable review state machine", () => {
     expect(canTransition("queued", "running")).toBe(false);
     expect(canTransition("running", "provisioning")).toBe(false);
     expect(canTransition("publishing", "running")).toBe(false);
-  });
-
-  it("allows only a new check_run rerequest delivery to restart a terminal key", () => {
-    expect(
-      shouldRestartForRerequest("completed", "delivery-old", "check_run.rerequested", "delivery-new"),
-    ).toBe(true);
-    expect(
-      shouldRestartForRerequest("completed", "delivery-old", "check_run.rerequested", "delivery-old"),
-    ).toBe(false);
-    expect(
-      shouldRestartForRerequest("running", "delivery-old", "check_run.rerequested", "delivery-new"),
-    ).toBe(false);
-    expect(
-      shouldRestartForRerequest("completed", "delivery-old", "pull_request.opened", "delivery-new"),
-    ).toBe(false);
   });
 });
 
@@ -119,6 +103,25 @@ describe("check-run conclusion mapping", () => {
 });
 
 describe("Python artifact summary", () => {
+  it("defaults legacy summaries without trigger facts", () => {
+    const summary: Record<string, unknown> = summaryFixture();
+    delete summary.trigger;
+    expect(parseArtifactSummary(JSON.stringify(summary)).trigger).toEqual({
+      skipped: false, rule: null, mode: "denylist", bypassed: null, policy_error: null,
+      not_applicable: false, source: "pull_request", actor: null, comment_id: null,
+    });
+    expect(parseArtifactSummary(JSON.stringify(summaryFixture({trigger: {skipped: false}}))).trigger)
+      .toMatchObject({source: "pull_request", actor: null, comment_id: null});
+  });
+  it.each([false, true, "events_disabled", "action_not_selected", "same_head_reviewed", "in_flight_same_head"])
+    ("preserves mention provenance and skip reason %s", (skipped) => {
+      const trigger = {skipped, source: "mention", actor: "maintainer", comment_id: 42};
+      expect(parseArtifactSummary(JSON.stringify(summaryFixture({trigger}))).trigger).toMatchObject(trigger);
+    });
+  it.each([{skipped: 1}, {source: "comment"}, {actor: 1}, {comment_id: 0}, {comment_id: -1},
+    {comment_id: "42"}, {comment_id: true}, {comment_id: 1.5}])("rejects malformed mention provenance %#", (trigger) => {
+    expect(() => parseArtifactSummary(JSON.stringify(summaryFixture({trigger})))).toThrow();
+  });
   it("preserves trigger facts and accepts skipped summaries without discovery", () => {
     const trigger = {skipped: true, rule: "changesets-release", mode: "denylist", bypassed: null, policy_error: null};
     expect(parseArtifactSummary(JSON.stringify(summaryFixture({trigger, lanes: {dispatched: 0, valid: 0, uncovered: 0}})))).toMatchObject({trigger, lanes: {dispatched: 0, valid: 0}});

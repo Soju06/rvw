@@ -13,6 +13,7 @@ from rvw.policy import (
     TriggerRule,
     _rule_matches,
     evaluate_trigger,
+    packaged_policy,
 )
 
 
@@ -98,16 +99,40 @@ _SHARED = json.loads((Path(__file__).parent / "fixtures/trigger-policy.json").re
 @pytest.mark.parametrize("case", _SHARED["policies"], ids=lambda case: case["name"])
 def test_shared_trigger_parser(case: dict) -> None:
     if case["valid"]:
-        TriggerPolicy.model_validate(case["input"])
+        parsed = TriggerPolicy.model_validate(case["input"])
+        # The Worker omits absent optional rule fields; normalize Python likewise.
+        assert parsed.model_dump(exclude_none=True) == case["expected"]
     else:
         with pytest.raises(ValidationError):
             TriggerPolicy.model_validate(case["input"])
 
 
+def test_packaged_trigger_defaults_match_existing_actions() -> None:
+    expected = next(
+        case["expected"] for case in _SHARED["policies"] if case["name"] == "event-defaults"
+    )
+    assert packaged_policy().policy.triggers.model_dump() == expected
+
+
+@pytest.mark.parametrize(
+    ("events", "reason"),
+    [
+        ({"pull_request": {"actions": ["closed"]}}, "literal_error"),
+        ({"pull_request": {"enabled": "false"}}, "bool_type"),
+        ({"mention": {"unknown": True}}, "extra_forbidden"),
+    ],
+)
+def test_event_validation_retains_machine_readable_reasons(events: dict, reason: str) -> None:
+    with pytest.raises(ValidationError) as exc:
+        AutoPolicy.model_validate(base_policy(triggers={"events": events}))
+    assert exc.value.errors()[0]["type"] == reason
+
+
 @pytest.mark.parametrize("case", _SHARED["auto_policies"], ids=lambda case: case["name"])
 def test_shared_auto_parser(case: dict) -> None:
     if case["valid"]:
-        AutoPolicy.model_validate(case["input"])
+        parsed = AutoPolicy.model_validate(case["input"])
+        assert parsed.triggers.model_dump(exclude_none=True) == case["expected"]
     else:
         with pytest.raises(ValidationError):
             AutoPolicy.model_validate(case["input"])
@@ -127,7 +152,8 @@ def test_shared_yaml_parser(case: dict) -> None:
     from rvw.policy import load_policy_yaml
 
     if case["valid"]:
-        AutoPolicy.model_validate(load_policy_yaml(case["input"]))
+        parsed = AutoPolicy.model_validate(load_policy_yaml(case["input"]))
+        assert parsed.triggers.model_dump(exclude_none=True) == case["expected"]
     else:
         with pytest.raises((ValueError, yaml.YAMLError)):
             AutoPolicy.model_validate(load_policy_yaml(case["input"]))

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import (
     AttemptWave,
@@ -215,6 +217,17 @@ def test_legacy_summary_and_outcome_contracts_load_with_defaults() -> None:
         "markdown": "legacy",
     }
     loaded = ExecutionSummary.model_validate_json(json.dumps(legacy_summary))
+    assert loaded.trigger.model_dump() == {
+        "skipped": False,
+        "rule": None,
+        "mode": "denylist",
+        "bypassed": None,
+        "policy_error": None,
+        "not_applicable": False,
+        "source": "pull_request",
+        "actor": None,
+        "comment_id": None,
+    }
     assert loaded.failed_lanes == []
     assert loaded.wave_wall_seconds.model_dump() == dict.fromkeys(
         (
@@ -236,6 +249,46 @@ def test_legacy_summary_and_outcome_contracts_load_with_defaults() -> None:
         "coerced_rejections": 0,
     }
     assert AdjudicationOutcome.model_validate(legacy_outcome).wave_wall_seconds == {}
+
+
+@pytest.mark.parametrize(
+    "skipped",
+    [
+        False,
+        True,
+        "events_disabled",
+        "action_not_selected",
+        "same_head_reviewed",
+        "in_flight_same_head",
+    ],
+)
+def test_summary_preserves_mention_provenance_and_skip_reasons(skipped: bool | str) -> None:
+    facts = {"skipped": skipped, "source": "mention", "actor": "maintainer", "comment_id": 42}
+    summary = ExecutionSummary.model_validate({"trigger": facts})
+    assert {key: summary.trigger.model_dump()[key] for key in facts} == facts
+    assert (
+        ExecutionSummary.model_validate_json(summary.model_dump_json()).trigger == summary.trigger
+    )
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        {"skipped": "true"},
+        {"skipped": 1},
+        {"source": "comment"},
+        {"actor": 1},
+        {"comment_id": 0},
+        {"comment_id": -1},
+        {"comment_id": "42"},
+        {"comment_id": True},
+        {"comment_id": 1.5},
+        {"unknown": True},
+    ],
+)
+def test_summary_rejects_invalid_trigger_facts(facts: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        ExecutionSummary.model_validate({"trigger": facts})
 
 
 def test_outcome_rejects_unknown_wave_labels_and_negative_walls() -> None:

@@ -39,19 +39,6 @@ export function isTerminalState(state: JobState): state is TerminalJobState {
   return TRANSITIONS[state].length === 0;
 }
 
-export function shouldRestartForRerequest(
-  state: JobState,
-  previousDeliveryId: string | undefined,
-  event: string,
-  deliveryId: string,
-): boolean {
-  return (
-    isTerminalState(state) &&
-    event === "check_run.rerequested" &&
-    previousDeliveryId !== deliveryId
-  );
-}
-
 export function isDeadlineReached(nowMs: number, deadlineMs: number): boolean {
   return nowMs >= deadlineMs;
 }
@@ -270,7 +257,7 @@ export interface PublishFacts extends Record<(typeof PUBLISH_THREAD_LISTS)[numbe
 }
 
 export interface ArtifactSummary extends PublicationFacts {
-  trigger: TriggerFacts | null;
+  trigger: TriggerFacts;
   schema_version: 1;
   lanes: SummaryLanes;
   failed_lanes: SummaryFailedLane[];
@@ -385,7 +372,7 @@ function waveWallSeconds(value: unknown): WaveWallSeconds | null {
 /** Consume Python summary facts; no discovery/adjudication recount lives here. */
 export function parseArtifactSummary(output: string): ArtifactSummary {
   const value = recordValue(JSON.parse(output), "summary");
-  const trigger = value.trigger === undefined ? null : parseTriggerFacts(value.trigger);
+  const trigger = parseTriggerFacts(value.trigger === undefined ? {} : value.trigger);
   fields(value, ["schema_version", "lanes", "findings", "verdicts", "blockers", "markdown",
     ...(value.presentation === undefined ? [] : ["presentation"]),
     ...["publication_failure", "language_fallback_used", "failed_lanes", "wave_wall_seconds",

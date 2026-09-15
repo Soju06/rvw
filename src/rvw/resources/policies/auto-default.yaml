@@ -12,8 +12,20 @@ block_when:
 
 publish_state: comment
 
-# An absent triggers block means {mode: denylist, drafts: skip, rules: []}.
-# Consumers name their own review exclusions in the repository policy.
+# Consumers select automatic actions and name their own review exclusions.
+triggers:
+  events:
+    pull_request:
+      enabled: true
+      actions: [opened, synchronize, reopened, ready_for_review]
+    mention:
+      enabled: true
+      surfaces: [issue_comment, pull_request_review_comment]
+      allow: [OWNER, MEMBER, COLLABORATOR]
+  dedupe_same_head: true
+  mode: denylist
+  drafts: skip
+  rules: []
 
 # Review event per verdict. Defaults reproduce COMMENT-only publication; a
 # consuming repository opts into stronger events in its own base-ref copy.

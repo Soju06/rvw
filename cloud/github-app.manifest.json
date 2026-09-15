@@ -8,12 +8,15 @@
   "public": false,
   "default_permissions": {
     "checks": "write",
+    "issues": "write",
     "pull_requests": "write",
     "contents": "read",
     "metadata": "read"
   },
   "default_events": [
     "pull_request",
+    "issue_comment",
+    "pull_request_review_comment",
     "check_run",
     "check_suite"
   ]

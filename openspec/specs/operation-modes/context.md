@@ -157,3 +157,32 @@ reruns honor the human request. Trigger facts cross the App/CLI boundary so cont
 metadata changes cannot undo the pre-enqueue decision or erase its diagnostics.
 
 The publication-controls integration applies the resolved presentation locale to trigger skips as well as completed results. Interactive skips persist the anchored presentation before rendering; matching rule names remain unchanged and draft/allowlist explanations use the English/Korean catalogs.
+
+## Selectable review starts (2026-09-15)
+
+Consumer PR 2026-09-11 reported an unchanged-head Ready flip while behind base.
+The observed webhook implementation admits Ready even with stale draft metadata,
+with either draft policy; its existing PR/head Durable Object suppresses an
+ordinary terminal restart when that record is present. The added event controls
+preserve opened, synchronize, reopened and ready_for_review as defaults, while
+letting repositories omit actions or disable automatic starts. Explicit mentions
+request review regardless of rules/draft state. This change does not alter diff
+construction or introduce a behind-base guard.
+
+Check fallback uses recoverable job identity for the requested installation,
+repository, PR, and head. A parseable external ID or structured job/artifact facts
+for another job reject the check even if its pull_requests array lists this PR;
+commit association alone cannot suppress review. Legacy facts must identify the
+requested job rather than merely agree with the check's own external ID.
+
+The existing summary trigger object is extended rather than duplicated under
+publish. Legacy boolean skipped facts remain valid; named reasons describe new
+event/dedupe skips. Source defaults to pull_request and actor/comment id to null.
+Both parsers consume the expanded shared trigger fixture file, including raw YAML
+single-letter/string/numeric boolean cases and documents containing publication
+controls. Every valid parser case carries a full normalized expected value in both
+runtimes. Enabled automatic events with an empty action list remain valid but
+`rvw policy lint` warns that they select no automatic reviews. The CLI validates these settings but gains no comment entry point.
+
+See [operator YAML examples](../../../docs/auto-policy.md) and the active
+[review-trigger-modes design](../../changes/review-trigger-modes/design.md).

@@ -460,9 +460,22 @@
       "description": "Repository trigger evaluation recorded in summary artifacts.",
       "properties": {
         "skipped": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "events_disabled",
+                "action_not_selected",
+                "same_head_reviewed",
+                "in_flight_same_head"
+              ],
+              "type": "string"
+            }
+          ],
           "default": false,
-          "title": "Skipped",
-          "type": "boolean"
+          "title": "Skipped"
         },
         "rule": {
           "anyOf": [
@@ -517,6 +530,40 @@
           "default": false,
           "title": "Not Applicable",
           "type": "boolean"
+        },
+        "source": {
+          "default": "pull_request",
+          "enum": [
+            "pull_request",
+            "mention"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "actor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor"
+        },
+        "comment_id": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comment Id"
         }
       },
       "title": "TriggerFacts",
