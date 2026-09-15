@@ -3,6 +3,16 @@ import {parseDocument, visit} from "yaml";
 import {parsePublicationPolicyYaml} from "./publication-policy";
 
 export type TriggerMode = "denylist" | "allowlist";
+export const DEFAULT_PULL_REQUEST_ACTIONS = ["opened", "synchronize", "reopened", "ready_for_review"] as const;
+export const DEFAULT_MENTION_SURFACES = ["issue_comment", "pull_request_review_comment"] as const;
+export const AUTHOR_ASSOCIATIONS = ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR",
+  "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", "MANNEQUIN"] as const;
+export const DEFAULT_MENTION_ALLOW = ["OWNER", "MEMBER", "COLLABORATOR"] as const;
+export type TriggerAction = typeof DEFAULT_PULL_REQUEST_ACTIONS[number];
+export type MentionSurface = typeof DEFAULT_MENTION_SURFACES[number];
+export type AuthorAssociation = typeof AUTHOR_ASSOCIATIONS[number];
+export const TRIGGER_SKIP_REASONS = ["events_disabled", "action_not_selected", "same_head_reviewed", "in_flight_same_head"] as const;
+export type TriggerSkipReason = typeof TRIGGER_SKIP_REASONS[number];
 export interface TriggerRule {
   name: string;
   authors?: string[] | null;
@@ -11,20 +21,35 @@ export interface TriggerRule {
   labels?: string[] | null;
   title?: string | null;
 }
-export interface TriggersPolicy {mode: TriggerMode; drafts: "skip" | "review"; rules: TriggerRule[];}
+export interface TriggersPolicy {
+  mode: TriggerMode; drafts: "skip" | "review"; rules: TriggerRule[];
+  dedupe_same_head: boolean;
+  events: {
+    pull_request: {enabled: boolean; actions: TriggerAction[]};
+    mention: {enabled: boolean; surfaces: MentionSurface[]; allow: AuthorAssociation[]};
+  };
+}
 export interface TriggerMetadata {
   author: string | null; headBranch: string | null; baseBranch: string | null;
   labels: string[]; title: string; draft: boolean;
 }
 export interface TriggerFacts {
-  skipped: boolean; rule: string | null; mode: TriggerMode;
+  skipped: boolean | TriggerSkipReason; rule: string | null; mode: TriggerMode;
   bypassed: "rerequested" | "force" | null; policy_error: string | null;
   not_applicable?: boolean;
+  source?: "pull_request" | "mention";
+  actor?: string | null;
+  comment_id?: number | null;
 }
 
-export function defaultTriggersPolicy(): TriggersPolicy { return {mode: "denylist", drafts: "skip", rules: []}; }
+export function defaultTriggersPolicy(): TriggersPolicy {
+  return {mode: "denylist", drafts: "skip", rules: [], dedupe_same_head: true,
+    events: {pull_request: {enabled: true, actions: [...DEFAULT_PULL_REQUEST_ACTIONS]},
+      mention: {enabled: true, surfaces: [...DEFAULT_MENTION_SURFACES], allow: [...DEFAULT_MENTION_ALLOW]}}};
+}
 export function triggerFacts(mode: TriggerMode = "denylist"): TriggerFacts {
-  return {skipped: false, rule: null, mode, bypassed: null, policy_error: null};
+  return {skipped: false, rule: null, mode, bypassed: null, policy_error: null,
+    not_applicable: false, source: "pull_request", actor: null, comment_id: null};
 }
 function invalid(): never { throw new Error("policy_invalid"); }
 function titleRegex(pattern: string): RegExp {
@@ -66,6 +91,30 @@ function block(value: unknown, required: string[], optional: string[] = []): Rec
   const result = object(value);
   if (required.some((key) => !(key in result)) || Object.keys(result).some((key) => ![...required, ...optional].includes(key))) invalid();
   return result;
+}
+function strictBoolean(value: unknown): boolean {
+  if (typeof value !== "boolean") invalid();
+  return value;
+}
+function enumList<T extends string>(value: unknown, allowed: readonly T[]): T[] {
+  if (!Array.isArray(value) || value.some((item) => !allowed.includes(item))) invalid();
+  return value as T[];
+}
+function parseEvents(value: unknown): TriggersPolicy["events"] {
+  const events = block(value, [], ["pull_request", "mention"]);
+  const pr = block(events.pull_request === undefined ? {} : events.pull_request, [], ["enabled", "actions"]);
+  const mention = block(events.mention === undefined ? {} : events.mention, [], ["enabled", "surfaces", "allow"]);
+  return {
+    pull_request: {
+      enabled: pr.enabled === undefined ? true : strictBoolean(pr.enabled),
+      actions: pr.actions === undefined ? [...DEFAULT_PULL_REQUEST_ACTIONS] : enumList(pr.actions, DEFAULT_PULL_REQUEST_ACTIONS),
+    },
+    mention: {
+      enabled: mention.enabled === undefined ? true : strictBoolean(mention.enabled),
+      surfaces: mention.surfaces === undefined ? [...DEFAULT_MENTION_SURFACES] : enumList(mention.surfaces, DEFAULT_MENTION_SURFACES),
+      allow: mention.allow === undefined ? [...DEFAULT_MENTION_ALLOW] : enumList(mention.allow, AUTHOR_ASSOCIATIONS),
+    },
+  };
 }
 function integerAtLeast(value: unknown, minimum: number): boolean {
   // The existing count models predate strict schema scalars; Pydantic accepts integer strings/bools.
@@ -115,7 +164,9 @@ function validateAutoPolicy(value: unknown): Record<string, unknown> {
 /** This schema is exercised against the same JSON fixtures as Python TriggerPolicy. */
 export function parseTriggersPolicy(value: unknown): TriggersPolicy {
   const root = object(value);
-  if (Object.keys(root).some((key) => !["mode", "drafts", "rules"].includes(key))) invalid();
+  if (Object.keys(root).some((key) => !["mode", "drafts", "rules", "events", "dedupe_same_head"].includes(key))) invalid();
+  const events = parseEvents(root.events === undefined ? {} : root.events);
+  const dedupeSameHead = root.dedupe_same_head === undefined ? true : strictBoolean(root.dedupe_same_head);
   const mode = root.mode === undefined ? "denylist" : root.mode;
   const drafts = root.drafts === undefined ? "skip" : root.drafts;
   if (mode !== "denylist" && mode !== "allowlist") invalid();
@@ -143,7 +194,7 @@ export function parseTriggersPolicy(value: unknown): TriggersPolicy {
     return result;
   });
   if (new Set(rules.map((rule) => rule.name)).size !== rules.length) invalid();
-  return {mode, drafts, rules};
+  return {mode, drafts, rules, events, dedupe_same_head: dedupeSameHead};
 }
 
 /** Full YAML decoding allows repository auto policies to retain their other policy blocks. */
@@ -233,12 +284,16 @@ export function evaluateTrigger(policy: TriggersPolicy, metadata: TriggerMetadat
 
 export function parseTriggerFacts(value: unknown): TriggerFacts {
   const record = {...triggerFacts(), ...object(value)};
-  if (Object.keys(record).some((key) => !["skipped", "rule", "mode", "bypassed", "policy_error", "not_applicable"].includes(key)) ||
-      typeof record.skipped !== "boolean" || !["denylist", "allowlist"].includes(record.mode as string) ||
+  if (Object.keys(record).some((key) => !["skipped", "rule", "mode", "bypassed", "policy_error", "not_applicable", "source", "actor", "comment_id"].includes(key)) ||
+      !(typeof record.skipped === "boolean" || TRIGGER_SKIP_REASONS.includes(record.skipped as TriggerSkipReason)) ||
+      !["denylist", "allowlist"].includes(record.mode as string) ||
       !(record.rule === null || typeof record.rule === "string") ||
       ![null, "force", "rerequested"].includes(record.bypassed as string | null) ||
       !(record.policy_error === null || typeof record.policy_error === "string") ||
-      (record.not_applicable !== undefined && typeof record.not_applicable !== "boolean")) {
+      typeof record.not_applicable !== "boolean" ||
+      !["pull_request", "mention"].includes(record.source as string) ||
+      !(record.actor === null || typeof record.actor === "string") ||
+      !(record.comment_id === null || (typeof record.comment_id === "number" && Number.isSafeInteger(record.comment_id) && record.comment_id > 0))) {
     throw new Error("trigger facts are invalid");
   }
   return record as unknown as TriggerFacts;

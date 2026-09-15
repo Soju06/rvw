@@ -49,8 +49,8 @@ def test_a1_script_delegates_execution_and_diagnostics_to_run() -> None:
     ) in source
     assert (
         "reviewScript(message, config.reviewDeadlineSeconds,\n"
-        "      {model: config.codexModel, reasoningEffort: config.codexReasoningEffort,\n"
-        "        publication: record.publicationPolicy})"
+        "        {model: config.codexModel, reasoningEffort: config.codexReasoningEffort,\n"
+        "          publication: record.publicationPolicy})"
     ) in source
     assert "rvw.container_entrypoint run" in invocation
     assert "--deadline ${deadlineSeconds}" in invocation

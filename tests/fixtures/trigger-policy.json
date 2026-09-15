@@ -3,7 +3,36 @@
     {
       "name": "defaults",
       "input": {},
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "denylist",
@@ -19,7 +48,43 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "release",
+            "authors": [
+              "github-actions[bot]"
+            ]
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "allowlist",
@@ -35,7 +100,43 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "allowlist",
+        "drafts": "review",
+        "rules": [
+          {
+            "name": "main",
+            "base_branches": [
+              "main"
+            ]
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "empty-allowlist",
@@ -422,7 +523,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^chore\\(release\\)"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "unicode-literal",
@@ -434,7 +569,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^검토"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "lookahead",
@@ -446,7 +615,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^chore(?=release)"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "noncapturing",
@@ -458,7 +661,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^(?:fix|chore):"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "explicit-range",
@@ -470,7 +707,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "regex",
+            "title": "^[a-z][0-9]+"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "control-escape",
@@ -482,7 +753,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\t"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "hex-escape",
@@ -494,7 +799,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\x41"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "unicode-escape",
@@ -506,7 +845,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "regex",
+            "title": "\\uAC00"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "hyphen-name",
@@ -518,7 +891,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "-",
+            "authors": []
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "surrogate-escape",
@@ -638,7 +1045,41 @@
           }
         ]
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "regex",
+            "title": "[[]"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "newline-name",
@@ -650,6 +1091,177 @@
           }
         ]
       },
+      "valid": false
+    },
+    {
+      "name": "event-defaults",
+      "input": {},
+      "valid": true,
+      "expected": {"mode": "denylist", "drafts": "skip", "rules": [], "dedupe_same_head": true, "events": {"pull_request": {"enabled": true, "actions": ["opened", "synchronize", "reopened", "ready_for_review"]}, "mention": {"enabled": true, "surfaces": ["issue_comment", "pull_request_review_comment"], "allow": ["OWNER", "MEMBER", "COLLABORATOR"]}}}
+    },
+    {
+      "name": "mention-only",
+      "input": {"events": {"pull_request": {"enabled": false}}},
+      "valid": true,
+      "expected": {"mode": "denylist", "drafts": "skip", "rules": [], "dedupe_same_head": true, "events": {"pull_request": {"enabled": false, "actions": ["opened", "synchronize", "reopened", "ready_for_review"]}, "mention": {"enabled": true, "surfaces": ["issue_comment", "pull_request_review_comment"], "allow": ["OWNER", "MEMBER", "COLLABORATOR"]}}}
+    },
+    {
+      "name": "cheaper-auto",
+      "input": {"events": {"pull_request": {"actions": ["opened", "ready_for_review"]}}},
+      "valid": true,
+      "expected": {"mode": "denylist", "drafts": "skip", "rules": [], "dedupe_same_head": true, "events": {"pull_request": {"enabled": true, "actions": ["opened", "ready_for_review"]}, "mention": {"enabled": true, "surfaces": ["issue_comment", "pull_request_review_comment"], "allow": ["OWNER", "MEMBER", "COLLABORATOR"]}}}
+    },
+    {
+      "name": "empty-event-selections",
+      "input": {"events": {"pull_request": {"actions": []}, "mention": {"surfaces": [], "allow": []}}},
+      "valid": true,
+      "expected": {"mode": "denylist", "drafts": "skip", "rules": [], "dedupe_same_head": true, "events": {"pull_request": {"enabled": true, "actions": []}, "mention": {"enabled": true, "surfaces": [], "allow": []}}}
+    },
+    {
+      "name": "all-associations",
+      "input": {"events": {"mention": {"allow": ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", "MANNEQUIN"]}}},
+      "valid": true,
+      "expected": {"mode": "denylist", "drafts": "skip", "rules": [], "dedupe_same_head": true, "events": {"pull_request": {"enabled": true, "actions": ["opened", "synchronize", "reopened", "ready_for_review"]}, "mention": {"enabled": true, "surfaces": ["issue_comment", "pull_request_review_comment"], "allow": ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", "MANNEQUIN"]}}}
+    },
+    {
+      "name": "dedupe-disabled",
+      "input": {"dedupe_same_head": false},
+      "valid": true,
+      "expected": {"mode": "denylist", "drafts": "skip", "rules": [], "dedupe_same_head": false, "events": {"pull_request": {"enabled": true, "actions": ["opened", "synchronize", "reopened", "ready_for_review"]}, "mention": {"enabled": true, "surfaces": ["issue_comment", "pull_request_review_comment"], "allow": ["OWNER", "MEMBER", "COLLABORATOR"]}}}
+    },
+    {
+      "name": "unknown-event",
+      "input": {"events": {"push": {}}},
+      "valid": false
+    },
+    {
+      "name": "unknown-pull-request-key",
+      "input": {"events": {"pull_request": {"on": true}}},
+      "valid": false
+    },
+    {
+      "name": "unknown-mention-key",
+      "input": {"events": {"mention": {"users": []}}},
+      "valid": false
+    },
+    {
+      "name": "events-null",
+      "input": {"events": null},
+      "valid": false
+    },
+    {
+      "name": "pull-request-null",
+      "input": {"events": {"pull_request": null}},
+      "valid": false
+    },
+    {
+      "name": "mention-array",
+      "input": {"events": {"mention": []}},
+      "valid": false
+    },
+    {
+      "name": "invalid-action",
+      "input": {"events": {"pull_request": {"actions": ["closed"]}}},
+      "valid": false
+    },
+    {
+      "name": "invalid-surface",
+      "input": {"events": {"mention": {"surfaces": ["pull_request_review"]}}},
+      "valid": false
+    },
+    {
+      "name": "invalid-association",
+      "input": {"events": {"mention": {"allow": ["ADMIN"]}}},
+      "valid": false
+    },
+    {
+      "name": "pull_request-enabled-string",
+      "input": {"events": {"pull_request": {"enabled": "true"}}},
+      "valid": false
+    },
+    {
+      "name": "pull_request-enabled-number",
+      "input": {"events": {"pull_request": {"enabled": 1}}},
+      "valid": false
+    },
+    {
+      "name": "pull_request-enabled-null",
+      "input": {"events": {"pull_request": {"enabled": null}}},
+      "valid": false
+    },
+    {
+      "name": "mention-enabled-string",
+      "input": {"events": {"mention": {"enabled": "true"}}},
+      "valid": false
+    },
+    {
+      "name": "mention-enabled-number",
+      "input": {"events": {"mention": {"enabled": 1}}},
+      "valid": false
+    },
+    {
+      "name": "mention-enabled-null",
+      "input": {"events": {"mention": {"enabled": null}}},
+      "valid": false
+    },
+    {
+      "name": "dedupe-string",
+      "input": {"dedupe_same_head": "false"},
+      "valid": false
+    },
+    {
+      "name": "dedupe-number",
+      "input": {"dedupe_same_head": 0},
+      "valid": false
+    },
+    {
+      "name": "dedupe-null",
+      "input": {"dedupe_same_head": null},
+      "valid": false
+    },
+    {
+      "name": "actions-string",
+      "input": {"events": {"pull_request": {"actions": "opened"}}},
+      "valid": false
+    },
+    {
+      "name": "actions-null",
+      "input": {"events": {"pull_request": {"actions": null}}},
+      "valid": false
+    },
+    {
+      "name": "actions-number",
+      "input": {"events": {"pull_request": {"actions": [1]}}},
+      "valid": false
+    },
+    {
+      "name": "surfaces-string",
+      "input": {"events": {"mention": {"surfaces": "opened"}}},
+      "valid": false
+    },
+    {
+      "name": "surfaces-null",
+      "input": {"events": {"mention": {"surfaces": null}}},
+      "valid": false
+    },
+    {
+      "name": "surfaces-number",
+      "input": {"events": {"mention": {"surfaces": [1]}}},
+      "valid": false
+    },
+    {
+      "name": "allow-string",
+      "input": {"events": {"mention": {"allow": "opened"}}},
+      "valid": false
+    },
+    {
+      "name": "allow-null",
+      "input": {"events": {"mention": {"allow": null}}},
+      "valid": false
+    },
+    {
+      "name": "allow-number",
+      "input": {"events": {"mention": {"allow": [1]}}},
       "valid": false
     }
   ],
@@ -1372,7 +1984,36 @@
         },
         "publish_state": "comment"
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "triggers",
@@ -1400,7 +2041,43 @@
           ]
         }
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "release",
+            "authors": [
+              "github-actions[bot]"
+            ]
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "triggers-with-publication-controls",
@@ -1441,7 +2118,43 @@
           ]
         }
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "release",
+            "authors": [
+              "github-actions[bot]"
+            ]
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "unknown-root",
@@ -1545,7 +2258,36 @@
           "approve_requires_explicit_opt_in": false
         }
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "strict-publication-bool",
@@ -1603,7 +2345,36 @@
         },
         "publish_state": "comment"
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "count-bool",
@@ -1621,7 +2392,36 @@
         },
         "publish_state": "comment"
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "invalid-count",
@@ -1677,7 +2477,36 @@
         },
         "publish_state": "comment"
       },
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "bad-confirmed",
@@ -1697,6 +2526,246 @@
         "publish_state": "comment"
       },
       "valid": false
+    },
+    {
+      "name": "event-defaults",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {}},
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "mention-only",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"pull_request": {"enabled": false}}}},
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": false,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "cheaper-auto",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"pull_request": {"actions": ["opened", "ready_for_review"]}}}},
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "empty-event-selections",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"pull_request": {"actions": []}, "mention": {"surfaces": [], "allow": []}}}},
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": []
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [],
+            "allow": []
+          }
+        }
+      }
+    },
+    {
+      "name": "all-associations",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"mention": {"allow": ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", "MANNEQUIN"]}}}},
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR",
+              "CONTRIBUTOR",
+              "FIRST_TIME_CONTRIBUTOR",
+              "FIRST_TIMER",
+              "NONE",
+              "MANNEQUIN"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "dedupe-disabled",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"dedupe_same_head": false}},
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": false,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "unknown-event",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"push": {}}}},
+      "valid": false
+    },
+    {
+      "name": "unknown-pull-request-key",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"pull_request": {"on": true}}}},
+      "valid": false
+    },
+    {
+      "name": "unknown-mention-key",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"mention": {"users": []}}}},
+      "valid": false
+    },
+    {
+      "name": "invalid-action",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"pull_request": {"actions": ["closed"]}}}},
+      "valid": false
+    },
+    {
+      "name": "invalid-surface",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"mention": {"surfaces": ["pull_request_review"]}}}},
+      "valid": false
+    },
+    {
+      "name": "invalid-association",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"mention": {"allow": ["ADMIN"]}}}},
+      "valid": false
+    },
+    {
+      "name": "pull_request-enabled-string",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"pull_request": {"enabled": "true"}}}},
+      "valid": false
+    },
+    {
+      "name": "mention-enabled-string",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"events": {"mention": {"enabled": "true"}}}},
+      "valid": false
+    },
+    {
+      "name": "dedupe-string",
+      "input": {"promote_to_blocker": {"agreement_at_least": 2, "severity_at_least": "warning"}, "drop": {"agreement_at_most": 1, "severity_at_most": "suggestion"}, "block_when": {"severity_at_least": "blocker"}, "publish_state": "comment", "triggers": {"dedupe_same_head": "false"}},
+      "valid": false
     }
   ],
   "yaml_policies": [
@@ -1708,12 +2777,85 @@
     {
       "name": "quoted-bool",
       "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {rules: [{name: rule, authors: [\"yes\"]}]}\n",
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "rule",
+            "authors": [
+              "yes"
+            ]
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "single-letter-string",
       "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {rules: [{name: rule, authors: [y, n]}]}\n",
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "rule",
+            "authors": [
+              "y",
+              "n"
+            ]
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "null-trigger",
@@ -1743,17 +2885,114 @@
     {
       "name": "quoted-regex",
       "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers:\n  rules:\n    - name: release\n      title: \"^chore\\\\(release\\\\)\"\n",
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "release",
+            "title": "^chore\\(release\\)"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "single-quoted-regex",
       "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers:\n  rules:\n    - name: release\n      title: '^chore\\(release\\)'\n",
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [
+          {
+            "name": "release",
+            "title": "^chore\\(release\\)"
+          }
+        ],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "underscore-string",
       "input": "promote_to_blocker: {agreement_at_least: '1_0', severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\n",
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "scientific-int",
@@ -1768,17 +3007,245 @@
     {
       "name": "scientific-float",
       "input": "promote_to_blocker: {agreement_at_least: 1.0e+3, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\n",
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "large-int",
       "input": "promote_to_blocker: {agreement_at_least: 9007199254740993, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\n",
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "confirmed-integer",
       "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker, confirmed_only: 0}\npublish_state: comment\n",
-      "valid": true
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "pull-request-strict-boolean-y",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {pull_request: {enabled: y}}}\n",
+      "valid": false
+    },
+    {
+      "name": "pull-request-strict-boolean-N",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {pull_request: {enabled: N}}}\n",
+      "valid": false
+    },
+    {
+      "name": "pull-request-strict-boolean-\"true\"",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {pull_request: {enabled: \"true\"}}}\n",
+      "valid": false
+    },
+    {
+      "name": "pull-request-strict-boolean-1",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {pull_request: {enabled: 1}}}\n",
+      "valid": false
+    },
+    {
+      "name": "pull-request-strict-boolean-1.0",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {pull_request: {enabled: 1.0}}}\n",
+      "valid": false
+    },
+    {
+      "name": "mention-strict-boolean-y",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {mention: {enabled: y}}}\n",
+      "valid": false
+    },
+    {
+      "name": "mention-strict-boolean-N",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {mention: {enabled: N}}}\n",
+      "valid": false
+    },
+    {
+      "name": "mention-strict-boolean-\"true\"",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {mention: {enabled: \"true\"}}}\n",
+      "valid": false
+    },
+    {
+      "name": "mention-strict-boolean-1",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {mention: {enabled: 1}}}\n",
+      "valid": false
+    },
+    {
+      "name": "mention-strict-boolean-1.0",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {mention: {enabled: 1.0}}}\n",
+      "valid": false
+    },
+    {
+      "name": "dedupe-strict-boolean-y",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {dedupe_same_head: y}\n",
+      "valid": false
+    },
+    {
+      "name": "dedupe-strict-boolean-N",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {dedupe_same_head: N}\n",
+      "valid": false
+    },
+    {
+      "name": "dedupe-strict-boolean-\"true\"",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {dedupe_same_head: \"true\"}\n",
+      "valid": false
+    },
+    {
+      "name": "dedupe-strict-boolean-1",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {dedupe_same_head: 1}\n",
+      "valid": false
+    },
+    {
+      "name": "dedupe-strict-boolean-1.0",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {dedupe_same_head: 1.0}\n",
+      "valid": false
+    },
+    {
+      "name": "mention-only",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {pull_request: {enabled: false}}}\n",
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": false,
+            "actions": [
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "cheaper-auto",
+      "input": "promote_to_blocker: {agreement_at_least: 2, severity_at_least: warning}\ndrop: {agreement_at_most: 1, severity_at_most: suggestion}\nblock_when: {severity_at_least: blocker}\npublish_state: comment\ntriggers: {events: {pull_request: {actions: [opened, ready_for_review]}}}\n",
+      "valid": true,
+      "expected": {
+        "mode": "denylist",
+        "drafts": "skip",
+        "rules": [],
+        "dedupe_same_head": true,
+        "events": {
+          "pull_request": {
+            "enabled": true,
+            "actions": [
+              "opened",
+              "ready_for_review"
+            ]
+          },
+          "mention": {
+            "enabled": true,
+            "surfaces": [
+              "issue_comment",
+              "pull_request_review_comment"
+            ],
+            "allow": [
+              "OWNER",
+              "MEMBER",
+              "COLLABORATOR"
+            ]
+          }
+        }
+      }
     }
   ],
   "evaluations": [

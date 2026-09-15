@@ -100,6 +100,7 @@ from rvw.policy import (
     TriggerMetadata,
     evaluate,
     evaluate_trigger,
+    load_policy,
     packaged_policy,
     publish_policy_source,
     repository_policy_from_contents,
@@ -280,8 +281,10 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 lanes_app = typer.Typer(help="Inspect registered review lanes.", no_args_is_help=True)
+policy_app = typer.Typer(help="Validate repository review policies.", no_args_is_help=True)
 stack_app = typer.Typer(help="Review an explicit stacked pull-request chain.", no_args_is_help=True)
 app.add_typer(lanes_app, name="lanes")
+app.add_typer(policy_app, name="policy")
 app.add_typer(stack_app, name="stack")
 
 _console = Console()
@@ -3566,6 +3569,57 @@ def lanes_show(
     )
     _console.print(f"Path: {path}", soft_wrap=True)
     _console.print(path.read_text(encoding="utf-8"), markup=False, highlight=False, soft_wrap=True)
+
+
+@policy_app.command("lint")
+def policy_lint(
+    path: Annotated[Path, Argument(help="Auto policy YAML to validate.")] = Path(
+        ".rvw/policies/auto.yaml"
+    ),
+    json_output: Annotated[bool, Option("--json")] = False,
+) -> None:
+    """Validate an auto policy and warn about empty automatic action selection."""
+
+    errors: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+    try:
+        policy = load_policy(path)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        reason = (
+            "policy_not_found"
+            if isinstance(exc, PolicyNotFound)
+            else "publish_policy_invalid"
+            if isinstance(exc, PublishPolicyInvalid)
+            else "invalid_policy"
+        )
+        errors.append(
+            {"reason": reason, "path": str(path), "severity": "error", "message": str(exc)}
+        )
+    else:
+        pull_request = policy.triggers.events.pull_request
+        if pull_request.enabled and not pull_request.actions:
+            warnings.append(
+                {
+                    "reason": "empty-pull-request-actions",
+                    "path": str(path),
+                    "severity": "warning",
+                    "message": "pull_request.enabled is true but actions is empty; automatic "
+                    "reviews are disabled. Set enabled: false to make this explicit.",
+                }
+            )
+    if json_output:
+        _write_json({"ok": not errors, "errors": errors, "warnings": warnings})
+    else:
+        for diagnostic in [*errors, *warnings]:
+            _error_console.print(
+                f"{diagnostic['severity']}: {diagnostic['reason']}: "
+                f"{diagnostic['path']}: {diagnostic['message']}",
+                markup=False,
+            )
+        if not errors:
+            _console.print(f"validated policy {path}", markup=False)
+    if errors:
+        raise typer.Exit(EXIT_USER_ERROR)
 
 
 @lanes_app.command("lint")

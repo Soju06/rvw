@@ -24,6 +24,7 @@ EVENT_PERMISSION = {
     "check_suite": "checks",
     "pull_request_review": "pull_requests",
     "pull_request_review_comment": "pull_requests",
+    "issue_comment": "issues",
     "push": "contents",
 }
 
@@ -51,3 +52,10 @@ def test_manifest_keeps_the_a1_events_and_permissions() -> None:
     assert manifest["default_permissions"]["checks"] == "write"
     assert manifest["default_permissions"]["pull_requests"] == "write"
     assert manifest["public"] is False
+
+
+def test_manifest_enables_both_mention_surfaces_and_reaction_permissions() -> None:
+    manifest = _load()
+    assert {"issue_comment", "pull_request_review_comment"} <= set(manifest["default_events"])
+    assert manifest["default_permissions"]["issues"] == "write"
+    assert manifest["default_permissions"]["pull_requests"] == "write"

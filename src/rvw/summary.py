@@ -352,12 +352,20 @@ class PublishFacts(ContractModel):
 class TriggerFacts(ContractModel):
     """Repository trigger evaluation recorded in summary artifacts."""
 
-    skipped: bool = False
+    skipped: (
+        bool
+        | Literal[
+            "events_disabled", "action_not_selected", "same_head_reviewed", "in_flight_same_head"
+        ]
+    ) = False
     rule: str | None = None
     mode: Literal["denylist", "allowlist"] = "denylist"
     bypassed: Literal["rerequested", "force"] | None = None
     policy_error: str | None = None
     not_applicable: bool = False
+    source: Literal["pull_request", "mention"] = "pull_request"
+    actor: str | None = None
+    comment_id: int | None = Field(default=None, gt=0)
 
 
 class ExecutionSummary(ContractModel):

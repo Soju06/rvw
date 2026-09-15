@@ -1,10 +1,126 @@
-# Repository publication and synthesis controls
+# Repository review, publication and synthesis controls
 
 rvw reads `.rvw/policies/auto.yaml` and `.rvw/config.yaml` from the captured base
 revision. A pull request cannot change its own review settings through head edits.
 Missing keys use the defaults below. Malformed presentation settings fail with
 `presentation_config_invalid`; malformed publication settings fail with
 `publish_policy_invalid`.
+
+Review starts are controlled by `triggers` in the same base-ref `auto.yaml`.
+Keep the judgment and publication blocks when adding these snippets. The explicit
+defaults preserve all four existing automatic actions and enable human mentions:
+
+```yaml
+triggers:
+  events:
+    pull_request:
+      enabled: true
+      actions: [opened, synchronize, reopened, ready_for_review]
+    mention:
+      enabled: true
+      surfaces: [issue_comment, pull_request_review_comment]
+      allow: [OWNER, MEMBER, COLLABORATOR]
+  dedupe_same_head: true
+  mode: denylist
+  drafts: skip
+  rules: []
+```
+
+For mention-only review starts:
+
+```yaml
+triggers:
+  events:
+    pull_request:
+      enabled: false
+```
+
+For cheaper automatic reviews that omit pushes and reopening:
+
+```yaml
+triggers:
+  events:
+    pull_request:
+      actions: [opened, ready_for_review]
+```
+
+Mentions work in each configuration. An allowed human can comment `@<app-slug>`
+or `@<app-slug> review` on the PR or an inline review thread. Matching ignores
+case. Only code (inline, fenced, or indented), HTML, and blockquotes are excluded
+content; strikethrough `~~@slug~~` and curly-quoted `“@slug”` remain accepted.
+Blockquoting an earlier request therefore does not request another review; a
+fresh unquoted mention after the quote does. Whole-token boundaries survive
+Markdown formatting: `foo**@slug**` and `@slug**bot**` are rejected, while
+`**@slug**`, `(@slug)`, `@SLUG`, and `[@slug](url)` are accepted. Longer usernames,
+email-like tokens, and team mentions such as `@slug/review` are rejected.
+Sentence suffixes remain accepted: `@slug.`, `@slug,`, `@slug?`, `@slug!`,
+`@slug's`, and `@slug:`. The App derives its slug from authenticated GitHub
+metadata and caches that identity across requests for five minutes. Ordinary
+comments without `@` need no identity lookup or Markdown parse, regardless of
+cache state. With an unexpired identity, comments without a literal
+case-insensitive `@<app-slug>` also stop before API work or parsing. After expiry,
+a comment containing `@` can refresh the identity before the literal precheck,
+so a mention using a renamed App's new slug can be accepted. An identity lookup
+failure is logged and returns 204, so the request may be lost without failing
+ordinary webhook delivery.
+
+Mentions bypass draft and rule filters, including allowlist misses, and can rerun
+a completed head. A mention during an active run for **the same PR and head**
+joins it. Both accepted cases receive an 👀 reaction when the token has
+permission; no acknowledgment comment is posted. A replay of the same comment
+stays pinned to its original PR/head even after a push and cannot request a new
+run. A genuinely new comment after a push can request the new head.
+
+Automatic starts skip an exact head that this App already reviewed for **the
+same installation, repository, and PR**. The App consults that PR/head executor,
+then its own completed check runs on the commit if local evidence is missing or
+inconclusive. Check ownership uses the numeric App ID. Job identity is
+authoritative: a parseable `external_id` (`installation:repo:pr:sha`) and any
+identity recovered from structured `job_id` or `artifact_key` facts must match
+the requested installation, repository, PR, and head. A contradictory identity
+rejects the check even if `pull_requests[]` lists this PR. At least one job
+identity must be recoverable; commit/branch association alone never suppresses
+review, so ambiguous history permits a review. A completed review on a different
+PR with the same SHA does not suppress this PR: its base and diff can differ.
+Separate PRs sharing a commit may run concurrently.
+
+This includes an unchanged-head Ready flip. A durable completed-review marker
+survives later reruns. New checks require structured `review_completed: true`;
+legacy records require completed state, a success/failure conclusion, and no
+trigger skip. Legacy checks additionally require job/artifact facts matching the
+requested job, valid lane evidence, and a known pass/block reason. Facts that
+only agree with the check's own external ID do not prove this PR was reviewed.
+Skipped checks and infrastructure failures do not prove completion. Setting
+`dedupe_same_head: false` permits distinct automatic events to rerun a terminal
+head; delivery replays and active runs remain idempotent. Missing evidence or a
+dedupe read failure cannot justify a skip. This setting does not change the diff
+base or test whether a PR is behind its base.
+
+Event skips create neutral checks with `trigger.skipped` set to
+`events_disabled`, `action_not_selected`, or `same_head_reviewed`. Existing rule
+skips retain boolean `true`, and draft skips retain the silent no-check behavior.
+Mention joins record `in_flight_same_head` in structured logs; rejected mentions
+are silent. Run summaries and checks record `trigger.source`, `trigger.actor`
+and `trigger.comment_id`. An invalid trigger policy retains the App's existing
+review fallback with `trigger.policy_error`. The CLI accepts the document and
+continues using its existing rule/draft and `--force-review` behavior.
+
+The event controls use closed enums. `actions` accepts only the four default
+actions; `surfaces` accepts only the two default surfaces; `allow` accepts GitHub
+associations `OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`,
+`FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`, and `MANNEQUIN`. Empty lists select
+nothing; `mode: allowlist` with empty `rules` remains invalid, while an empty
+`mention.allow` is valid. Bot and App-authored comments are always ignored. Unknown keys and
+quoted, numeric, or single-letter boolean values are rejected. Use literal
+`true`/`false`. See the [App operator checklist](../cloud/README.md) for the
+subscriptions and permission approval needed on existing installations.
+
+Run `uv run rvw policy lint` to validate `.rvw/policies/auto.yaml`, or pass another
+policy path; add `--json` for machine-readable diagnostics. When
+`pull_request.enabled: true` has `actions: []`, lint emits warning
+`empty-pull-request-actions` and exits zero: the valid configuration selects no
+automatic reviews. Prefer `enabled: false` when disabling automatic reviews
+intentionally. Missing or invalid policy exits 2.
 
 Keep the existing judgment rules in `auto.yaml` and add publication controls:
 

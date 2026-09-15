@@ -180,12 +180,61 @@ class TriggerRule(BaseModel):
         return self
 
 
+TriggerAction = Literal["opened", "synchronize", "reopened", "ready_for_review"]
+MentionSurface = Literal["issue_comment", "pull_request_review_comment"]
+AuthorAssociation = Literal[
+    "OWNER",
+    "MEMBER",
+    "COLLABORATOR",
+    "CONTRIBUTOR",
+    "FIRST_TIME_CONTRIBUTOR",
+    "FIRST_TIMER",
+    "NONE",
+    "MANNEQUIN",
+]
+DEFAULT_PULL_REQUEST_ACTIONS: tuple[TriggerAction, ...] = (
+    "opened",
+    "synchronize",
+    "reopened",
+    "ready_for_review",
+)
+DEFAULT_MENTION_SURFACES: tuple[MentionSurface, ...] = (
+    "issue_comment",
+    "pull_request_review_comment",
+)
+DEFAULT_MENTION_ALLOW: tuple[AuthorAssociation, ...] = ("OWNER", "MEMBER", "COLLABORATOR")
+
+
+class PullRequestTriggerPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool = True
+    actions: list[TriggerAction] = Field(default_factory=lambda: list(DEFAULT_PULL_REQUEST_ACTIONS))
+
+
+class MentionTriggerPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool = True
+    surfaces: list[MentionSurface] = Field(default_factory=lambda: list(DEFAULT_MENTION_SURFACES))
+    allow: list[AuthorAssociation] = Field(default_factory=lambda: list(DEFAULT_MENTION_ALLOW))
+
+
+class TriggerEventsPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    pull_request: PullRequestTriggerPolicy = Field(default_factory=PullRequestTriggerPolicy)
+    mention: MentionTriggerPolicy = Field(default_factory=MentionTriggerPolicy)
+
+
 class TriggerPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     mode: Literal["denylist", "allowlist"] = "denylist"
     drafts: Literal["skip", "review"] = "skip"
     rules: list[TriggerRule] = Field(default_factory=list)
+    events: TriggerEventsPolicy = Field(default_factory=TriggerEventsPolicy)
+    dedupe_same_head: bool = True
 
     @model_validator(mode="after")
     def _rules_are_usable(self) -> TriggerPolicy:
@@ -581,20 +630,29 @@ def evaluate(
 
 
 __all__ = [
+    "DEFAULT_MENTION_ALLOW",
+    "DEFAULT_MENTION_SURFACES",
+    "DEFAULT_PULL_REQUEST_ACTIONS",
+    "AuthorAssociation",
     "AutoDecision",
     "AutoPolicy",
     "BlockRule",
     "DropRule",
     "EffectivePolicy",
+    "MentionSurface",
+    "MentionTriggerPolicy",
     "PolicyNotFound",
     "PromoteRule",
     "PublishPolicy",
     "PublishPolicyInvalid",
     "PublishPolicySource",
+    "PullRequestTriggerPolicy",
     "ReviewEventOnBlock",
     "ReviewEventOnPass",
     "ThreadPolicy",
+    "TriggerAction",
     "TriggerDecision",
+    "TriggerEventsPolicy",
     "TriggerMetadata",
     "TriggerPolicy",
     "TriggerRule",

@@ -20,7 +20,6 @@ import {
   checkConclusionForResult,
   isDeadlineReached,
   isTerminalState,
-  shouldRestartForRerequest,
   parseArtifactSummary,
   type ArtifactSummary,
   type CheckConclusion,
@@ -70,6 +69,8 @@ interface JobRecord {
   publicationPolicy?: PublicationPolicy;
   publishPolicyFailure?: "publish_policy_invalid";
   artifacts: ArtifactMetadata[];
+  /** Completed review evidence survives later explicit reruns. */
+  reviewCompleted?: boolean;
 }
 
 export interface JobStatus {
@@ -88,6 +89,34 @@ export interface JobStatus {
   checkUpdatePending?: boolean;
   cleanupPending?: boolean;
   artifacts: ArtifactMetadata[];
+  reviewCompleted: boolean;
+}
+
+export interface JobStart {
+  started: boolean;
+  state: JobState;
+  skipped?: "in_flight_same_head";
+}
+
+function completedReview(record: JobRecord | undefined): boolean {
+  return record?.reviewCompleted ?? (record?.state === "completed" &&
+    (record.conclusion === "success" || record.conclusion === "failure") && !record.message?.trigger?.skipped);
+}
+
+function deliveryIdentity(message: ReviewJobMessage): string {
+  return message.trigger?.source === "mention" && message.trigger.comment_id !== null
+    ? `mention:${message.event}:${message.trigger.comment_id}` : `delivery:${message.deliveryId}`;
+}
+
+function canRestart(message: ReviewJobMessage): boolean {
+  return message.event === "check_run.rerequested" || message.trigger?.source === "mention" ||
+    (message.event.startsWith("pull_request.") && message.dedupeSameHead === false);
+}
+
+function queuedRecord(message: ReviewJobMessage, previous?: JobRecord): JobRecord {
+  const now = new Date().toISOString();
+  return {schemaVersion: 1, jobId: message.jobId, state: "queued", message,
+    createdAt: now, updatedAt: now, artifacts: [], reviewCompleted: completedReview(previous)};
 }
 
 function errorMessage(error: unknown): string {
@@ -144,6 +173,7 @@ function statusView(record: JobRecord): JobStatus {
       : {checkUpdatePending: record.checkUpdatePending}),
     ...(record.cleanupPending === undefined ? {} : {cleanupPending: record.cleanupPending}),
     artifacts: record.artifacts,
+    reviewCompleted: completedReview(record),
   };
 }
 
@@ -169,6 +199,8 @@ function humanReason(code: string | undefined, presentation: PresentationConfig)
 function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSummary | null,
   presentation: PresentationConfig, mapping?: ReviewResultMapping): string {
   return checkDetails({job_id: record.jobId, reason,
+    review_completed: mapping?.terminalState === "completed" && mapping.outcome !== undefined &&
+      summary !== null && summary.lanes.valid > 0 && !summary.trigger?.skipped,
     trigger: record.message?.trigger ?? summary?.trigger ?? null,
     presentation_config_failure: record.presentationConfigFailure ?? null,
     publish_policy_failure: record.publishPolicyFailure ?? null,
@@ -192,6 +224,30 @@ function diagnosticText(record: JobRecord, reason: string, summary: ArtifactSumm
 }
 
 export class RvwReviewJob extends DurableObject<Env> {
+  // Serialize mutating lifecycle work without blocking DO RPC/input processing during
+  // external I/O. Durable state and the persisted SDK process id cover eviction.
+  private lifecycle: Promise<void> = Promise.resolve();
+
+  private serial<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.lifecycle.then(operation);
+    this.lifecycle = result.then(() => {}, () => {});
+    return result;
+  }
+
+  /** One comment remains bound to its first accepted anchors, including redelivery after a push. */
+  async pinMention(value: ReviewJobMessage): Promise<ReviewJobMessage> {
+    const message = validateReviewJobMessage(value);
+    if (message.trigger?.source !== "mention" || message.trigger.comment_id == null) {
+      throw new Error("mention identity is required");
+    }
+    return this.ctx.storage.transaction(async txn => {
+      const previous = await txn.get<ReviewJobMessage>("mention");
+      if (previous !== undefined) return previous;
+      await txn.put("mention", message);
+      return message;
+    });
+  }
+
   private async load(): Promise<JobRecord | undefined> {
     return await this.ctx.storage.get<JobRecord>(JOB_STORAGE_KEY);
   }
@@ -254,74 +310,68 @@ export class RvwReviewJob extends DurableObject<Env> {
     return record === undefined ? null : statusView(record);
   }
 
-  async start(value: ReviewJobMessage): Promise<{started: boolean; state: JobState}> {
+  async start(value: ReviewJobMessage): Promise<JobStart> {
+    return this.serial(() => this.startExecution(value));
+  }
+
+  private async startExecution(value: ReviewJobMessage): Promise<JobStart> {
     const config = requiredConfig(this.env);
     const message = validateReviewJobMessage(value);
-    let record = await this.load();
-    if (record === undefined) {
-      const now = new Date().toISOString();
-      record = {
-        schemaVersion: 1,
-        jobId: message.jobId,
-        state: "queued",
-        message,
-        createdAt: now,
-        updatedAt: now,
-        artifacts: [],
-      };
-      await this.save(record);
-      console.log(
-        JSON.stringify({
-          event: "review_job_state_transition",
-          jobId: record.jobId,
-          from: null,
-          to: "queued",
-          at: now,
-        }),
-      );
-    } else if (record.jobId !== message.jobId) {
+    let previous = await this.load();
+    if (previous !== undefined && previous.jobId !== message.jobId) {
       throw new Error("Durable Object job identity does not match its message");
     }
-
-    if (
-      shouldRestartForRerequest(
-        record.state,
-        record.message?.deliveryId,
-        message.event,
-        message.deliveryId,
-      )
-    ) {
-      const previous = record.state;
-      const now = new Date().toISOString();
-      record = {
-        schemaVersion: 1,
-        jobId: message.jobId,
-        state: "queued",
-        message,
-        createdAt: now,
-        updatedAt: now,
-        artifacts: [],
-      };
-      await this.save(record);
-      console.log(
-        JSON.stringify({
-          event: "review_job_state_transition",
-          jobId: record.jobId,
-          from: previous,
-          to: "queued",
-          reason: "check_run.rerequested",
-          at: now,
-        }),
-      );
-    } else if (
-      isTerminalState(record.state) ||
-      record.state === "running" ||
-      record.state === "publishing"
-    ) {
-      return {started: false, state: record.state};
+    // Terminal state can precede durable cleanup/check settlement. Retry the existing
+    // lifecycle work before replacing its IDs, including after eviction or deployment.
+    if (previous !== undefined && isTerminalState(previous.state)) {
+      if (previous.cleanupPending === true) previous = await this.settleCleanup(previous);
+      if (previous.checkUpdatePending === true) {
+        previous = await this.settleNeutralCheck(previous,
+          previous.reason ?? t("ended", "en", {display_name: "rvw"}), config.githubAppId);
+      }
+      if (previous.cleanupPending || previous.checkUpdatePending) {
+        throw new Error("prior execution cleanup or check update is pending");
+      }
     }
-    if (record.message === undefined) record = {...record, message};
-    if (record.state === "queued") record = await this.transition(record, "provisioning");
+    const claimed = await this.ctx.storage.transaction(async txn => {
+      let record = await txn.get<JobRecord>(JOB_STORAGE_KEY);
+      const identity = deliveryIdentity(message);
+      const key = `handled:${identity}`;
+      const seen = await txn.get(key) !== undefined;
+      const ownDelivery = record?.message !== undefined && deliveryIdentity(record.message) === identity;
+      if (record?.message !== undefined) await txn.put(`handled:${deliveryIdentity(record.message)}`, true);
+      // A webhook-observed join remains consumed if delivery races with completion.
+      if (message.trigger?.skipped === "in_flight_same_head") {
+        await txn.put(key, true);
+        return {record: record ?? queuedRecord(message), claimed: false, skipped: "in_flight_same_head" as const};
+      }
+      if (record !== undefined && (isTerminalState(record.state) || !ownDelivery)) {
+        await txn.put(key, true);
+        if (!isTerminalState(record.state)) {
+          return {record, claimed: false, skipped: "in_flight_same_head" as const};
+        }
+        if (ownDelivery || seen || !canRestart(message)) return {record, claimed: false};
+        record = queuedRecord(message, record);
+      } else if (record === undefined) {
+        // Old delayed queue messages cannot recreate a previously handled execution.
+        if (seen) return {record: queuedRecord(message), claimed: false};
+        record = queuedRecord(message);
+      }
+      if (record.state === "running" || record.state === "publishing") return {record, claimed: false};
+      await txn.put(key, true);
+      record = {...record, message, state: "provisioning", updatedAt: new Date().toISOString()};
+      await txn.put(JOB_STORAGE_KEY, record);
+      return {record, claimed: true};
+    });
+    let record = claimed.record;
+    if (!claimed.claimed) {
+      if (claimed.skipped !== undefined) {
+        console.log(JSON.stringify({event: "review_trigger_joined", jobId: record.jobId,
+          trigger: {...message.trigger, skipped: claimed.skipped}}));
+      }
+      return {started: false, state: record.state,
+        ...(claimed.skipped === undefined ? {} : {skipped: claimed.skipped})};
+    }
 
     const token = await this.token(record, config.githubAppId);
     if (record.publicationPolicy === undefined) {
@@ -384,19 +434,29 @@ export class RvwReviewJob extends DurableObject<Env> {
       record = {...record, sandboxId, updatedAt: new Date().toISOString()};
       await this.save(record);
     }
-    await sandbox.exec(initializeInvocation(message));
-    await configureOutbound(sandbox, config.codexProxyHost, token);
-    await sandbox.writeFile("/workspace/run-review.sh", reviewScript(message, config.reviewDeadlineSeconds,
-      {model: config.codexModel, reasoningEffort: config.codexReasoningEffort,
-        publication: record.publicationPolicy}));
-    await sandbox.exec("chmod 0755 /workspace/run-review.sh");
-    const process = await sandbox.startProcess("/workspace/run-review.sh", {
-      autoCleanup: false,
-      env: buildReviewProcessEnv(
-        config.codexProxyHost,
-        record.appSlug === undefined ? undefined : botLoginForAppSlug(record.appSlug),
-      ),
-    });
+    // The SDK accepts a caller-supplied process id. Persist it before dispatch and
+    // recover it on retry instead of allocating another process after eviction.
+    let process = record.processId === undefined ? null : await sandbox.getProcess(record.processId);
+    if (process === null) {
+      if (record.processId === undefined) {
+        record = {...record, processId: `rvw-${crypto.randomUUID()}`};
+        await this.save(record);
+      }
+      await sandbox.exec(initializeInvocation(message));
+      await configureOutbound(sandbox, config.codexProxyHost, token);
+      await sandbox.writeFile("/workspace/run-review.sh", reviewScript(message, config.reviewDeadlineSeconds,
+        {model: config.codexModel, reasoningEffort: config.codexReasoningEffort,
+          publication: record.publicationPolicy}));
+      await sandbox.exec("chmod 0755 /workspace/run-review.sh");
+      process = await sandbox.startProcess("/workspace/run-review.sh", {
+        processId: record.processId,
+        autoCleanup: false,
+        env: buildReviewProcessEnv(
+          config.codexProxyHost,
+          record.appSlug === undefined ? undefined : botLoginForAppSlug(record.appSlug),
+        ),
+      });
+    }
     const deadlineAtMs = Date.now() + config.jobDeadlineMinutes * 60 * 1_000;
     record = {
       ...record,
@@ -414,6 +474,10 @@ export class RvwReviewJob extends DurableObject<Env> {
   }
 
   async failStart(value: ReviewJobMessage, reason: string): Promise<void> {
+    return this.serial(() => this.failStartExecution(value, reason));
+  }
+
+  private async failStartExecution(value: ReviewJobMessage, reason: string): Promise<void> {
     const config = requiredConfig(this.env);
     const message = validateReviewJobMessage(value);
     let record = await this.load();
@@ -440,6 +504,7 @@ export class RvwReviewJob extends DurableObject<Env> {
       );
       record = await this.transition(record, "provisioning");
     }
+    if (record.message !== undefined && deliveryIdentity(record.message) !== deliveryIdentity(message)) return;
     if (record.state !== "queued" && record.state !== "provisioning") return;
     if (record.state === "queued") record = await this.transition(record, "provisioning");
     record = {
@@ -456,6 +521,10 @@ export class RvwReviewJob extends DurableObject<Env> {
   }
 
   async supersede(jobId: string, reason: string): Promise<void> {
+    return this.serial(() => this.supersedeExecution(jobId, reason));
+  }
+
+  private async supersedeExecution(jobId: string, reason: string): Promise<void> {
     const config = requiredConfig(this.env);
     let record = await this.load();
     if (record === undefined) {
@@ -831,7 +900,9 @@ export class RvwReviewJob extends DurableObject<Env> {
       mapping = {...mapping, conclusion: "neutral", outcome: undefined, reasonCode: "trigger_skipped",
         reason: summary.markdown};
     }
-    record = {...record, presentation};
+    const reviewCompleted = mapping.terminalState === "completed" && mapping.outcome !== undefined &&
+      summary !== null && summary.lanes.valid > 0 && !summary.trigger?.skipped;
+    record = {...record, presentation, reviewCompleted: completedReview(record) || reviewCompleted};
     const token = await this.token(record, config.githubAppId);
     await updateCheckRun(token, {
       owner: message.owner,
@@ -846,7 +917,8 @@ export class RvwReviewJob extends DurableObject<Env> {
             : `\n\n${humanReason(record.presentationConfigFailure, presentation)}`)
           : humanReason(record.presentationConfigFailure ?? mapping.reasonCode, presentation))
         : t("review_without_check_details", presentation.locale),
-      ...(checksEnabled ? {text: diagnosticText(record, mapping.reason, summary, presentation, mapping)} : {}),
+      text: checksEnabled ? diagnosticText(record, mapping.reason, summary, presentation, mapping)
+        : checkDetails({review_completed: reviewCompleted}, presentation),
     });
     record = {
       ...record,
@@ -876,6 +948,10 @@ export class RvwReviewJob extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
+    return this.serial(() => this.alarmExecution());
+  }
+
+  private async alarmExecution(): Promise<void> {
     const config = requiredConfig(this.env);
     let record = await this.load();
     if (record === undefined) return;

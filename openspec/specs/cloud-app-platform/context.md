@@ -194,3 +194,51 @@ reruns honor the human request. Trigger facts cross the App/CLI boundary so cont
 metadata changes cannot undo the pre-enqueue decision or erase its diagnostics.
 
 The publication-controls rebase retains both anchored policy reads. Webhook trigger evaluation precedes queue insertion and falls back with `policy_invalid` or `policy_read_failed`; the Durable Object publication read fails closed before sandbox dispatch with its publication policy failure contract. Their raw-text caps are 65,536 and 32,768 characters respectively, so the reads are not semantically interchangeable. Trigger whole-policy validation includes channels, check conclusions and inline placement, allowing both repository policies to coexist.
+
+## Selectable review starts and completed-head evidence (2026-09-15)
+
+Consumer PR 2026-09-11 motivated skipping repeated automatic work on an unchanged
+head. Offline baseline tests distinguish admission from execution: Ready queued
+under both drafts skip/review, while an existing terminal PR/head record prevented
+another ordinary sandbox start. Completion lookup now uses that same PR/head
+record and then own-App commit checks when local evidence is inconclusive. Numeric
+App ownership and authoritative job identity restrict checks to the requested
+installation, repository, PR, and head. A parseable external_id and any job_id or
+artifact_key identity recovered from structured facts must all match that requested
+job; internally consistent facts for another PR do not qualify. Contradictory
+identity rejects a check even if pull_requests lists this PR. Commit/branch
+association alone cannot establish review ownership, so no recoverable job identity
+means review proceeds. Another PR sharing a SHA can have a different base and diff,
+so its completion does not suppress this PR.
+
+Actual completed reviews carry explicit review_completed facts, including
+checks-disabled outcomes; older checks require known terminal pass/block reasons
+and valid lane evidence. Neutral skips and infrastructure failures are excluded.
+Skip checks have a separate stable external identity so they cannot overwrite
+active/completed review evidence. GitHub's commit-check API considers at most its
+latest 1,000 check suites; unavailable older evidence cannot justify a skip.
+
+Serialized executor starts and handled delivery/comment identities make reruns
+and joins idempotent for one PR/head. Terminal cleanup and check-update obligations
+retain their identifiers until settled. The small comment-scoped pin keeps first
+accepted anchors across pushes and has no alarm. Explicit mentions restart
+completed work or join this PR's in-flight work, with no cross-PR execution claim.
+Review execution retains its artifact/status identity and publication duplicate
+guard.
+
+Mention admission resolves the slug through authenticated App metadata cached
+across requests for five minutes. No-at-sign comments skip identity and Markdown
+work regardless of cache state, and an unexpired cached slug permits a literal
+substring precheck before further API work or parsing. Expired metadata cannot
+reject a new-slug mention before authenticated refresh. One Markdown parser per
+isolate preserves visible token adjacency across formatting while excluding code,
+HTML, and blockquotes. A blockquoted request alone cannot trigger another review.
+Slash suffixes are team mentions and do not trigger; ordinary punctuation,
+strikethrough, and curly quotation marks retain visible whole mentions.
+
+The manifest adds issue_comment and pull_request_review_comment and Issues write;
+existing Pull requests write covers PR metadata reads and review-comment reactions.
+The base review token is acquired before optional Issues write; permission fallback
+and reaction failure cannot cancel an accepted review. Existing App changes are
+manual in App settings; Terraform manages Cloudflare resources only. See the
+[operator checklist](../../../cloud/README.md#publication-identity-and-permissions).
