@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.1](https://github.com/Soju06/rvw/compare/v0.23.0...v0.23.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* **deploy:** make deploy job runner selectable via runs_on input ([#106](https://github.com/Soju06/rvw/issues/106)) ([a3205c9](https://github.com/Soju06/rvw/commit/a3205c93028e8fceac74bb46af2b4af02ae212fd))
+
 ## [0.23.0](https://github.com/Soju06/rvw/compare/v0.22.0...v0.23.0) (2026-09-15)
 
 
