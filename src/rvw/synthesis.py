@@ -116,7 +116,10 @@ def synthesis_schema() -> dict[str, Any]:
 
 def _included_groups(merged: MergeResult, outcome: AdjudicationOutcome) -> list[CollapseGroup]:
     return [
-        group for group in merged.groups if outcome.verdicts.get(group.key) is not Verdict.REJECTED
+        group
+        for group in merged.groups
+        if outcome.verdicts.get(group.key) is not Verdict.REJECTED
+        and group.effective_severity.value != "info"
     ]
 
 
@@ -452,6 +455,7 @@ def build_synthesis_prompt(
             "Set first_action to null when the supplied findings require no action. Otherwise set "
             "it to exactly one sentence naming the action to take first."
         ),
+        "The supplied findings are the actionable candidate set; write the overview and first_action over them only.",
         "# Pull request",
         f"title: {target.pr_title or '(not supplied)'}",
         f"body:\n{target.pr_body or '(not supplied)'}",
@@ -470,6 +474,9 @@ def build_synthesis_prompt(
                 f"key: {group.key}",
                 f"status: {outcome.verdicts.get(group.key, Verdict.UNCERTAIN).value}",
                 f"severity: {group.severity.value}",
+                f"effective_severity: {group.effective_severity.value}",
+                f"scope: {group.scope.value}",
+                f"demotion_reason: {group.demotion_reason or '(none)'}",
                 f"rule_id: {group.rule_id}",
                 f"location: {group.file}:{group.line if group.line is not None else 'unknown'}",
                 "original finding prose:",

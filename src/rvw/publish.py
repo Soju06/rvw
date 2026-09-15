@@ -46,7 +46,7 @@ from rvw.publication import (
     uncovered_regions,
 )
 from rvw.runtimes.codex import CodexRuntime, CodexRuntimeMode
-from rvw.schema import Severity, Verdict
+from rvw.schema import EffectiveSeverity, Verdict
 from rvw.store import RunHandle, StageMissing
 from rvw.summary import (
     EventClampReason,
@@ -410,17 +410,23 @@ def _confirmed_inline_groups(
 ) -> list[CollapseGroup]:
     if outcome is None or "review" not in policy.channels:
         return []
-    ranks = {Severity.SUGGESTION: 0, Severity.WARNING: 1, Severity.BLOCKER: 2}
+    ranks = {
+        EffectiveSeverity.SUGGESTION: 0,
+        EffectiveSeverity.WARNING: 1,
+        EffectiveSeverity.BLOCKER: 2,
+    }
     groups = [
         group
         for group in merged.groups
         if outcome.verdicts.get(group.key) is Verdict.CONFIRMED
+        and group.effective_severity is not EffectiveSeverity.INFO
         and group.anchorable
         and group.line is not None
-        and ranks[group.severity] >= ranks[Severity(policy.inline.severity_at_least)]
+        and ranks[group.effective_severity]
+        >= ranks[EffectiveSeverity(policy.inline.severity_at_least)]
     ]
     if policy.inline.max_comments is not None:
-        groups.sort(key=lambda group: (-ranks[group.severity], group.key))
+        groups.sort(key=lambda group: (-ranks[group.effective_severity], group.key))
         groups = groups[: policy.inline.max_comments]
     return groups
 

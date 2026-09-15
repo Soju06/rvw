@@ -12,7 +12,7 @@ from rvw.discover import LaneCoverage
 from rvw.i18n import t
 from rvw.merge import CollapseGroup, MergeResult
 from rvw.presentation import PresentationConfig
-from rvw.schema import Severity, Verdict
+from rvw.schema import EffectiveSeverity, Verdict
 
 if TYPE_CHECKING:
     from rvw.summary import RunSummary
@@ -52,8 +52,11 @@ def publication_counts(merged: MergeResult, outcome: AdjudicationOutcome | None)
         if outcome is not None and outcome.verdicts.get(group.key) is Verdict.CONFIRMED
     ]
     return (
-        sum(group.severity is Severity.BLOCKER for group in confirmed),
-        sum(group.severity is not Severity.BLOCKER for group in confirmed),
+        sum(group.effective_severity is EffectiveSeverity.BLOCKER for group in confirmed),
+        sum(
+            group.effective_severity in {EffectiveSeverity.WARNING, EffectiveSeverity.SUGGESTION}
+            for group in confirmed
+        ),
     )
 
 
@@ -75,6 +78,13 @@ def publication_summary(
 ) -> str:
     blockers, warnings = publication_counts(merged, outcome)
     result = t("pub.completed", presentation.locale, b=blockers, w=warnings)
+    references = sum(
+        group.effective_severity is EffectiveSeverity.INFO
+        and (outcome is None or outcome.verdicts.get(group.key) is not Verdict.REJECTED)
+        for group in merged.groups
+    )
+    if references:
+        result += " " + t("pub.reference_count", presentation.locale, n=references)
     if uncovered := uncovered_regions(coverage):
         result += " " + t("pub.partial", presentation.locale, n=uncovered)
     if failed := failed_lane_ids(coverage):
@@ -96,27 +106,39 @@ def render_publication_item(
 ) -> str:
     locale = presentation.locale
     tag = f"`{group.rule_id}`"
-    severity = t("severity." + group.severity.value, locale)
+    severity = t("severity." + group.effective_severity.value, locale)
     label = f"**{severity} · {tag}**"
     location = (
         f"{group.file}:{group.line if group.line is not None else t('common.unknown', locale)}"
     )
     synthesized = _synthesis_by_key(synthesis).get(group.key)
+    scope_disclosure: list[str] = []
+    if group.effective_severity is EffectiveSeverity.INFO:
+        scope_disclosure = [
+            t("pub.scope_disclosure", locale),
+            t(
+                "pub.reported_severity",
+                locale,
+                severity=t("severity." + group.severity.value, locale),
+            ),
+        ]
     if synthesized is not None:
         parts = [
             f"### {synthesized.title}",
             f"`{location}` · **{severity}** · {tag}",
+            *scope_disclosure,
             synthesized.consequence,
         ]
         if synopsis:
             return "\n\n".join(parts)
         parts[2:2] = [synthesized.what]
-        parts.append(synthesized.fix)
+        if group.effective_severity is not EffectiveSeverity.INFO:
+            parts.append(synthesized.fix)
         if outcome is not None and (evidence := outcome.evidence.get(group.key, "")):
             parts.append(_evidence_details(evidence, locale))
         return "\n\n".join(parts)
 
-    parts = [label] if inline else [f"### `{location}`", label]
+    parts = ([label] if inline else [f"### `{location}`", label]) + scope_disclosure
     # Runtime findings have one body field. Its first paragraph is the human title;
     # subsequent paragraphs and the adjudication reason retain impact/correction.
     body = group.bodies[0].strip() if group.bodies else ""
@@ -146,16 +168,23 @@ def render_publication(
 ) -> str:
     presentation = presentation or PresentationConfig()
     locale = presentation.locale
-    groups: dict[str, list[CollapseGroup]] = {"blockers": [], "warnings": [], "uncertain": []}
+    groups: dict[str, list[CollapseGroup]] = {
+        "blockers": [],
+        "warnings": [],
+        "uncertain": [],
+        "reference": [],
+    }
     for group in merged.groups:
         verdict = outcome.verdicts.get(group.key) if outcome is not None else None
         if verdict is Verdict.REJECTED:
             continue
         section = (
-            "uncertain"
+            "reference"
+            if group.effective_severity is EffectiveSeverity.INFO
+            else "uncertain"
             if verdict is not Verdict.CONFIRMED
             else "blockers"
-            if group.severity is Severity.BLOCKER
+            if group.effective_severity is EffectiveSeverity.BLOCKER
             else "warnings"
         )
         groups[section].append(group)
@@ -168,15 +197,20 @@ def render_publication(
             t("pub.overall", locale),
             publication_summary(merged, outcome, coverage, presentation),
         ]
-    else:
+    elif any(group.effective_severity is not EffectiveSeverity.INFO for group in merged.groups):
         opening = synthesis.overview
         if synthesis.first_action is not None:
             opening = f"{opening} {synthesis.first_action}"
         parts = [opening, publication_summary(merged, outcome, coverage, presentation)]
+    else:
+        parts = [
+            t("pub.overall", locale),
+            publication_summary(merged, outcome, coverage, presentation),
+        ]
     if summary is not None and summary.status.value in {"failed", "degraded"}:
         parts.append(t("pub.incomplete", locale))
     for section, selected in groups.items():
-        if section == "uncertain" and not selected:
+        if section in {"uncertain", "reference"} and not selected:
             continue
         parts.append(t("pub." + section, locale))
         parts.append(

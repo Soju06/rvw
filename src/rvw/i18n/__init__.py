@@ -10,6 +10,8 @@ from rvw.i18n.catalog_ko import CATALOG as KO
 
 Locale = Literal["ko", "en"]
 CATALOGS = {"en": EN, "ko": KO}
+
+
 FORMAT_ARGUMENTS = {
     key: tuple(name for _, name, _, _ in Formatter().parse(template) if name)
     for key, template in EN.items()

@@ -442,7 +442,11 @@ def execution_summary(
         uncovered=sum(len(lane.uncovered) for lane in discovered.coverage),
         uncovered_regions=uncovered_regions(discovered.coverage),
     )
-    counts = Counter(group.severity.value for group in merged.groups)
+    counts = Counter(
+        group.effective_severity.value
+        for group in merged.groups
+        if group.effective_severity.value in {"blocker", "warning", "suggestion"}
+    )
     findings = FindingCounts(**{key: counts[key] for key in ("blocker", "warning", "suggestion")})
     votes = Counter(v.value for v in outcome.verdicts.values()) if outcome else Counter()
     verdicts = VerdictCounts(**{key: votes[key] for key in ("CONFIRMED", "REJECTED", "UNCERTAIN")})

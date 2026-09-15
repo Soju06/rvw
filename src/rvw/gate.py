@@ -364,7 +364,10 @@ def _actionable(
             raise GateInvariantError(
                 t("gate.error.missing_adjudication_verdict_for_finding", locale, p0=group.key)
             )
-        if verdict in {Verdict.CONFIRMED, Verdict.UNCERTAIN}:
+        if (
+            verdict in {Verdict.CONFIRMED, Verdict.UNCERTAIN}
+            and group.effective_severity.value != "info"
+        ):
             actionable.append((group, verdict))
     return actionable
 

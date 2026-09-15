@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from rvw.schema import Severity, Verdict
 from rvw.stack import (
     StackInvariantError,
     StackManifest,
     StackMember,
+    make_origin_lineage,
     parse_pr_numbers,
     resolve_stack,
     resolved_target_for_member,
@@ -195,3 +197,24 @@ def test_resolved_target_for_member_uses_captured_merge_base_revision(
         ("git", "diff", "--binary", "--find-renames", revision),
         ("git", "diff", "--name-only", revision),
     ]
+
+
+def test_legacy_lineage_derives_effective_severity_from_raw_severity() -> None:
+    for severity in (Severity.BLOCKER, Severity.WARNING):
+        lineage = make_origin_lineage(
+            origin_pr=1,
+            origin_run_id="run",
+            origin_finding_id="finding",
+            rule_id="rule/test",
+            file="src/a.py",
+            line=1,
+            severity=severity,
+            bodies=["body"],
+            origin_verdict=Verdict.CONFIRMED,
+            origin_reason="reason",
+            origin_evidence="evidence",
+        )
+        legacy = lineage.model_dump(exclude={"scope", "effective_severity", "demotion_reason"})
+        loaded = type(lineage).model_validate(legacy)
+        assert loaded.scope.value == "changed"
+        assert loaded.effective_severity.value == severity.value

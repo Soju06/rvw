@@ -25,7 +25,7 @@ from rvw.lane import load_lane
 from rvw.prompts import build_agentic_lane_prompt, build_chunk_context, build_lane_prompt
 from rvw.registry import EffectiveRegistry, Registry
 from rvw.runtimes import RunDiagnostic, RunResult, RunStatus, Runtime
-from rvw.schema import Finding, Tier
+from rvw.schema import Finding, FindingScope, ScopedFinding, Tier
 from rvw.target import ResolvedTarget
 
 _COVERED_RANGE = re.compile(r"^(?P<file>.+):(?P<start>[1-9][0-9]*)(?:-(?P<end>[1-9][0-9]*))?$")
@@ -41,13 +41,27 @@ class DiscoveryMode(StrEnum):
     INLINE = "inline"
 
 
-class EnrichedFinding(Finding):
+class EnrichedFinding(Finding, ScopedFinding):
     """A runtime finding attributed to its lane and replica."""
 
     model_config = ConfigDict(extra="forbid")
 
     lane_id: str
     replica: int = Field(ge=1)
+
+
+def classify_finding_scope(
+    hunks: list[Hunk], diff_files: set[str], file: str, line: int
+) -> FindingScope:
+    """Classify a finding against the controller's parsed three-dot diff."""
+
+    if hunk_for_line(hunks, file, line) is not None:
+        return FindingScope.CHANGED
+    if line <= 0 and file in diff_files:
+        return FindingScope.CHANGED
+    if file in diff_files:
+        return FindingScope.UNCHANGED_IN_FILE
+    return FindingScope.OUTSIDE_DIFF
 
 
 class RunAttempt(BaseModel):
@@ -402,6 +416,7 @@ async def discover(
     raw_results = dispatched.results
 
     hunks = parse_hunks(target.diff)
+    diff_files = set(target.changed_paths) | {hunk.file for hunk in hunks}
     coverage_results: list[RunResult] = []
     redispatched_lanes: set[str] = set()
     redispatch_skipped: dict[str, RedispatchSkip] = {}
@@ -451,12 +466,14 @@ async def discover(
         for finding in result.output.findings:
             hunk = hunk_for_line(hunks, finding.file, finding.line)
             anchorable = is_anchorable(hunks, finding.file, finding.line)
+            scope = classify_finding_scope(hunks, diff_files, finding.file, finding.line)
             enriched.append(
                 EnrichedFinding.model_validate(
                     {
                         **finding.model_dump(),
                         "hunk_id": hunk.hunk_id if hunk is not None else f"{finding.file}:*",
                         "anchorable": anchorable,
+                        "scope": scope,
                         "lane_id": result.lane_id,
                         "replica": result.replica,
                     }

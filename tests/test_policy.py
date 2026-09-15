@@ -13,13 +13,15 @@ from rvw.adjudicate import AdjudicationOutcome
 from rvw.discover import EnrichedFinding
 from rvw.merge import CollapseGroup, MergeResult, merge
 from rvw.policy import AutoPolicy, PolicyNotFound, evaluate, load_policy
-from rvw.schema import Severity, Tier, Verdict
+from rvw.schema import FindingScope, Severity, Tier, Verdict
 from rvw.target import ResolvedTarget
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def group(key: str, severity: Severity, agreement: int) -> CollapseGroup:
+def group(
+    key: str, severity: Severity, agreement: int, scope: FindingScope = FindingScope.CHANGED
+) -> CollapseGroup:
     return CollapseGroup(
         key=key,
         rule_id=f"test/{key}",
@@ -27,6 +29,7 @@ def group(key: str, severity: Severity, agreement: int) -> CollapseGroup:
         hunk_id=f"{key}.py:1",
         line=1,
         severity=severity,
+        scope=scope,
         lane_ids=["test"],
         agreement=agreement,
         bodies=[key],
@@ -38,6 +41,16 @@ def group(key: str, severity: Severity, agreement: int) -> CollapseGroup:
 
 def merged(*groups: CollapseGroup) -> MergeResult:
     return MergeResult(groups=list(groups), sites=[], pattern_folds=[], region_folds=[])
+
+
+def test_out_of_scope_blocker_never_blocks_or_promotes() -> None:
+    decision = evaluate(
+        policy(),
+        merged(group("info", Severity.BLOCKER, 3, FindingScope.OUTSIDE_DIFF)),
+        outcome({"info": Verdict.CONFIRMED}),
+    )
+    assert decision.verdict == "PASS"
+    assert decision.blocking == []
 
 
 def outcome(

@@ -14,7 +14,7 @@ from rvw.i18n import Locale, t
 from rvw.merge import CollapseGroup, MergeResult, PatternFold, RegionFold
 from rvw.presentation import PresentationConfig
 from rvw.provenance import current_build_provenance
-from rvw.schema import Verdict
+from rvw.schema import EffectiveSeverity, Verdict
 from rvw.summary import ReviewStatus, RunSummary
 from rvw.target import ResolvedTarget
 
@@ -54,7 +54,7 @@ def render_group_item(
     line = group.line if group.line is not None else t("common.unknown", locale)
     suffix = "" if not region_labels else f" {' '.join(region_labels)}"
     parts = [
-        f"### [{group.severity.value}] {group.rule_id} — {group.file}:{line}{suffix}",
+        f"### [{group.effective_severity.value}] {group.rule_id} — {group.file}:{line}{suffix}",
         t("report.finding_id", locale, p0=group.key),
         t(
             "report.agreement",
@@ -63,6 +63,17 @@ def render_group_item(
             p1=_votes(outcome, group.key, locale=locale),
         ),
     ]
+    if group.effective_severity is EffectiveSeverity.INFO:
+        parts.extend(
+            [
+                t("pub.scope_disclosure", locale),
+                t(
+                    "pub.reported_severity",
+                    locale,
+                    severity=t("severity." + group.severity.value, locale),
+                ),
+            ]
+        )
     if outcome is not None:
         reason = outcome.reasons.get(group.key, "")
         evidence = outcome.evidence.get(group.key, "")
@@ -101,6 +112,17 @@ def _render_pattern_item(
 
     suffix = "" if not region_labels else f" {' '.join(region_labels)}"
     parts = [t("report.pattern", locale, p0=fold.rule_id, p1=fold.repetition, p2=suffix)]
+    if highest.effective_severity is EffectiveSeverity.INFO:
+        parts.extend(
+            [
+                t("pub.scope_disclosure", locale),
+                t(
+                    "pub.reported_severity",
+                    locale,
+                    severity=t("severity." + highest.severity.value, locale),
+                ),
+            ]
+        )
     parts.extend(
         (
             t(
@@ -242,13 +264,37 @@ def _confirmed_items(
     merged: MergeResult, outcome: AdjudicationOutcome, *, locale: Locale = "en"
 ) -> list[str]:
     confirmed = {
-        group.key for group in merged.groups if outcome.verdicts.get(group.key) is Verdict.CONFIRMED
+        group.key
+        for group in merged.groups
+        if outcome.verdicts.get(group.key) is Verdict.CONFIRMED
+        and group.effective_severity is not EffectiveSeverity.INFO
     }
     return _folded_items(merged, outcome, confirmed, locale=locale)
 
 
 def _unadjudicated_items(merged: MergeResult, *, locale: Locale = "en") -> list[str]:
-    return _folded_items(merged, None, {group.key for group in merged.groups}, locale=locale)
+    return _folded_items(
+        merged,
+        None,
+        {
+            group.key
+            for group in merged.groups
+            if group.effective_severity is not EffectiveSeverity.INFO
+        },
+        locale=locale,
+    )
+
+
+def _reference_items(
+    merged: MergeResult, outcome: AdjudicationOutcome | None, *, locale: Locale = "en"
+) -> list[str]:
+    included = {
+        group.key
+        for group in merged.groups
+        if group.effective_severity is EffectiveSeverity.INFO
+        and (outcome is None or outcome.verdicts.get(group.key) is not Verdict.REJECTED)
+    }
+    return _folded_items(merged, outcome, included, locale=locale)
 
 
 def _unresolved_items(
@@ -448,6 +494,10 @@ def render_report(
         rejected_items = _rejected_items(merged, outcome, locale=locale)
         if rejected_items:
             parts.extend([t("report.rejected_heading", locale), "\n\n".join(rejected_items)])
+
+    reference_items = _reference_items(merged, outcome, locale=locale)
+    if reference_items:
+        parts.extend([t("report.reference_heading", locale), "\n\n".join(reference_items)])
 
     build = summary.build if summary is not None else current_build_provenance()
     parts.extend(

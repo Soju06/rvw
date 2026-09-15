@@ -7,6 +7,7 @@ import pytest
 from test_synthesis import FakeRuntime, document, group, merged, outcome_for, target
 
 from rvw.presentation import PresentationConfig
+from rvw.schema import FindingScope
 from rvw.store import RunStore
 from rvw.synthesis import (
     SynthesisDocument,
@@ -238,3 +239,70 @@ def test_retained_synthesis_checks_the_saved_locale(tmp_path: Path) -> None:
     assert run.load_synthesis() is None
     run.save_synthesis(document(candidate))
     assert run.load_synthesis() == document(candidate)
+
+
+def test_info_groups_are_excluded_from_synthesis_prompt_and_candidates() -> None:
+    actionable = group("changed")
+    info = group("info", body="Existing code observation.").model_copy(
+        update={"scope": FindingScope.OUTSIDE_DIFF}
+    )
+    combined = merged(actionable, info)
+    outcome = outcome_for([actionable, info])
+    prompt = build_synthesis_prompt(
+        target=target(),
+        merged=combined,
+        outcome=outcome,
+        coverage=[],
+        status="complete",
+        presentation=PresentationConfig(locale="en"),
+        budget_seconds=60,
+    )
+    assert "key: changed" in prompt
+    assert "key: info" not in prompt
+    candidate = english_document().model_copy(
+        update={
+            "findings": [english_document().findings[0].model_copy(update={"key": actionable.key})]
+        }
+    )
+    assert validate_synthesis(candidate, combined, outcome, locale="en") == candidate
+    with pytest.raises(ValueError, match=r"synthesis finding identity mismatch.*unexpected"):
+        validate_synthesis(
+            candidate.model_copy(
+                update={"findings": [*candidate.findings, document(info).findings[0]]}
+            ),
+            combined,
+            outcome,
+            locale="en",
+        )
+
+
+def test_changed_finding_with_blocking_prose_is_accepted_when_info_is_mixed() -> None:
+    actionable = group("changed")
+    info = group("info", body="Existing code observation.").model_copy(
+        update={"scope": FindingScope.OUTSIDE_DIFF}
+    )
+    value = english_document().model_copy(
+        update={
+            "findings": [english_document().findings[0].model_copy(update={"key": actionable.key})]
+        }
+    )
+    value.overview = "This blocker must be fixed before merge."
+    value.first_action = "Fix this blocker before merge."
+    value.findings[0].title = "Blocker must be fixed before merge"
+    value.findings[0].what = "This blocker must be fixed before merge."
+    value.findings[0].consequence = "The blocker can break the request."
+    value.findings[0].fix = "Fix the changed code before merging."
+    assert (
+        validate_synthesis(
+            value, merged(actionable, info), outcome_for([actionable, info]), locale="en"
+        )
+        == value
+    )
+
+
+def test_synthesized_info_finding_id_is_rejected() -> None:
+    candidate = group(body="Existing code observation.")
+    candidate = candidate.model_copy(update={"scope": FindingScope.OUTSIDE_DIFF})
+    value = document(candidate)
+    with pytest.raises(ValueError, match=r"synthesis finding identity mismatch.*unexpected"):
+        validate_synthesis(value, merged(candidate), outcome_for([candidate]), locale="en")

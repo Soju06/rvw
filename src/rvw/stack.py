@@ -15,7 +15,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from rvw.adjudicate import AdjudicationOutcome
 from rvw.merge import MergeResult
-from rvw.schema import Severity, Verdict
+from rvw.schema import (
+    EffectiveSeverity,
+    FindingScope,
+    Severity,
+    Verdict,
+    derive_scope_severity,
+)
 from rvw.target import ResolvedTarget
 
 CommandRunner = Callable[[list[str], Path], str]
@@ -132,6 +138,9 @@ class FindingLineage(BaseModel):
     file: str = Field(min_length=1)
     line: int | None
     severity: Severity
+    scope: FindingScope = FindingScope.CHANGED
+    effective_severity: EffectiveSeverity = EffectiveSeverity.SUGGESTION
+    demotion_reason: str | None = None
     bodies: list[str] = Field(min_length=1)
     origin_verdict: Verdict
     observations: list[PresenceObservation] = Field(min_length=1)
@@ -140,6 +149,9 @@ class FindingLineage(BaseModel):
 
     @model_validator(mode="after")
     def _history_is_ordered(self) -> FindingLineage:
+        effective, reason = derive_scope_severity(self.severity, self.scope)
+        object.__setattr__(self, "effective_severity", effective)
+        object.__setattr__(self, "demotion_reason", reason)
         if self.origin_verdict is Verdict.REJECTED:
             raise ValueError("rejected findings cannot originate stack lineages")
         numbers = [item.pr_number for item in self.observations]
@@ -416,6 +428,7 @@ def make_origin_lineage(
     origin_verdict: Verdict,
     origin_reason: str,
     origin_evidence: str,
+    scope: FindingScope = FindingScope.CHANGED,
 ) -> FindingLineage:
     """Create a lineage without manufacturing cross-PR finding identity."""
 
@@ -439,6 +452,7 @@ def make_origin_lineage(
         file=file,
         line=line,
         severity=severity,
+        scope=scope,
         bodies=list(bodies),
         origin_verdict=origin_verdict,
         observations=[first],
@@ -514,6 +528,7 @@ def origin_lineages(
                 file=group.file,
                 line=group.line,
                 severity=group.severity,
+                scope=group.scope,
                 bodies=group.bodies,
                 origin_verdict=verdict,
                 origin_reason=outcome.reasons.get(group.key, ""),
