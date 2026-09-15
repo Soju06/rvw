@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.23.0](https://github.com/Soju06/rvw/compare/v0.22.0...v0.23.0) (2026-09-15)
+
+
+### Features
+
+* **finding-model:** demote out-of-diff findings to informational tier ([#103](https://github.com/Soju06/rvw/issues/103)) ([141a3d3](https://github.com/Soju06/rvw/commit/141a3d36c30e558c7915568e61feae02bd292123))
+* **finding-model:** demote out-of-diff findings to informational tier ([#103](https://github.com/Soju06/rvw/issues/103)) ([141a3d3](https://github.com/Soju06/rvw/commit/141a3d36c30e558c7915568e61feae02bd292123))
+* **triggers:** selectable review events, mention trigger, same-head dedupe ([#105](https://github.com/Soju06/rvw/issues/105)) ([c42ef76](https://github.com/Soju06/rvw/commit/c42ef76bc21030631e4c1160a7a9b01e52439952))
+* **triggers:** selectable review events, mention trigger, same-head dedupe ([#105](https://github.com/Soju06/rvw/issues/105)) ([c42ef76](https://github.com/Soju06/rvw/commit/c42ef76bc21030631e4c1160a7a9b01e52439952))
+
 ## [0.22.0](https://github.com/Soju06/rvw/compare/v0.21.0...v0.22.0) (2026-09-10)
 
 
