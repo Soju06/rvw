@@ -45,6 +45,33 @@ For deployment, pass the required non-secret values from private CI variables
 with Wrangler `--var CODEX_PROXY_HOST:<host> --var GITHUB_APP_ID:<id>` overrides.
 The reusable workflow maps caller inputs to those Worker binding names.
 
+### Deployment runner
+
+| Workflow input | Type | Required | Default | Purpose |
+| --- | --- | --- | --- | --- |
+| `runs_on` | string | No | `ubuntu-latest` | Runner label for the deploy job. Accepts a single label string; label arrays and runner groups are not supported. |
+
+To use Blacksmith, add `runs_on` alongside the required inputs in the consumer
+deployer's existing workflow call. Pin a release containing this input:
+
+```yaml
+jobs:
+  deploy:
+    uses: <owner>/rvw/.github/workflows/rvw-deploy.yml@vX.Y.Z
+    with:
+      environment: prod
+      rvw_ref: vX.Y.Z
+      account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      codex_proxy_host: ${{ vars.CODEX_PROXY_HOST }}
+      github_app_id: ${{ vars.GITHUB_APP_ID }}
+      manage_terraform: false # Infrastructure is managed separately in this example.
+      runs_on: blacksmith-2vcpu-ubuntu-2404
+    secrets: inherit
+```
+
+The label is passed directly to `runs-on` without JSON decoding. Omit `runs_on`
+to keep the existing `ubuntu-latest` default.
+
 ### Codex model and reasoning effort overrides
 
 Every review runtime runs the packaged default `gpt-6-astra` at reasoning effort `max`

@@ -123,6 +123,21 @@ running until the deployer deletes them with the documented
 uses the shared name only works while no other environment holds it. The
 requirement is normative in `spec.md`; this section records the measured basis.
 
+## Deployment runner selection (2026-09-15)
+
+The consumer deployer reported a production dispatch blocked before job startup
+by GitHub-hosted runner billing, although its other jobs use Blacksmith. The
+reusable workflow's hardcoded `ubuntu-latest` prevented that caller from selecting
+its available runners. The [runner contract](spec.md#requirement-reusable-deployment-runner-is-caller-selectable)
+keeps that default and lets the caller pass, for example,
+`runs_on: blacksmith-2vcpu-ubuntu-2404` under the reusable job's `with` mapping.
+The caller must pin a workflow revision containing the input and select an
+available runner capable of executing the deployment steps.
+
+A single label string is passed directly to `runs-on`: applying `fromJSON` to a
+bare label would fail. Arrays and runner groups are outside this contract. This
+changes scheduling only; deployment steps and cloud configuration stay the same.
+
 ## Base-ref check presentation (2026-09-07)
 
 The publication audit showed that check creation precedes sandbox provisioning, so Python-only configuration could not brand the first check. The Worker reads the four scalar `.rvw/config.yaml` fields from the captured base SHA using the installation token before creating the check. No YAML dependency exists in `cloud/package.json`; a minimal parser handles the supported scalar subset. Invalid bootstrap data selects rvw/en and records `presentation_config_invalid`; the authoritative Python snapshot can correct final branding through the update endpoint's name field. This does not grant PR-head configuration authority.

@@ -3,6 +3,11 @@ name: deploy rvw
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: Runner label for the deploy job (single label string)
+        required: false
+        type: string
+        default: ubuntu-latest
       environment:
         description: Cloudflare environment to deploy.
         type: string
@@ -98,7 +103,7 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     permissions:
       contents: read
     env:
